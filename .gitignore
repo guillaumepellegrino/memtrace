@@ -1,0 +1,13 @@
+*.o
+*.d
+*.so
+*.log
+*.out
+ftrace
+cli
+ptraceopen
+test
+memtrace
+memtrace-fs
+cloudathome.sh
+qemu
