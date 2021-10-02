@@ -292,7 +292,7 @@ static bool action_hugecalloc() {
     clock_gettime(CLOCK_MONOTONIC, &stop);
     timespec_sub(&stop, &start, &diff);
 
-    CONSOLE("hugecalloc done in %ld.%06ldms", diff.tv_sec, diff.tv_nsec);
+    CONSOLE("hugecalloc done in %lld.%06lldms", (long long) diff.tv_sec, (long long) diff.tv_nsec);
 
     return true;
 }
