@@ -47,9 +47,8 @@ stagingdir
 - Improve search performance of FDE in .eh_frame section by using .eh_frame_hdr
 - Improve search performance in .debug_info and .debug_line.
 - Improve compliance with DWARF standard (.eh_frame)
-- Add ARM support
+- Improve ARM support
 - Add MIPS support
-- Add multicast support
 - Improve this README
 - Remove -ldl library
 - Cleanup old references to libunwind and others

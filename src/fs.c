@@ -31,17 +31,115 @@
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <sys/sendfile.h>
+#include <sys/timerfd.h>
+#include <netinet/in.h>
+#include <netinet/ip.h>
+#include <arpa/inet.h>
 #include <fcntl.h>
+#include <poll.h>
 #include "fs.h"
 #include "net.h"
 #include "log.h"
 
+#define FS_DEFAULT_MCASTADDR "224.0.0.251"
 #define FS_DEFAULT_BINDADDR "::0"
 #define FS_DEFAULT_PORT "3002"
 #define GET_REQUEST "GET/REQUEST/"
 #define GET_REPLY "GET/REPLY/"
 
-char *fs_path(strlist_t *directories, const char *name) {
+typedef struct {
+    char msgtype[32]; /** message type: ["announce", "query" ] */
+    char service[32]; /** service name: ["memtrace", "memtrace-fs" ] */
+    char from[INET6_ADDRSTRLEN] /** source ip address from packet sender */;
+    char port[8]; /** service port */
+} mcast_msg_t;
+
+static const char *fs_cfg_bindaddr(const fs_cfg_t *cfg) {
+    return cfg->hostname ? cfg->hostname : FS_DEFAULT_BINDADDR;
+}
+
+static const char *fs_cfg_port(const fs_cfg_t *cfg) {
+    return cfg->port ? cfg->port : FS_DEFAULT_PORT;
+}
+
+static const char *fs_cfg_mcastaddr(const fs_cfg_t *cfg) {
+    return cfg->mcastaddr ? cfg->mcastaddr : FS_DEFAULT_MCASTADDR;
+}
+
+/** Announce the service on the specified port on the multicast socket */
+static bool fs_mcast_announce(int mcast, const char *service, const char *port) {
+    char buff[512];
+    int len = snprintf(buff, sizeof(buff),
+        "msgtype: announce\n"
+        "service: %s\n"
+        "port: %s\n",
+        service, port);
+
+    if (write(mcast, buff, len) <= 0) {
+        TRACE_ERROR("Failed to announce service: %m");
+        return false;
+    }
+
+    return true;
+}
+
+/** Query the specified service on the multicast socket */
+static bool fs_mcast_query(int mcast, const char *service) {
+    char buff[512];
+    int len = snprintf(buff, sizeof(buff),
+        "msgtype: query\n"
+        "service: %s\n",
+        service);
+
+    if (write(mcast, buff, len) <= 0) {
+        TRACE_ERROR("Failed to announce service: %m");
+        return false;
+    }
+
+    return true;
+}
+
+/** Read a message from the multicast socket */
+static bool fs_mcast_read(int mcast, mcast_msg_t *msg) {
+    char buff[512];
+    ssize_t len;
+    const char *sep = ":\n\r\t ";
+    const char *key = NULL;
+    const char *value = NULL;
+    struct sockaddr_in src = {0};
+    socklen_t srclen = sizeof(src);
+
+    memset(msg, 0, sizeof(*msg));
+
+    if ((len = recvfrom(mcast, buff, sizeof(buff), 0, &src, &srclen)) <= 0) {
+        TRACE_ERROR("Failed to read multicast message: %m");
+        return false;
+    }
+    inet_ntop(AF_INET, &src.sin_addr, msg->from, srclen);
+
+    key = strtok(buff, sep);
+    value = strtok(NULL, sep);
+
+    while (key && value) {
+        if (!strcmp(key, "msgtype")) {
+            snprintf(msg->msgtype, sizeof(msg->msgtype), "%s", value);
+        }
+        if (!strcmp(key, "service")) {
+            snprintf(msg->service, sizeof(msg->service), "%s", value);
+        }
+        if (!strcmp(key, "port")) {
+            snprintf(msg->port, sizeof(msg->port), "%s", value);
+        }
+        key = strtok(NULL, sep);
+        value = strtok(NULL, sep);
+    }
+
+
+    return true;
+}
+
+/** Return the real path of the file */
+char *fs_path(strlist_t *directories, const char *path) {
     strlist_iterator_t *it = NULL;
 
     strlist_for_each(it, directories) {
@@ -49,7 +147,7 @@ char *fs_path(strlist_t *directories, const char *name) {
         struct stat st = {0};
         const char *directory = strlist_iterator_value(it);
 
-        if (asprintf(&realpath, "%s/%s", directory, name) <= 0) {
+        if (asprintf(&realpath, "%s/%s", directory, path) <= 0) {
             continue;
         }
 
@@ -63,6 +161,7 @@ char *fs_path(strlist_t *directories, const char *name) {
     return NULL;
 }
 
+/** Serve File System GET request */
 bool fs_server_serve_get_request(fs_server_t *server, char *request) {
     uint64_t size = 0;
     uint64_t offset_u64 = 0;
@@ -131,6 +230,7 @@ error:
     return rt;
 }
 
+/** Serve File System request */
 static bool fs_server_serve_request(fs_server_t *fs) {
     char request[512];
     char *sep = NULL;
@@ -150,63 +250,137 @@ static bool fs_server_serve_request(fs_server_t *fs) {
     else {
         TRACE_ERROR("Unknown request %s", request);
     }
-    
+
     return rt;
 }
 
-static int fs_tcp_listen(const fs_cfg_t *cfg) {
-    int s = -1;
-    const char *bindaddr = cfg->bindaddr;
-    const char *bindport = cfg->bindport;
-
-    if (!cfg->bindaddr) {
-        bindaddr = FS_DEFAULT_BINDADDR;
-    }
-    if (!cfg->bindport) {
-        bindport = FS_DEFAULT_PORT;
-    }
-    CONSOLE("Listening on [%s]:%s", bindaddr, bindport);
-    if ((s = tcp_listen(bindaddr, bindport)) < 0) {
-        TRACE_ERROR("Failed to listen on %s:%s", bindaddr, bindport);
-        return -1;
-    }
-
-    return s;
-}
-
-static FILE *fs_tcp_accept(int server, const fs_cfg_t *cfg) {
+/** File System : Announce service through multicast and wait for an incoming TCP connection to accept */
+static FILE *fs_tcp_accept(int server, int mcastsrv, int mcastcli, const fs_cfg_t *cfg) {
+    enum {
+        POLL_MCAST_SRV = 0,
+        POLL_SRV,
+        POLL_TIMERFD,
+    };
+    mcast_msg_t msg = {0};
     FILE *fp = NULL;
     int client = -1;
+    int timerfd = -1;
+    struct itimerspec itimer = {
+        .it_interval.tv_sec = 2,
+        .it_value.tv_sec = 2,
+    };
 
     CONSOLE("Waiting for client to connect");
-    if ((client = accept(server, NULL, NULL)) == -1) {
-        TRACE_ERROR("Failed to accept: %m");
-        return NULL;
-    }
-    if (!(fp = fdopen(client, "w+"))) {
-        TRACE_ERROR("fdopen() failed: %m");
-        close(client);
-        return NULL;
-    }
+
+    // announce the service through multicast
+    fs_mcast_announce(mcastcli, cfg->me, fs_cfg_port(cfg));
+    assert((timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC)) >= 0);
+    timerfd_settime(timerfd, 0, &itimer, NULL);
+
+    do {
+        // Wait for an event on one of these file descriptors
+        struct pollfd pollfds[] = {
+            [POLL_MCAST_SRV] = {.fd = mcastsrv, .events = POLLIN},
+            [POLL_SRV]       = {.fd = server, .events = POLLIN},
+            [POLL_TIMERFD]   = {.fd = timerfd, .events = POLLIN},
+        };
+        int rt = poll(pollfds, countof(pollfds), -1);
+        if (rt < 0) {
+            TRACE_ERROR("poll error: %m");
+            break;
+        }
+
+        if (pollfds[POLL_MCAST_SRV].revents & POLLIN) {
+            // handle multicast message: announce the service through multicast when queried
+            if (fs_mcast_read(mcastsrv, &msg)) {
+                if (!strcmp(msg.msgtype, "query") && !strcmp(msg.service, cfg->me)) {
+                    TRACE_WARNING("Replying to query");
+                    fs_mcast_announce(mcastcli, cfg->me, fs_cfg_port(cfg));
+                }
+            }
+        }
+        if (pollfds[POLL_SRV].revents & POLLIN) {
+            // handle tcp connection: return the FILE pointer on the client socket
+            if ((client = accept(server, NULL, NULL)) == -1) {
+                TRACE_ERROR("Failed to accept: %m");
+            }
+            if (!(fp = fdopen(client, "w+"))) {
+                TRACE_ERROR("fdopen() failed: %m");
+                close(client);
+            }
+        }
+        if (pollfds[POLL_TIMERFD].revents & POLLIN) {
+            // handle timer expiration: announce the service through multicast
+            uint64_t value = 0;
+            read(timerfd, &value, sizeof(value));
+            fs_mcast_announce(mcastcli, cfg->me, fs_cfg_port(cfg));
+        }
+    } while (!fp);
+
     CONSOLE("Client connected");
+
+    close(timerfd);
 
     return fp;
 }
 
-static FILE *fs_tcp_connect(const fs_cfg_t *cfg) {
+/** File System : Query service through multicast and try to establish TCP connection */
+static FILE *fs_tcp_connect(int mcastsrv, int mcastcli, const fs_cfg_t *cfg) {
+    enum {
+        POLL_MCAST_SRV = 0,
+        POLL_TIMERFD,
+    };
+    mcast_msg_t msg = {0};
     FILE *fp = NULL;
     int s = -1;
-    const char *connectaddr = cfg->connectaddr;
-    const char *connectport = cfg->connectport;
+    int timerfd = -1;
+    const char *connectaddr = cfg->hostname;
+    struct itimerspec itimer = {
+        .it_interval.tv_sec = 2,
+        .it_value.tv_sec = 2,
+    };
 
-    if (!cfg->connectaddr) {
+    assert((timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC)) >= 0);
+    timerfd_settime(timerfd, 0, &itimer, NULL);
+
+    if (!connectaddr) {
+        // The connect address is unknown: Query the service address through multicast
+        fs_mcast_query(mcastcli, cfg->tgt);
+    }
+    while (!connectaddr) {
+        // Wait for an event on one of these file descriptors
+        struct pollfd pollfds[] = {
+            [POLL_MCAST_SRV] = {.fd = mcastsrv, .events = POLLIN},
+            [POLL_TIMERFD]   = {.fd = timerfd, .events = POLLIN},
+        };
+        int rt = poll(pollfds, countof(pollfds), -1);
+        if (rt < 0) {
+            TRACE_ERROR("poll error: %m");
+            break;
+        }
+        if (pollfds[POLL_MCAST_SRV].revents & POLLIN) {
+            // handle multicast message: Retrieve the connect address and port through service announcement
+            if (fs_mcast_read(mcastsrv, &msg)) {
+                if (!strcmp(msg.msgtype, "announce") && !strcmp(msg.service, cfg->tgt)) {
+                    TRACE_WARNING("%s announced on %s:%s", msg.service, msg.from, msg.port);
+                    connectaddr = msg.from;
+                }
+            }
+        }
+        if (pollfds[POLL_TIMERFD].revents & POLLIN) {
+            // handle timer expiration: Query the service address through multicast again
+            uint64_t value = 0;
+            read(timerfd, &value, sizeof(value));
+            fs_mcast_query(mcastcli, cfg->tgt);
+        }
+    }
+    close(timerfd);
+    if (!connectaddr) {
         return NULL;
     }
-    if (!cfg->connectport) {
-        connectport = FS_DEFAULT_PORT;
-    }
-    CONSOLE("Connecting to [%s]:%s", connectaddr, connectport);
-    if ((s = tcp_connect(connectaddr, connectport)) < 0) {
+
+    CONSOLE("Connecting to [%s]:%s", connectaddr, fs_cfg_port(cfg));
+    if ((s = tcp_connect(connectaddr, fs_cfg_port(cfg))) < 0) {
         return NULL;
     }
     if (!(fp = fdopen(s, "w+"))) {
@@ -219,6 +393,7 @@ static FILE *fs_tcp_connect(const fs_cfg_t *cfg) {
     return fp;
 }
 
+/** Initialize file system */
 bool fs_initialize(fs_t *fs, const fs_cfg_t *cfg) {
     bool rt = false;
 
@@ -229,16 +404,28 @@ bool fs_initialize(fs_t *fs, const fs_cfg_t *cfg) {
 
     fs->cfg = *cfg;
 
+    /** Create multicast client and server socket to announce the service */
+    if ((fs->mcastsrv = mcast_listen(fs_cfg_mcastaddr(cfg), FS_DEFAULT_PORT)) < 0) {
+        TRACE_WARNING("Failed to create UDP multicast listening socket");
+    }
+    if ((fs->mcastcli = udp_connect(fs_cfg_mcastaddr(cfg), FS_DEFAULT_PORT)) < 0) {
+        TRACE_WARNING("Failed to create UDP multicast client socket");
+    }
+
     switch (cfg->type) {
         case fs_type_local: {
             break;
         }
         case fs_type_tcp_server: {
             int server = -1;
-            if ((server = fs_tcp_listen(cfg)) < 0) {
+
+            CONSOLE("Listening on [%s]:%s", fs_cfg_bindaddr(cfg), fs_cfg_port(cfg));
+            if ((server = tcp_listen(fs_cfg_bindaddr(cfg), fs_cfg_port(cfg))) < 0) {
+                TRACE_ERROR("Failed to listen on %s:%s", fs_cfg_bindaddr(cfg), fs_cfg_port(cfg));
                 goto error;
             }
-            if (!(fs->socket = fs_tcp_accept(server, cfg))) {
+
+            if (!(fs->socket = fs_tcp_accept(server, fs->mcastsrv, fs->mcastsrv, cfg))) {
                 close(server);
                 goto error;
             }
@@ -246,7 +433,7 @@ bool fs_initialize(fs_t *fs, const fs_cfg_t *cfg) {
             break;
         }
         case fs_type_tcp_client: {
-            if (!(fs->socket = fs_tcp_connect(cfg))) {
+            if (!(fs->socket = fs_tcp_connect(fs->mcastsrv, fs->mcastcli, cfg))) {
                 goto error;
             }
             break;
@@ -262,6 +449,9 @@ error:
     return rt;
 }
 
+/** Initialize file system server */
+// TODO: this can probably be merged with fs_initialize()
+// TODO: cleanup code
 bool fs_server_initialize(fs_server_t *fs, const fs_cfg_t *cfg) {
     bool rt = false;
 
@@ -272,14 +462,24 @@ bool fs_server_initialize(fs_server_t *fs, const fs_cfg_t *cfg) {
 
     fs->cfg = *cfg;
 
+    /** Create multicast client and server socket to announce the service */
+    if ((fs->mcastsrv = mcast_listen(fs_cfg_mcastaddr(cfg), FS_DEFAULT_PORT)) < 0) {
+        TRACE_WARNING("Failed to create UDP multicast listening socket");
+    }
+    if ((fs->mcastcli = udp_connect(fs_cfg_mcastaddr(cfg), FS_DEFAULT_PORT)) < 0) {
+        TRACE_WARNING("Failed to create UDP multicast client socket");
+    }
+
     switch (cfg->type) {
         case fs_type_tcp_server:
-            if ((fs->server = fs_tcp_listen(cfg)) < 0) {
+            CONSOLE("Listening on [%s]:%s", fs_cfg_bindaddr(cfg), fs_cfg_port(cfg));
+            if ((fs->server = tcp_listen(fs_cfg_bindaddr(cfg), fs_cfg_port(cfg))) < 0) {
+                TRACE_ERROR("Failed to listen on %s:%s", fs_cfg_bindaddr(cfg), fs_cfg_port(cfg));
                 goto error;
             }
             break;
         case fs_type_tcp_client:
-            if (!(fs->socket = fs_tcp_connect(cfg))) {
+            if (!(fs->socket = fs_tcp_connect(fs->mcastsrv, fs->mcastcli, cfg))) {
                 goto error;
             }
             break;
@@ -294,13 +494,14 @@ error:
     return rt;
 }
 
+/** Serve the File System to connected client */
 bool fs_server_serve(fs_server_t *fs) {
     bool rt = true;
 
     while (true) {
         if (fs->cfg.type == fs_type_tcp_server) {
             if (!fs->socket) {
-                if (!(fs->socket = fs_tcp_accept(fs->server, &fs->cfg))) {
+                if (!(fs->socket = fs_tcp_accept(fs->server, fs->mcastsrv, fs->mcastcli, &fs->cfg))) {
                     break;
                 }
             }

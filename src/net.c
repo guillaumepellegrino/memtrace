@@ -124,6 +124,85 @@ int tcp_accept(int server) {
     return client;
 }
 
+int udp_connect(const char *address, const char *port) {
+    struct addrinfo hints = {
+        .ai_family = AF_INET,
+        .ai_socktype = SOCK_DGRAM,
+    };
+    struct addrinfo *ai_list = NULL, *ai = NULL;
+    int rt = -1;
+    int client = -1;
 
+    if ((rt = getaddrinfo(address, port, &hints, &ai_list)) != 0) {
+        TRACE_ERROR("Failed to resolve %s:%s. %s", address, port, gai_strerror(rt));
+        return -1;
+    }
 
+    for (ai = ai_list; ai; ai = ai->ai_next) {
+        if ((client = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol)) < 0) {
+            TRACE_ERROR("Failed to create UDP client socket: %m");
+            continue;
+        }
+
+        if (connect(client, ai->ai_addr, ai->ai_addrlen) == -1) {
+            TRACE_ERROR("Failed to connect socket: %m");
+            close(client), client = -1;
+            continue;
+        }
+
+        break;
+    }
+
+    freeaddrinfo(ai_list);
+
+    return client;
+}
+
+int mcast_listen(const char *address, const char *port) {
+    struct addrinfo hints = {
+        .ai_family = AF_INET,
+        .ai_socktype = SOCK_DGRAM,
+    };
+    struct addrinfo *ai_list = NULL, *ai = NULL;
+    int rt = -1;
+    int yes = 1;
+    int s = -1;
+
+    if ((rt = getaddrinfo(address, port, &hints, &ai_list)) != 0) {
+        TRACE_ERROR("Failed to resolve %s:%s. %s", address, port, gai_strerror(rt));
+        return -1;
+    }
+
+    for (ai = ai_list; ai; ai = ai->ai_next) {
+        struct ip_mreq mreq = {
+            .imr_multiaddr = ((struct sockaddr_in *) ai->ai_addr)->sin_addr,
+            .imr_interface.s_addr = htonl(INADDR_ANY),
+        };
+
+        if ((s = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol)) < 0) {
+            TRACE_ERROR("Failed to create UDP socket: %m");
+            continue;
+        }
+
+        if (setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes)) == -1) {
+            TRACE_ERROR("Failed to set setsockopt(SO_REUSEADDR): %m");
+            close(s), s = -1;
+            continue;
+        }
+
+        if (bind(s, ai->ai_addr, ai->ai_addrlen) == -1) {
+            TRACE_ERROR("Failed to bind socket to %s:%s : %m", address, port);
+            close(s), s = -1;
+            continue;
+        }
+
+        if (setsockopt(s, IPPROTO_IP, IP_ADD_MEMBERSHIP, (char*) &mreq, sizeof(mreq)) < 0) {
+            TRACE_ERROR("Failed to send multicast membership for %s : %m", address);
+            close(s), s = -1;
+            continue;
+        }
+    }
+
+    return s;
+}
 

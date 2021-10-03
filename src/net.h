@@ -22,7 +22,7 @@
 #define FTRACE_NET_H
 
 /**
- * Create a TCP socket and connect to the client denominated by addr:port
+ * Create a TCP socket and connect to the client denominated by addr:port using getaddrinfo()
  */
 int tcp_connect(const char *address, const char *port);
 
@@ -35,5 +35,15 @@ int tcp_listen(const char *address, const char *port);
  * Accept TCP Client from TCP listening socket
  */
 int tcp_accept(int server);
+
+/**
+ * Create an UDP socket and 'connect' to the desgined addr:port using getaddrinfo()
+ */
+int udp_connect(const char *address, const char *port);
+
+/**
+ * Create an UDP Multicast listening socket using getaddrinfo()
+ */
+int mcast_listen(const char *address, const char *port);
 
 #endif

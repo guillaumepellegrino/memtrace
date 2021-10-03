@@ -30,20 +30,25 @@ enum _fs_type {
 
 struct _fs_cfg {
     fs_type_t type;
-    const char *connectaddr;
-    const char *connectport;
-    const char *bindaddr;
-    const char *bindport;
+    const char *me;
+    const char *tgt;
+    const char *hostname;
+    const char *mcastaddr;
+    const char *port;
     strlist_t directories;
 };
 
 struct _fs {
     fs_cfg_t cfg;
+    int mcastsrv;
+    int mcastcli;
     FILE *socket;
 };
 
 struct _fs_server {
     fs_cfg_t cfg;
+    int mcastsrv;
+    int mcastcli;
     int server;
     FILE *socket;
 };

@@ -592,9 +592,9 @@ static void help() {
     CONSOLE("Trace memory allocations and report memory leak");
     CONSOLE("");
     CONSOLE("Options:");
-    CONSOLE("   -c, --connect=HOST[:PORT]   Connect to specified HOST and PORT");
-    CONSOLE("   -l, --listen=HOST[:PORT]    Listen on the specified HOST and PORT");
-    CONSOLE("   -p, --port=VALUE            Use the specified port");
+    CONSOLE("   -a, --autoconnect           Auto connect to file server using multicast discovery");
+    CONSOLE("   -c, --connect=HOST[:PORT]   Connect to file server specified by HOST and PORT");
+    CONSOLE("   -l, --listen=HOST[:PORT]    Listen for file server on the specified HOST and PORT");
     CONSOLE("   -m, --mode=VALUE            Set CPU mode [%s]", cpu_mode_list);
     CONSOLE("   --selftest                  Run self test");
     CONSOLE("   --addr2line=ADDR            Convert address to line");
@@ -719,9 +719,10 @@ static const console_cmd_t memtrace_console_commands[] = {
 };
 
 int main(int argc, char* argv[]) {
-    const char *short_options = "+p:c:l:m:tvz:hV";
+    const char *short_options = "+p:ac:l:m:tvz:hV";
     const struct option long_options[] = {
         {"pid",         required_argument,  0, 'p'},
+        {"autoconnect", no_argument,        0, 'a'},
         {"connect",     required_argument,  0, 'c'},
         {"listen",      required_argument,  0, 'l'},
         {"mode",        required_argument,  0, 'm'},
@@ -754,6 +755,8 @@ int main(int argc, char* argv[]) {
     };
     fs_cfg_t fs_cfg = {
         .type = fs_type_local,
+        .me = "memtrace",
+        .tgt = "memtrace-fs",
     };
 
     while ((opt = getopt_long(argc, argv, short_options, long_options, NULL)) != -1) {
@@ -762,15 +765,18 @@ int main(int argc, char* argv[]) {
                 app.pid = atoi(optarg);
                 attachpid = true;
                 break;
+            case 'a':
+                fs_cfg.type = fs_type_tcp_client;
+                break;
             case 'c':
                 fs_cfg.type = fs_type_tcp_client;
-                fs_cfg.connectaddr = strtok(optarg, ":");
-                fs_cfg.connectport = strtok(NULL, ":");
+                fs_cfg.hostname = strtok(optarg, ":");
+                fs_cfg.port = strtok(NULL, ":");
                 break;
             case 'l':
                 fs_cfg.type = fs_type_tcp_server;
-                fs_cfg.bindaddr = strtok(optarg, ":");
-                fs_cfg.bindport = strtok(NULL, ":");
+                fs_cfg.hostname = strtok(optarg, ":");
+                fs_cfg.port = strtok(NULL, ":");
                 break;
             case 'm':
                 cpu_mode_str = optarg;

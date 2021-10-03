@@ -40,6 +40,7 @@
 static void help() {
     CONSOLE("Usage: memtrace-fs [OPTION]..");
     CONSOLE("A simple file-server for serving shared library with debug symbols to memtrace");
+    CONSOLE("File server is listening on [::0]:3002 by default and annouces itself through multicast");
     CONSOLE("");
     CONSOLE("Options:");
     CONSOLE("   -c, --connect=HOST[:PORT]   Connect to specified HOST");
@@ -68,6 +69,8 @@ int main(int argc, char *argv[]) {
     int opt = -1;
     fs_cfg_t fs_cfg = {
         .type = fs_type_tcp_server,
+        .me = "memtrace-fs",
+        .tgt = "memtrace",
     };
     fs_server_t fs_server = {0};
 
@@ -81,12 +84,12 @@ int main(int argc, char *argv[]) {
         switch (opt) {
             case 'c':
                 fs_cfg.type = fs_type_tcp_client;
-                fs_cfg.connectaddr = strtok(optarg, ":");
-                fs_cfg.connectport = strtok(NULL, ":");
+                fs_cfg.hostname = strtok(optarg, ":");
+                fs_cfg.port = strtok(NULL, ":");
                 break;
             case 'l':
-                fs_cfg.bindaddr = strtok(optarg, ":");
-                fs_cfg.bindport = strtok(NULL, ":");
+                fs_cfg.hostname = strtok(optarg, ":");
+                fs_cfg.port = strtok(NULL, ":");
                 break;
             case 'd':
                 strlist_insert(&fs_cfg.directories, optarg);
