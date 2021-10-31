@@ -146,8 +146,10 @@ static void test_calloc(selftest_t *st) {
 }
 
 static bool action_malloc() {
+    TRACE_DEBUG("do_malloc");
     int *ptr = malloc(7*3*13);
-    TRACE_DEBUG("%p", ptr);
+    TRACE_DEBUG("malloc=%p", malloc);
+    TRACE_DEBUG("ptr=%p", ptr);
     return ptr != NULL;
 }
 
@@ -158,6 +160,26 @@ static void test_malloc(selftest_t *st) {
         .alloc_count = 1,
         .free_count = 0,
         .alloc_bytes = 273,
+    };
+    selftest_summary_assert(st, &summary);
+}
+
+static bool action_strdup() {
+    TRACE_DEBUG("do_strdup");
+    char *ptr = strdup("test");
+    TRACE_DEBUG("ptr=%p", ptr);
+    TRACE_DEBUG("malloc=%p", malloc);
+    TRACE_DEBUG("strdup=%p", strdup);
+    return ptr != NULL;
+}
+
+static void test_strdup(selftest_t *st) {
+    selftest_heap_summary_t summary = {
+        .inuse_bytes = 5,
+        .inuse_blocks = 1,
+        .alloc_count = 1,
+        .free_count = 0,
+        .alloc_bytes = 5,
     };
     selftest_summary_assert(st, &summary);
 }
@@ -313,6 +335,7 @@ static void test_hugecalloc(selftest_t *st) {
 static test_scenario_t test_scenarios[] = {
     {"calloc", action_calloc, test_calloc},
     {"malloc", action_malloc, test_malloc},
+    {"strdup", action_strdup, test_strdup},
     {"free", action_free, test_free},
     {"realloc", action_realloc, test_realloc},
     {"reallocarray", action_reallocarray, test_reallocarray},

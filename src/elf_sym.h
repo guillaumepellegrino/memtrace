@@ -27,5 +27,6 @@ typedef struct {
 } elf_sym_t;
 
 elf_sym_t elf_sym(elf_file_t *symtab, elf_file_t *strtab, uint64_t address);
+elf_sym_t elf_sym_from_name(elf_file_t *symtab, elf_file_t *strtab, const char *name);
 
 #endif

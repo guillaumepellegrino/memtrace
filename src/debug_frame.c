@@ -26,6 +26,22 @@
 #include "elf_file.h"
 #include "log.h"
 
+#if 0
+FIXME
+
+ > [LOG]  [0x0] cie length=0xc "" cf=2 df=-4 ra=14 in debug_frame_read_cie_entry:477
+[LOG]     DW_CFA_def_cfa r13+0 in debug_frame_read_instructions:242
+   LOC: 0x0, CFA: r13+0, ra:r14
+[LOG]  [0x10] cie length=0xc "l" cf=0 df=0 ra=12 in debug_frame_read_cie_entry:477
+[LOG]  [0x20] cie length=0xc "" cf=2 df=-4 ra=14 in debug_frame_read_cie_entry:477
+[LOG]     DW_CFA_def_cfa r13+0 in debug_frame_read_instructions:242
+   LOC: 0x0, CFA: r13+0, ra:r14
+[LOG]  Read CIE 0x14 in debug_frame_read_fde_entry:496
+[ERR]  cie_pointer is out of range in debug_frame_read_fde_entry:484
+
+
+#endif
+
 static bool debug_frame_read_entry(debug_frame_ctx_t *ctx);
 
 void debug_frame_rules_print(debug_frame_rules_t *rules) {
@@ -484,7 +500,13 @@ bool debug_frame_read_fde_entry(debug_frame_ctx_t *ctx, uint64_t length, uint64_
         TRACE_ERROR("cie_pointer is out of range");
         return false;
     }
-    cie_id = start_offset - id;
+
+    if (ctx->is_debug_frame) {
+        cie_id = id;
+    }
+    else {
+        cie_id = start_offset - id;
+    }
 
     ctx->fde = (debug_frame_fde_t) {0};
     ctx->fde.length = length;
@@ -513,8 +535,9 @@ bool debug_frame_read_fde_entry(debug_frame_ctx_t *ctx, uint64_t length, uint64_
     }
     ctx->fde.offset = _start_offset;
 
-    TRACE_LOG("[0x%"PRIx64"] FDE ctx->cie=0x%"PRIx64", pc=0x%"PRIx64"..0x%"PRIx64,
+    TRACE_LOG("[0x%"PRIx64"] FDE length=0x%"PRIx64" ctx->cie=0x%"PRIx64", pc=0x%"PRIx64"..0x%"PRIx64,
         _start_offset,
+        length,
         cie_id,
         ctx->fde.pc_begin,
         ctx->fde.pc_begin + ctx->fde.pc_range);
@@ -539,7 +562,7 @@ static bool debug_frame_read_entry(debug_frame_ctx_t *ctx) {
     start_offset = elf_file_tell(frame_file);
     id = elf_file_read_dwarfaddr(frame_file);
 
-    if (id == 0 || id == 0xffffffff) {
+    if ((ctx->is_debug_frame && id == 0xffffffff) || (!ctx->is_debug_frame && id == 0)) {
         debug_frame_read_cie_entry(frame_file, &ctx->cie, length, _start_offset);
 
         if (ctx->cie.length == 0) {
@@ -591,7 +614,7 @@ exit:
         return true;
     }
     else {
-        if (ctx->lookup_pc && ctx->lookup_pc <= rules->loc) {
+        if (ctx->lookup_pc && rules && ctx->lookup_pc <= rules->loc) {
             ctx->found = true;
         }
         return false;
@@ -688,6 +711,30 @@ bool debug_frame_ex(elf_file_t *frame_hdr_file, elf_file_t *frame_file, debug_fr
     };
     uint64_t fde_addr = 0;
 
+    const section_header_t *sh = elf_file_section(frame_file);
+    if (!sh) {
+        TRACE_ERROR("Section header not found");
+        return false;
+    }
+    const char *section_name = sh->sh_strname;
+    if (!section_name) {
+        TRACE_ERROR("Section name not found");
+        return false;
+    }
+
+    if (!strcmp(section_name, ".debug_frame")) {
+        TRACE_LOG("Read .debug_frame section");
+        ctx.is_debug_frame = true;
+    }
+    else if (!strcmp(section_name, ".eh_frame")) {
+        TRACE_LOG("Read .eh_frame section");
+        ctx.is_debug_frame = false;
+    }
+    else {
+        TRACE_ERROR("Unknown debug section '%s'", section_name);
+        return false;
+    }
+
     if (frame_hdr_file && pc) {
         uint64_t section_offset = elf_file_section(frame_file)->sh_offset;
         if (!(fde_addr = debug_frame_hdr_search(frame_hdr_file, pc))) {
@@ -732,12 +779,15 @@ bool debug_frame(elf_t *elf, debug_frame_rules_t *result, uint64_t pc) {
         goto exit;
     }
 
-    if (!(frame_file = elf_section_open_from_name(elf, ".eh_frame"))) {
-        TRACE_ERROR("Failed to get .eh_frame section for %s", elf_name(elf));
-        goto exit;
+
+    if (!(frame_file = elf_section_open_from_name(elf, ".debug_frame"))) {
+        if (!(frame_file = elf_section_open_from_name(elf, ".eh_frame"))) {
+            TRACE_ERROR("%s: .debug_frame/.eh_frame section not found", elf_name(elf));
+            goto exit;
+        }
     }
 
-    TRACE_LOG("Dump .eh_frame for %s", elf_name(elf));
+    TRACE_LOG("Dump debug frame from %s", elf_name(elf));
     rt = debug_frame_ex(NULL, frame_file, result, pc);
 
 exit:

@@ -122,7 +122,7 @@ bool breakpoint_set_name(breakpoint_t *bp, const char *name) {
 
 const char *breakpoint_name(breakpoint_t *bp) {
     if (!bp->name) {
-        asprintf(&bp->name, "0x%lx", bp->addr);
+        assert(asprintf(&bp->name, "0x%lx", bp->addr) > 0);
     }
     return bp->name ? bp->name : "";
 }

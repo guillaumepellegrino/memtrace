@@ -312,7 +312,7 @@ static FILE *fs_tcp_accept(int server, int mcastsrv, int mcastcli, const fs_cfg_
         if (pollfds[POLL_TIMERFD].revents & POLLIN) {
             // handle timer expiration: announce the service through multicast
             uint64_t value = 0;
-            read(timerfd, &value, sizeof(value));
+            assert(read(timerfd, &value, sizeof(value))>0);
             fs_mcast_announce(mcastcli, cfg->me, fs_cfg_port(cfg));
         }
     } while (!fp);
@@ -370,7 +370,7 @@ static FILE *fs_tcp_connect(int mcastsrv, int mcastcli, const fs_cfg_t *cfg) {
         if (pollfds[POLL_TIMERFD].revents & POLLIN) {
             // handle timer expiration: Query the service address through multicast again
             uint64_t value = 0;
-            read(timerfd, &value, sizeof(value));
+            assert(read(timerfd, &value, sizeof(value)) > 0);
             fs_mcast_query(mcastcli, cfg->tgt);
         }
     }

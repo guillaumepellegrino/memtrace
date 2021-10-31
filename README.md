@@ -44,11 +44,13 @@ stagingdir
 - memtrace-fs provide the libraries with debug symbols to memtrace through a TCP socket
 
 ## TODO
-- Improve search performance of FDE in .eh_frame section by using .eh_frame_hdr
++ Improve search performance of FDE in .eh_frame section by using .eh_frame_hdr
+- Should memtrace provide to memtrace-fs the path to the sysroot ?
+- Improve search performance of FDE by auto-generating .eh_frame_hdr if missing
 - Improve search performance in .debug_info and .debug_line.
 - Improve compliance with DWARF standard (.eh_frame)
 - Improve ARM support
 - Add MIPS support
 - Improve this README
-- Remove -ldl library
++ Remove -ldl library
 - Cleanup old references to libunwind and others

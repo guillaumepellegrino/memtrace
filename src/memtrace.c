@@ -88,11 +88,41 @@ typedef struct {
     int monitor_timerfd;
     epoll_handler_t stdin_handler;
     epoll_handler_t monitor_handler;
+    bool (*unwind)(libraries_t *libraries, const ftrace_fcall_t *fcall, size_t *callstack, size_t size);
 } app_t;
 
 void memtrace_status(app_t *app);
 void memtrace_report(app_t *app);
 void memtrace_clear(app_t *app);
+
+static bool raw_unwind(libraries_t *libraries, const ftrace_fcall_t *fcall, size_t *callstack, size_t size) {
+    const library_t *library = NULL;
+    size_t i = 0, j = 0;
+
+    if (!libraries || !fcall || !callstack || !size) {
+        TRACE_ERROR("NULL");
+        return false;
+    }
+
+    TRACE_LOG("Unwind callstack at 0x%lx", fcall->pc);
+
+    callstack[j++] = fcall->pc;
+
+    for (i = 0; i < 200 && j < size; i++) {
+        size_t pc = 0;
+        if (!ftrace_read_word(fcall->ftrace, fcall->sp+i, &pc)) {
+            break;
+        }
+
+        if (!(library = libraries_find(libraries, pc))) {
+            continue;
+        }
+
+        callstack[j++] = pc;
+    }
+
+    return true;
+}
 
 static void memtrace_console_quit(console_t *console, int argc, char *argv[]) {
     // gently ask the event loop to exit
@@ -122,7 +152,7 @@ static void memtrace_console_monitor(console_t *console, int argc, char *argv[])
 static void memtrace_monitor_handler(epoll_handler_t *self, int events) {
     uint64_t value = 0;
     app_t *app = container_of(self, app_t, monitor_handler);
-    read(app->monitor_timerfd, &value, sizeof(value));
+    assert(read(app->monitor_timerfd, &value, sizeof(value)) > 0);
     memtrace_status(app);
 }
 
@@ -356,6 +386,7 @@ void memtrace_report(app_t *app) {
 
         CONSOLE("%zu bytes in %zu blocks were not free", block->size, block->count);
         addr2line_backtrace(app, block->callstack);
+        CONSOLE("");
     }
 
     CONSOLE("HEAP SUMMARY:");
@@ -383,7 +414,7 @@ bool malloc_handler(const ftrace_fcall_t *fcall, void *userdata) {
     }
 
     size_t *callstack = calloc(app->callstack_size, sizeof(size_t));
-    dwarf_unwind(app->libraries, fcall, callstack, app->callstack_size);
+    app->unwind(app->libraries, fcall, callstack, app->callstack_size);
 
     if (!ftrace_fcall_get_rv(fcall, &rtfcall)) {
         TRACE_ERROR("failed to get fcall return value");
@@ -409,7 +440,7 @@ bool calloc_handler(const ftrace_fcall_t *fcall, void *userdata) {
     }
 
     size_t *callstack = calloc(app->callstack_size, sizeof(size_t));
-    dwarf_unwind(app->libraries, fcall, callstack, app->callstack_size);
+    app->unwind(app->libraries, fcall, callstack, app->callstack_size);
 
     if (!ftrace_fcall_get_rv(fcall, &rtfcall)) {
         TRACE_ERROR("calloc: Failed to get fcall return value");
@@ -431,7 +462,7 @@ bool realloc_handler(const ftrace_fcall_t *fcall, void *userdata) {
     }
 
     size_t *callstack = calloc(app->callstack_size, sizeof(size_t));
-    dwarf_unwind(app->libraries, fcall, callstack, app->callstack_size);
+    app->unwind(app->libraries, fcall, callstack, app->callstack_size);
 
     if (!ftrace_fcall_get_rv(fcall, &rtfcall)) {
         TRACE_ERROR("failed to get fcall return value");
@@ -462,7 +493,7 @@ bool reallocarray_handler(const ftrace_fcall_t *fcall, void *userdata) {
     }
 
     size_t *callstack = calloc(app->callstack_size, sizeof(size_t));
-    dwarf_unwind(app->libraries, fcall, callstack, app->callstack_size);
+    app->unwind(app->libraries, fcall, callstack, app->callstack_size);
 
     if (!ftrace_fcall_get_rv(fcall, &rtfcall)) {
         TRACE_ERROR("failed to get fcall return value");
@@ -497,12 +528,46 @@ bool free_handler(const ftrace_fcall_t *fcall, void *userdata) {
     return true;
 }
 
+breakpoint_t *app_set_breakpoint(app_t *app, const char *func, ftrace_handler_t handler) {
+    const char *libname = "/libc(\\.|-)";
+
+    const library_t *library = libraries_find_by_name(app->libraries, libname);
+    if (!library) {
+        TRACE_LOG("%s not found", libname);
+        return NULL;
+    }
+
+    elf_file_t *symtab = library->dynsym_file;
+    elf_file_t *strtab = library->dynstr_file;
+    if (!symtab || !strtab) {
+        TRACE_ERROR("symtab(%p) or strtab(%p) not found", symtab, strtab);
+        return NULL;
+    }
+
+    elf_sym_t sym = elf_sym_from_name(symtab, strtab, func);
+    if (!sym.name) {
+        TRACE_ERROR("%s not found in %s", func, library->name);
+        return NULL;
+    }
+
+    uint64_t address = library_absolute_address(library, sym.offset);
+
+    TRACE_WARNING("Set breakpoint on %s in %s:0x%"PRIx64" (0x%"PRIx64")", func, library->name, sym.offset, address);
+    return ftrace_set_breakpoint(&app->ftrace, func, address, handler, app);
+}
+
 static bool app_set_breakpoints(app_t *app) {
-    app->malloc_bp = ftrace_set_function_breakpoint(&app->ftrace, "malloc", malloc_handler, app);
-    app->calloc_bp = ftrace_set_function_breakpoint(&app->ftrace, "calloc", calloc_handler, app);
-    app->realloc_bp = ftrace_set_function_breakpoint(&app->ftrace, "realloc", realloc_handler, app);
-    app->reallocarray_bp = ftrace_set_function_breakpoint(&app->ftrace, "reallocarray", reallocarray_handler, app);
-    app->free_bp = ftrace_set_function_breakpoint(&app->ftrace, "free", free_handler, app);
+    if (!app->calloc_bp) {
+        app->malloc_bp = app_set_breakpoint(app, "malloc", malloc_handler);
+        app->calloc_bp = app_set_breakpoint(app, "calloc", calloc_handler);
+        app->realloc_bp = app_set_breakpoint(app, "realloc", realloc_handler);
+        app->reallocarray_bp = app_set_breakpoint(app, "reallocarray", reallocarray_handler);
+        app->free_bp = app_set_breakpoint(app, "free", free_handler);
+
+        if (app->calloc_bp) {
+            TRACE_LOG("breakpoints are set");
+        }
+    }
 
     return app->calloc_bp;
 }
@@ -531,8 +596,8 @@ static bool openat_handler(const ftrace_fcall_t *fcall, void *userdata) {
 static bool mmap_handler(const ftrace_fcall_t *fcall, void *userdata) {
     ftrace_fcall_t rtfcall = {0};
     app_t *app = userdata;
-    int prot = fcall->arg3;
-    int fd = fcall->arg5;
+    //int prot = fcall->arg3;
+    //int fd = fcall->arg5;
 
     if (!ftrace_fcall_get_rv(fcall, &rtfcall)) {
         TRACE_ERROR("failed to get fcall return value");
@@ -542,6 +607,14 @@ static bool mmap_handler(const ftrace_fcall_t *fcall, void *userdata) {
     TRACE_LOG("mmap(0x%zx, %zd, %zd, %zd, %d, %zd) -> 0x%zx",
         fcall->arg1, fcall->arg2, fcall->arg3, fcall->arg4, (int)fcall->arg5, fcall->arg6, rtfcall.retval);
 
+    if (!app->libraries) {
+        app->libraries = libraries_create(app->pid, &app->fs);
+    }
+    else {
+        libraries_update(app->libraries);
+    }
+    app_set_breakpoints(app);
+/*
     if (fd >= 0 && fd == app->libc_fd && !app->calloc_bp && (prot & PROT_EXEC)) {
         CONSOLE("libc executable library is mapped");
 
@@ -549,14 +622,7 @@ static bool mmap_handler(const ftrace_fcall_t *fcall, void *userdata) {
             // TODO: remove syscall breakpoint
         }
     }
-
-    if (!app->libraries) {
-        app->libraries = libraries_create(app->pid, &app->fs);
-    }
-    else {
-        libraries_update(app->libraries);
-    }
-
+    */
     return true;
 }
 
@@ -599,6 +665,7 @@ static void help() {
     CONSOLE("   --selftest                  Run self test");
     CONSOLE("   --addr2line=ADDR            Convert address to line");
     CONSOLE("   --addr2func=ADDR            Convert address to function");
+    CONSOLE("   --func2addr=ADDR            Convert function to address");
     CONSOLE("   --debugframe                Dump debug frame");
     CONSOLE("   --elfdump                   Dump ELF file");
     CONSOLE("   -v, --verbose               Increase logging verbosity");
@@ -700,6 +767,27 @@ static int elfdebugframe(const char *name, uint64_t addr, fs_t *fs) {
     return 0;
 }
 
+static int elffunc2addr(const char *name, const char *func, fs_t *fs) {
+    elf_t *elf = NULL;
+    if (!(elf = elf_open(name, fs))) {
+        CONSOLE("Failed to open %s", name);
+        return 1;
+    }
+
+    elf_file_t *symtab = elf_section_open_from_name(elf, ".dynsym");
+    elf_file_t *strtab = elf_section_open_from_name(elf, ".dynstr");
+    if (symtab && strtab) {
+        elf_sym_t sym = elf_sym_from_name(symtab, strtab, func);
+        if (sym.name) {
+            CONSOLE("%s() address is 0x%"PRIx64, sym.name, sym.offset);
+        }
+    }
+
+    elf_close(elf);
+
+    return 0;
+}
+
 static void memtrace_stdin_handler(epoll_handler_t *self, int events) {
     app_t *app = container_of(self, app_t, stdin_handler);
     console_poll(&app->console);
@@ -719,18 +807,20 @@ static const console_cmd_t memtrace_console_commands[] = {
 };
 
 int main(int argc, char* argv[]) {
-    const char *short_options = "+p:ac:l:m:tvz:hV";
+    const char *short_options = "+p:ac:l:m:u:tvz:hV";
     const struct option long_options[] = {
         {"pid",         required_argument,  0, 'p'},
         {"autoconnect", no_argument,        0, 'a'},
         {"connect",     required_argument,  0, 'c'},
         {"listen",      required_argument,  0, 'l'},
         {"mode",        required_argument,  0, 'm'},
+        {"unwind",      required_argument,  0, 'u'},
         {"selftest",    no_argument,        0, 't'},
         {"verbose",     no_argument,        0, 'v'},
         {"zone",        required_argument,  0, 'z'},
         {"addr2line",   required_argument,  0, 'L'},
         {"addr2func",   required_argument,  0, 'F'},
+        {"func2addr",   required_argument,  0, 'f'},
         {"debugframe",  required_argument,  0, 'D'},
         {"elfdump",     no_argument,        0, 'E'},
         {"help",        no_argument,        0, 'h'},
@@ -744,6 +834,7 @@ int main(int argc, char* argv[]) {
     const char *addr2line = NULL;
     const char *addr2func = NULL;
     const char *addr2frame = NULL;
+    const char *func2addr = NULL;
     bool attachpid = false;
     bool do_elfdump = false;
     int s = -1;
@@ -752,6 +843,7 @@ int main(int argc, char* argv[]) {
         .callstack_size = 10,
         .stdin_handler = {memtrace_stdin_handler},
         .monitor_handler = {memtrace_monitor_handler},
+        .unwind = dwarf_unwind,
     };
     fs_cfg_t fs_cfg = {
         .type = fs_type_local,
@@ -781,6 +873,18 @@ int main(int argc, char* argv[]) {
             case 'm':
                 cpu_mode_str = optarg;
                 break;
+            case 'u':
+                if (!strcmp(optarg, "raw")) {
+                    app.unwind = raw_unwind;
+                }
+                else if (!strcmp(optarg, "dwarf")) {
+                    app.unwind = dwarf_unwind;
+                }
+                else {
+                    CONSOLE("Unknown unwind mode");
+                    return 1;
+                }
+                break;
             case 't':
                 return selftest_main(argc, argv);
             case 'L':
@@ -788,6 +892,9 @@ int main(int argc, char* argv[]) {
                 break;
             case 'F':
                 addr2func = optarg;
+                break;
+            case 'f':
+                func2addr = optarg;
                 break;
             case 'D':
                 addr2frame = optarg;
@@ -848,6 +955,13 @@ int main(int argc, char* argv[]) {
             return 1;
         }
         return elfdebugframe(argv[0], atoll(addr2frame), &app.fs);
+    }
+    if (func2addr) {
+        if (argc != 1) {
+            help();
+            return 1;
+        }
+        return elffunc2addr(argv[0], func2addr, &app.fs);
     }
 
     for (cpu_mode = arch.cpu_modes; cpu_mode && cpu_mode->str; cpu_mode++) {
@@ -922,10 +1036,11 @@ int main(int argc, char* argv[]) {
     if (attachpid) {
         // Process is already running:
         // Try to set breakpoints now and create process maps
+        app.libraries = libraries_create(app.pid, &app.fs);
+
         if (!app_set_breakpoints(&app)) {
             return 1;
         }
-        app.libraries = libraries_create(app.pid, &app.fs);
     }
 
     //backtrace_context_initialize(&app.bt, app.pid);

@@ -38,7 +38,7 @@ static void console_addchar(console_t *console, char c) {
     }
 
     if (c) {
-        write(1, &c, 1);
+        assert(write(1, &c, 1) > 0);
     }
     console->buff[console->bufflen] = c;
     console->bufflen++;
@@ -59,7 +59,7 @@ static void console_separator(console_t *console, char c) {
         return;
     }
 
-    write(1, &c, 1);
+    assert(write(1, &c, 1) > 0);
     console_addchar(console, 0);
 
     console->argc++;
@@ -70,7 +70,7 @@ static void console_eol(console_t *console, int c) {
     size_t i;
     const console_cmd_t *cmd = NULL;
 
-    write(1, &c, 1);
+    assert(write(1, &c, 1) > 0);
 
     if (console->bufflen >= sizeof(console->buff)) {
         TRACE_ERROR("command line too long");

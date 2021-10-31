@@ -174,9 +174,9 @@ int mcast_listen(const char *address, const char *port) {
     }
 
     for (ai = ai_list; ai; ai = ai->ai_next) {
-        struct ip_mreq mreq = {
+        struct ip_mreqn mreq = {
             .imr_multiaddr = ((struct sockaddr_in *) ai->ai_addr)->sin_addr,
-            .imr_interface.s_addr = htonl(INADDR_ANY),
+            .imr_ifindex = 0,
         };
 
         if ((s = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol)) < 0) {

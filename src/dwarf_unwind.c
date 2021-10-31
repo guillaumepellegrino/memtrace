@@ -99,7 +99,7 @@ bool dwarf_unwind(libraries_t *libraries, const ftrace_fcall_t *fcall, size_t *c
     cpu_registers_t registers = {0};
     debug_frame_rules_t rules = {0};
     const library_t *library = NULL;
-    size_t pc = fcall->pc;
+    size_t pc = fcall->ra;
     size_t ra = 0;
     size_t i = 0;
 
@@ -112,28 +112,29 @@ bool dwarf_unwind(libraries_t *libraries, const ftrace_fcall_t *fcall, size_t *c
 
     registers = fcall->registers;
 
-    for (i = 0; i < size; i++) {
+    callstack[0] = fcall->pc;
+    for (i = 1; i < size; i++) {
         if (!(library = libraries_find(libraries, pc))) {
-            TRACE_LOG("0x%zx not found in libraries", pc);
+            TRACE_LOG("    0x%zx not found in libraries", pc);
             return i > 0;
         }
 
         callstack[i] = pc;
         ra = library_relative_address(library, pc);
 
-        TRACE_LOG("  %s+0x%zx", elf_name(library->elf), ra);
+        TRACE_LOG("    %s+0x%zx", library->name, ra);
         if (!library->frame_file) {
-            TRACE_LOG("No debug info for %s+0x%zx", elf_name(library->elf), ra);
+            TRACE_LOG("    No debug info for %s+0x%zx", library->name, ra);
             return i > 0;
         }
 
         if (!debug_frame_ex(library->frame_hdr_file, library->frame_file, &rules, ra)) {
-            TRACE_LOG("Debug symbol not found for %s+0x%zx", elf_name(library->elf), ra);
+            TRACE_LOG("    Debug symbol not found for %s+0x%zx", library->name, ra);
             return i > 0;
         }
 
         if (!debug_frame_unwind(fcall->ftrace, &rules, &registers)) {
-            TRACE_ERROR("Failed to unwind %s+0x%zx", elf_name(library->elf), ra);
+            TRACE_ERROR("    Failed to unwind %s+0x%zx", library->name, ra);
             return i > 0;
         }
         pc = registers.r[rules.ra_reg_number];

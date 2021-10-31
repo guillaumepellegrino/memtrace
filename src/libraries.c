@@ -25,6 +25,7 @@
 #include <sys/syscall.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <regex.h>
 #include "libraries.h"
 #include "elf.h"
 #include "elf_file.h"
@@ -83,7 +84,7 @@ static bool libraries_contains(libraries_t *libraries, const void *begin, const 
         if (library->end != end) {
             continue;
         }
-        if (library->elf && strcmp(elf_name(library->elf), name) != 0) {
+        if (strcmp(library->name, name) != 0) {
             continue;
         }
         return library;
@@ -93,47 +94,58 @@ static bool libraries_contains(libraries_t *libraries, const void *begin, const 
 }
 
 static void libraries_entry_add(library_t *library, void *begin, void *end, const char *name, fs_t *fs) {
-    CONSOLE("Opening %s", name);
     elf_t *elf = elf_open(name, fs);
     const program_header_t *program = elf_program_header_executable(elf);
 
     memset(library, 0, sizeof(*library));
     library->elf = elf;
+    library->name = strdup(name);
     library->begin = begin;
     library->end = end;
     library->offset = program ? program->p_vaddr : 0;
 
+    CONSOLE("Opening %s begin=%p offset=%zx", name, library->begin, library->offset);
+
     if (!(library->frame_hdr_file = elf_section_open_from_name(elf, ".debug_frame_hdr"))) {
         if (!(library->frame_hdr_file = elf_section_open_from_name(elf, ".eh_frame_hdr"))) {
-            TRACE_LOG("%s: .debug_frame_hdr/.eh_frame_hdr section not found", elf_name(elf));
+            TRACE_LOG("%s: .debug_frame_hdr/.eh_frame_hdr section not found", library->name);
         }
     }
     if (!(library->frame_file = elf_section_open_from_name(elf, ".debug_frame"))) {
         if (!(library->frame_file = elf_section_open_from_name(elf, ".eh_frame"))) {
-            TRACE_ERROR("%s: .debug_frame/.eh_frame section not found", elf_name(elf));
+            TRACE_ERROR("%s: .debug_frame/.eh_frame section not found", library->name);
         }
     }
     if (!(library->abbrev_file = elf_section_open_from_name(elf, ".debug_abbrev"))) {
-        TRACE_LOG("%s: .debug_abbrev section not found", elf_name(elf));
+        TRACE_LOG("%s: .debug_abbrev section not found", library->name);
     }
     if (!(library->info_file = elf_section_open_from_name(elf, ".debug_info"))) {
-        TRACE_LOG("%s: .debug_info section not found", elf_name(elf));
+        TRACE_LOG("%s: .debug_info section not found", library->name);
     }
     if (!(library->str_file = elf_section_open_from_name(elf, ".debug_str"))) {
-        TRACE_LOG("%s: .debug_str section not found", elf_name(elf));
+        TRACE_LOG("%s: .debug_str section not found", library->name);
     }
     if (!(library->line_file = elf_section_open_from_name(elf, ".debug_line"))) {
-        TRACE_LOG("%s: .debug_line section not found", elf_name(elf));
+        TRACE_LOG("%s: .debug_line section not found", library->name);
     }
 
+
+    if (!(library->dynsym_file = elf_section_open_from_name(elf, ".dynsym"))) {
+        TRACE_ERROR("%s: .dynsym section not found", library->name);
+    }
+    if (!(library->dynstr_file = elf_section_open_from_name(elf, ".dynstr"))) {
+        TRACE_ERROR("%s: .dynstr section not found", library->name);
+    }
     if (!library->abbrev_file || !library->info_file || !library->str_file || !library->line_file) {
         // fallback to dynamic symbols
+        /*
         if (!(library->dynsym_file = elf_section_open_from_name(elf, ".dynsym"))) {
-            TRACE_ERROR("%s: .dynsym section not found", elf_name(elf));
+            TRACE_ERROR("%s: .dynsym section not found", library->name);
         }
         if (!(library->dynstr_file = elf_section_open_from_name(elf, ".dynstr"))) {
-            TRACE_ERROR("%s: .dynstr section not found", elf_name(elf));
+            TRACE_ERROR("%s: .dynstr section not found", library->name);
         }
+        */
         if (library->line_file) {
             elf_file_close(library->line_file);
             library->line_file = NULL;
@@ -198,9 +210,9 @@ void libraries_update(libraries_t *libraries) {
             library_t *library = NULL;
 
             // skip ld library
-            if (strstr(name, "/ld-") || strstr(name, "/ld.")) {
-                continue;
-            }
+            //if (strstr(name, "/ld-") || strstr(name, "/ld.")) {
+            //    continue;
+            //}
 
             // library is already in the list
             if (libraries_contains(libraries, begin, end, name)) {
@@ -237,6 +249,7 @@ void libraries_destroy(libraries_t *libraries) {
         elf_file_close(library->dynsym_file);
         elf_file_close(library->dynstr_file);
         elf_close(library->elf);
+        free(library->name);
 
     }
     free(libraries->list);
@@ -252,7 +265,7 @@ void libraries_print(const libraries_t *libraries, FILE *fp) {
     fprintf(fp, "[libraries]\n");
     for (i = 0; i < libraries->count; i++) {
         library_t *library = &libraries->list[i];
-        fprintf(fp, "[%p-%p] [%s]\n", library->begin, library->end, elf_name(library->elf));
+        fprintf(fp, "[%p-%p] [%s]\n", library->begin, library->end, library->name);
     }
     fprintf(fp, "\n");
     fflush(fp);
@@ -277,16 +290,13 @@ void library_print_symbol(const library_t *library, size_t ra, FILE *fp) {
         fprintf(fp, "    %s() in %s:%d\n", info->function, line->file, line->line);
     }
     else if (info) {
-        fprintf(fp, "    %s()+0x%"PRIx64" in %s\n", info->function, info->offset, elf_name(library->elf));
-    }
-    else if (line) {
-        fprintf(fp, "    %s:%d\n", line->file, line->line);
+        fprintf(fp, "    %s()+0x%"PRIx64" in %s\n", info->function, info->offset, library->name);
     }
     else if (sym.name) {
-        fprintf(fp, "    %s()+0x%"PRIx64" in %s\n", sym.name, sym.offset, elf_name(library->elf));
+        fprintf(fp, "    %s()+0x%"PRIx64" in %s\n", sym.name, sym.offset, library->name);
     }
     else {
-        fprintf(fp, "    %s:0x%zx\n", elf_name(library->elf), ra);
+        fprintf(fp, "    %s:0x%zx\n", library->name, ra);
     }
 
     if (info) {
@@ -302,8 +312,34 @@ const library_t *libraries_find(const libraries_t *libraries, size_t address) {
     return bsearch((void *) address, libraries->list, libraries->count, sizeof(library_t), so_bsearch_compar);
 }
 
+const library_t *libraries_find_by_name(const libraries_t *libraries, const char *regex) {
+    assert(libraries);
+    regex_t preg;
+    size_t i = 0;
+
+    if (regcomp(&preg, regex, REG_NOSUB|REG_EXTENDED) == 1) {
+        TRACE_ERROR("Failed to parse regex %s: %m", regex);
+        return NULL;
+    }
+
+    for (i = 0; i < libraries->count; i++) {
+        library_t *library = &libraries->list[i];
+        if (regexec(&preg, library->name, 0, NULL, 0) == 0) {
+            regfree(&preg);
+            return library;
+        }
+    }
+
+    regfree(&preg);
+    return NULL;
+}
+
 size_t library_relative_address(const library_t *library, size_t address) {
     assert(library);
     return (address - ((size_t) library->begin)) + library->offset;
 }
 
+size_t library_absolute_address(const library_t *library, size_t address) {
+    assert(library);
+    return (address + ((size_t) library->begin)) + library->offset;
+}

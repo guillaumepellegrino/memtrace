@@ -230,6 +230,7 @@ typedef struct {
     debug_frame_cie_t cie;
     debug_frame_fde_t fde;
     uint64_t lookup_pc;
+    bool is_debug_frame;
     bool found;
 } debug_frame_ctx_t;
 

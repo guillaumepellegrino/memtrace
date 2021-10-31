@@ -25,6 +25,7 @@
 struct _library {
     /** A reference on the corresponding ELF file */
     elf_t *elf;
+    char *name;
 
     /** Debug sections of the ELF File */
     elf_file_t *frame_hdr_file;
@@ -60,7 +61,13 @@ void library_print_symbol(const library_t *library, size_t ra, FILE *fp);
 /** Return the library to which belongs this address */
 const library_t *libraries_find(const libraries_t *libraries, size_t address);
 
+/** Return the library corresponding to this name */
+const library_t *libraries_find_by_name(const libraries_t *libraries, const char *regex);
+
 /** Return the address value relatively to the library */
 size_t library_relative_address(const library_t *library, size_t address);
+
+/** Return the absolute address value */
+size_t library_absolute_address(const library_t *library, size_t address);
 
 #endif

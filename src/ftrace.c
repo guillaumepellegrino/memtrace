@@ -40,7 +40,7 @@
 #include "breakpoint.h"
 #include "ptrace.h"
 #include "log.h"
-
+/*
 struct library {
     const char *name;
     size_t begin;
@@ -99,6 +99,7 @@ size_t absolute_addr(struct library *library, size_t relative) {
     size_t addr = relative;
     return addr + library->begin;
 }
+*/
 
 bool ftrace_wait(ftrace_t *ftrace, int *status) {
     struct epoll_event event = {0};
@@ -123,7 +124,7 @@ bool ftrace_wait(ftrace_t *ftrace, int *status) {
         handler->fn(handler, event.events);
     }
 
-    read(ftrace->sigfd, &fdsi, sizeof(fdsi));
+    assert(read(ftrace->sigfd, &fdsi, sizeof(fdsi)) > 0);
     return ptrace_wait(ftrace->pid, status);
 }
 
@@ -269,7 +270,7 @@ breakpoint_t *ftrace_set_breakpoint(ftrace_t *ftrace, const char *name, size_t a
 
     return bp;
 }
-
+/*
 size_t ftrace_function_address(ftrace_t *ftrace, const char *function) {
     struct library mylibc = {0};
     struct library childlibc = {0};
@@ -287,13 +288,15 @@ size_t ftrace_function_address(ftrace_t *ftrace, const char *function) {
         TRACE_ERROR("Failed to get child libc library");
         return 0;
     }
-
     size_t ra = relative_addr(&mylibc, la);
     size_t aa = absolute_addr(&childlibc, ra);
 
+    TRACE_WARNING("%s=libc+0x%zx=0x%zx", function, ra, aa);
+
     return aa;
 }
-
+*/
+/*
 breakpoint_t *ftrace_set_function_breakpoint(ftrace_t *ftrace, const char *function, ftrace_handler_t handler, void *userdata) {
 
     breakpoint_t *bp = NULL;
@@ -303,7 +306,7 @@ breakpoint_t *ftrace_set_function_breakpoint(ftrace_t *ftrace, const char *funct
         return NULL;
     }
 
-    TRACE_DEBUG("Set breakpoint for %s at address 0x%zx\n", function, aa);
+    TRACE_WARNING("Set breakpoint for %s at address 0x%zx", function, aa);
     if (!(bp = ftrace_set_breakpoint(ftrace, function, aa, handler, userdata))) {
         return NULL;
     }
@@ -312,12 +315,12 @@ breakpoint_t *ftrace_set_function_breakpoint(ftrace_t *ftrace, const char *funct
 
     return bp;
 }
-
+*/
 bool ftrace_set_syscall_breakpoint(ftrace_t *ftrace, int syscallnumber, ftrace_handler_t handler, void *userdata) {
     syscall_t *syscall = calloc(1, sizeof(syscall_t));
 
     if (!syscall) {
-        TRACE_ERROR("calloc failed: %m\n");
+        TRACE_ERROR("calloc failed: %m");
         return false;
     }
 
