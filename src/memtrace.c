@@ -260,8 +260,6 @@ void do_callstack_dummy(const ftrace_fcall_t *fcall, app_t *app, allocation_t *a
 }
 
 static void memtrace_alloc(const ftrace_fcall_t *fcall, const ftrace_fcall_t *rtfcall, app_t *app, void *ptr, size_t size, size_t *callstack) {
-    TRACE_LOG("malloc(%zu) -> %p", size, ptr);
-
     allocation_t *allocation = calloc(1, sizeof(allocation_t));
     assert(allocation);
     allocation->ptr_size = size;
@@ -288,7 +286,6 @@ static void memtrace_free(app_t *app, void *ptr) {
     hashmap_iterator_t *it = NULL;
 
     if (ptr && (it = hashmap_get(&app->allocations, ptr))) {
-        TRACE_LOG("free(%p)", ptr);
         allocation_t *allocation = container_of(it, allocation_t, it);
         app->free_count += 1;
         app->free_size += allocation->ptr_size;
@@ -410,6 +407,7 @@ bool malloc_handler(const ftrace_fcall_t *fcall, void *userdata) {
     app_t *app = userdata;
 
     if (ftrace_depth(fcall->ftrace) > 1) {
+        TRACE_DEBUG("nested");
         return true;
     }
 
@@ -427,7 +425,10 @@ bool malloc_handler(const ftrace_fcall_t *fcall, void *userdata) {
         return false;
     }
 
-    memtrace_alloc(fcall, &rtfcall, app, (void *) rtfcall.retval, fcall->arg1, callstack);
+    size_t size = fcall->arg1;
+    void *newptr = (void *) rtfcall.retval;
+    TRACE_DEBUG("malloc(%zu) -> %p", size, newptr);
+    memtrace_alloc(fcall, &rtfcall, app, newptr, size, callstack);
     return true;
 }
 
@@ -436,6 +437,7 @@ bool calloc_handler(const ftrace_fcall_t *fcall, void *userdata) {
     app_t *app = userdata;
 
     if (ftrace_depth(fcall->ftrace) > 1) {
+        TRACE_DEBUG("nested");
         return true;
     }
 
@@ -448,7 +450,10 @@ bool calloc_handler(const ftrace_fcall_t *fcall, void *userdata) {
         return false;
     }
 
-    memtrace_alloc(fcall, &rtfcall, app, (void *) rtfcall.retval, fcall->arg1 * fcall->arg2, callstack);
+    size_t size = fcall->arg1 * fcall->arg2;
+    void *newptr = (void *) rtfcall.retval;
+    TRACE_DEBUG("calloc(%zu) -> %p", size, newptr);
+    memtrace_alloc(fcall, &rtfcall, app, newptr, size, callstack);
 
     return true;
 }
@@ -458,6 +463,7 @@ bool realloc_handler(const ftrace_fcall_t *fcall, void *userdata) {
     app_t *app = userdata;
 
     if (ftrace_depth(fcall->ftrace) > 1) {
+        TRACE_DEBUG("nested");
         return true;
     }
 
@@ -475,9 +481,11 @@ bool realloc_handler(const ftrace_fcall_t *fcall, void *userdata) {
     void *newptr = (void *) rtfcall.retval;
 
     if (oldptr) {
+        TRACE_DEBUG("realloc.free(%p)", oldptr);
         memtrace_free(app, oldptr);
     }
     if (newptr) {
+        TRACE_DEBUG("realloc.alloc(%zu) -> %p", size, newptr);
         memtrace_alloc(fcall, &rtfcall, app, newptr, size, callstack);
     }
 
@@ -489,6 +497,7 @@ bool reallocarray_handler(const ftrace_fcall_t *fcall, void *userdata) {
     app_t *app = userdata;
 
     if (ftrace_depth(fcall->ftrace) > 1) {
+        TRACE_DEBUG("nested");
         return true;
     }
 
@@ -505,9 +514,11 @@ bool reallocarray_handler(const ftrace_fcall_t *fcall, void *userdata) {
     void *newptr = (void *) rtfcall.retval;
 
     if (oldptr) {
+        TRACE_DEBUG("reallocarray.free(%p)", oldptr);
         memtrace_free(app, oldptr);
     }
     if (newptr) {
+        TRACE_DEBUG("reallocarray.alloc(%zu) -> %p", size, newptr);
         memtrace_alloc(fcall, &rtfcall, app, newptr, size, callstack);
     }
 
@@ -515,13 +526,23 @@ bool reallocarray_handler(const ftrace_fcall_t *fcall, void *userdata) {
 }
 
 bool free_handler(const ftrace_fcall_t *fcall, void *userdata) {
+    ftrace_fcall_t rtfcall = {0};
     app_t *app = userdata;
 
+    void *ptr = (void *) fcall->arg1;
+
+    if (!ftrace_fcall_get_rv(fcall, &rtfcall)) {
+        TRACE_ERROR("failed to get fcall return value");
+        return false;
+    }
+
+    TRACE_DEBUG("free(%p)", ptr);
+
     if (ftrace_depth(fcall->ftrace) > 1) {
+        TRACE_DEBUG("nested");
         return true;
     }
 
-    void *ptr = (void *) fcall->arg1;
     if (ptr) {
         memtrace_free(app, ptr);
     }
