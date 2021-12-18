@@ -606,6 +606,9 @@ static bool debug_frame_read_entry(debug_frame_ctx_t *ctx) {
             break;
         }
     }
+    if (ctx->lookup_pc >= ctx->fde.pc_begin && ctx->lookup_pc < ctx->fde.pc_begin + ctx->fde.pc_range) {
+        ctx->found = true;
+    }
 
 exit:
     elf_file_seek(frame_file, start_offset + length);
@@ -735,6 +738,8 @@ bool debug_frame_ex(elf_file_t *frame_hdr_file, elf_file_t *frame_file, debug_fr
         return false;
     }
 
+    TRACE_LOG("Look for pc: 0x%"PRIx64, pc);
+
     if (frame_hdr_file && pc) {
         uint64_t section_offset = elf_file_section(frame_file)->sh_offset;
         if (!(fde_addr = debug_frame_hdr_search(frame_hdr_file, pc))) {
@@ -765,6 +770,9 @@ bool debug_frame_ex(elf_file_t *frame_hdr_file, elf_file_t *frame_file, debug_fr
     if (ctx.found && result) {
         *result = ctx.fde.rules;
         result->ra_reg_number = ctx.cie.return_address_register;
+    }
+    else {
+        TRACE_LOG("pc: 0x%"PRIx64" not found", pc);
     }
 
     return ctx.found;
