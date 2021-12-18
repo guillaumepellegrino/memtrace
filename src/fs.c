@@ -45,6 +45,7 @@
 #define FS_DEFAULT_BINDADDR "::0"
 #define FS_DEFAULT_PORT "3002"
 #define GET_REQUEST "GET/REQUEST/"
+#define POST_SYSROOT "POST/SYSROOT/"
 #define GET_REPLY "GET/REPLY/"
 
 typedef struct {
@@ -138,21 +139,94 @@ static bool fs_mcast_read(int mcast, mcast_msg_t *msg) {
     return true;
 }
 
-/** Return the real path of the file */
-char *fs_path(strlist_t *directories, const char *path) {
+/** Return true if path is allowed by ACLs */
+static bool fs_check_acls(strlist_t *acls, const char *path) {
     strlist_iterator_t *it = NULL;
+
+    strlist_for_each(it, acls) {
+        const char *acl = strlist_iterator_value(it);
+        if (!strncmp(acl, path, strlen(acl))) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/** Return true if path is safe (and does not contains "/../"in path */
+static bool fs_path_is_safe(const char *_path) {
+    bool rt = true;
+    char *path = NULL;
+    char *node = NULL;
+
+    path = strdup(_path);
+
+    for (node = strtok(path, "/"); node; node = strtok(NULL, "/")) {
+        if (!strcmp(node, "..")) {
+            rt = false;
+            break;
+        }
+    }
+
+    free(path);
+
+    return rt;
+}
+
+/** Return the real path of the file */
+static char *fs_path(const char *sysroot, strlist_t *files, strlist_t *directories, strlist_t *acls, const char *path) {
+    const char *filename = NULL;
+    strlist_iterator_t *it = NULL;
+
+    if (!fs_path_is_safe(path)) {
+        TRACE_ERROR("'/../' are forbinden in path (%s)", path);
+        return NULL;
+    }
+
+    if (!(filename = strrchr(path, '/'))) {
+        filename = path;
+    }
+
+    strlist_for_each(it, files) {
+        const char *lookup = NULL;
+        const char *file = strlist_iterator_value(it);
+        if (!(lookup = strrchr(file, '/'))) {
+            lookup = file;
+        }
+
+        if (!strcmp(filename, lookup)) {
+            return strdup(file);
+        }
+    }
 
     strlist_for_each(it, directories) {
         char *realpath = NULL;
         struct stat st = {0};
         const char *directory = strlist_iterator_value(it);
 
-        if (asprintf(&realpath, "%s/%s", directory, path) <= 0) {
-            continue;
-        }
+        assert(asprintf(&realpath, "%s/%s", directory, path) > 0);
 
         if (stat(realpath, &st) == 0) {
             return realpath;
+        }
+
+        free(realpath);
+    }
+
+    if (sysroot) {
+        char *realpath = NULL;
+        struct stat st = {0};
+
+        assert(asprintf(&realpath, "%s/%s", sysroot, path) > 0);
+
+        if (stat(realpath, &st) == 0) {
+            return realpath;
+        }
+
+        if (fs_check_acls(acls, realpath)) {
+            TRACE_ERROR("Server is not allowed to access: %s", realpath);
+            free(realpath);
+            return NULL;
         }
 
         free(realpath);
@@ -162,7 +236,7 @@ char *fs_path(strlist_t *directories, const char *path) {
 }
 
 /** Serve File System GET request */
-bool fs_server_serve_get_request(fs_server_t *server, char *request) {
+static bool fs_server_handle_get_request(fs_server_t *server, char *request) {
     uint64_t size = 0;
     uint64_t offset_u64 = 0;
     uint64_t xbytes = 0;
@@ -187,7 +261,7 @@ bool fs_server_serve_get_request(fs_server_t *server, char *request) {
 
     TRACE_LOG(GET_REQUEST "size=%"PRIu64"/offset=%"PRIu64":%s", size, offset_u64, filename);
 
-    if (!(path = fs_path(&server->cfg.directories, filename))) {
+    if (!(path = fs_path(server->cfg.sysroot, &server->cfg.files, &server->cfg.directories, &server->cfg.acls, filename))) {
         TRACE_ERROR("%s: not found", filename);
         goto error;
     }
@@ -230,8 +304,19 @@ error:
     return rt;
 }
 
+/**  memtrace server set the sysroot PATH according what tells the client */
+static bool fs_server_handle_post_sysroot(fs_server_t *server, char *request) {
+    char *path = request + strlen(POST_SYSROOT);
+
+    free(server->cfg.sysroot);
+    server->cfg.sysroot = strdup(path);
+    TRACE_LOG("Sysroot directory: %s", path);
+
+    return true;
+}
+
 /** Serve File System request */
-static bool fs_server_serve_request(fs_server_t *fs) {
+static bool fs_server_handle_request(fs_server_t *fs) {
     char request[512];
     char *sep = NULL;
     bool rt = false;
@@ -245,7 +330,10 @@ static bool fs_server_serve_request(fs_server_t *fs) {
     }
 
     if (!strncmp(request, GET_REQUEST, strlen(GET_REQUEST))) {
-        rt = fs_server_serve_get_request(fs, request);
+        rt = fs_server_handle_get_request(fs, request);
+    }
+    else if (!strncmp(request, POST_SYSROOT, strlen(POST_SYSROOT))) {
+        rt = fs_server_handle_post_sysroot(fs, request);
     }
     else {
         TRACE_ERROR("Unknown request %s", request);
@@ -443,6 +531,11 @@ bool fs_initialize(fs_t *fs, const fs_cfg_t *cfg) {
         }
     }
 
+#ifdef SYSROOT
+    fprintf(fs->socket, POST_SYSROOT SYSROOT "\n");
+    fflush(fs->socket);
+#endif
+
     rt = true;
 
 error:
@@ -511,7 +604,7 @@ bool fs_server_serve(fs_server_t *fs) {
             break;
         }
 
-        if (!fs_server_serve_request(fs)) {
+        if (!fs_server_handle_request(fs)) {
             if (fs->cfg.type == fs_type_tcp_server) {
                 fclose(fs->socket);
                 fs->socket = NULL;

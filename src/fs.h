@@ -35,7 +35,10 @@ struct _fs_cfg {
     const char *hostname;
     const char *mcastaddr;
     const char *port;
+    char *sysroot;
     strlist_t directories;
+    strlist_t files;
+    strlist_t acls;
 };
 
 struct _fs {

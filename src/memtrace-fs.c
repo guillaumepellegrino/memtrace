@@ -38,7 +38,7 @@
 #include "log.h"
 
 static void help() {
-    CONSOLE("Usage: memtrace-fs [OPTION]..");
+    CONSOLE("Usage: memtrace-fs [OPTION].. [PATH]..");
     CONSOLE("A simple file-server for serving shared library with debug symbols to memtrace");
     CONSOLE("File server is listening on [::0]:3002 by default and annouces itself through multicast");
     CONSOLE("");
@@ -46,7 +46,7 @@ static void help() {
     CONSOLE("   -c, --connect=HOST[:PORT]   Connect to specified HOST");
     CONSOLE("   -l, --listen=HOST[:PORT]    Listen on the specified HOST");
     CONSOLE("   -p, --port=VALUE            Use the specified port");
-    CONSOLE("   -d, --directory=PATH        Add this directory to the search path");
+    CONSOLE("   -a, --acl=PATH              Add this directory to ACL");
     CONSOLE("   -h, --help                  Display this help");
     CONSOLE("   -V, --version               Display the version");
 }
@@ -56,16 +56,17 @@ static void version() {
 }
 
 int main(int argc, char *argv[]) {
-    const char *short_options = "+c:l:d:vhV";
+    const char *short_options = "+c:l:a:vhV";
     const struct option long_options[] = {
         {"connect",     required_argument,  0, 'c'},
         {"listen",      required_argument,  0, 'l'},
-        {"directory",   required_argument,  0, 'd'},
+        {"acl",         required_argument,  0, 'a'},
         {"verbose",     no_argument,        0, 'v'},
         {"help",        no_argument,        0, 'h'},
         {"version",     no_argument,        0, 'V'},
         {0}
     };
+    int i = 0;
     int opt = -1;
     fs_cfg_t fs_cfg = {
         .type = fs_type_tcp_server,
@@ -76,9 +77,14 @@ int main(int argc, char *argv[]) {
 
     strlist_insert(&fs_cfg.directories, "");
     strlist_insert(&fs_cfg.directories, ".");
-#ifdef SYSROOT
-    strlist_insert(&fs_cfg.directories, SYSROOT);
-#endif
+
+    strlist_insert(&fs_cfg.acls, "/usr/");
+    strlist_insert(&fs_cfg.acls, "/lib/");
+    strlist_insert(&fs_cfg.acls, "/lib32/");
+    strlist_insert(&fs_cfg.acls, "/lib64/");
+    strlist_insert(&fs_cfg.acls, "/bin/");
+    strlist_insert(&fs_cfg.acls, "/sbin/");
+    strlist_insert(&fs_cfg.acls, "/opt/");
 
     while ((opt = getopt_long(argc, argv, short_options, long_options, NULL)) != -1) {
         switch (opt) {
@@ -91,8 +97,8 @@ int main(int argc, char *argv[]) {
                 fs_cfg.hostname = strtok(optarg, ":");
                 fs_cfg.port = strtok(NULL, ":");
                 break;
-            case 'd':
-                strlist_insert(&fs_cfg.directories, optarg);
+            case 'a':
+                strlist_insert(&fs_cfg.acls, optarg);
                 break;
             case 'v':
                 verbose++;
@@ -109,6 +115,25 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    for (i = optind; i < argc; i++) {
+        struct stat st = {0};
+        char *path = argv[i];
+
+        if (stat(path, &st) != 0) {
+            CONSOLE("Can not open %s: %m", path);
+            return 1;
+        }
+
+        if ((st.st_mode & S_IFMT) == S_IFDIR) {
+            CONSOLE("Adding directory %s to search path", path);
+            strlist_insert(&fs_cfg.directories, path);
+        }
+        else {
+            CONSOLE("Adding file %s to search path", path);
+            strlist_insert(&fs_cfg.files, path);
+        }
+    }
+
     if (!fs_server_initialize(&fs_server, &fs_cfg)) {
         CONSOLE("Failed to initialize File System Server");
         return 1;
@@ -119,6 +144,8 @@ int main(int argc, char *argv[]) {
     }
 
     strlist_cleanup(&fs_cfg.directories);
+    strlist_cleanup(&fs_cfg.files);
+    strlist_cleanup(&fs_cfg.acls);
 
     return 0;
 }

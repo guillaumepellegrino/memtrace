@@ -1,8 +1,6 @@
-CC?=cc
 CC_HOST?=cc
-CFLAGS_HOST+=-Wall -Wextra -Wno-unused-parameter -Werror -g \
-	-DVERSION=\"$(shell git describe --tags)\" \
-	-DSYSROOT=\"$(shell $(CC) -print-sysroot)\"
+CFLAGS_HOST+=-Wall -Wextra -Wno-unused-parameter -Werror -g -O2 \
+	-DVERSION=\"$(shell git describe --all)\"
 LDFLAGS_HOST+=
 
 all: memtrace-fs

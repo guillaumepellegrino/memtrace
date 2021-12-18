@@ -1,5 +1,7 @@
 MACHINE=$(shell $(CC) -dumpmachine)
-CFLAGS+=-Wall -Wextra -Wno-unused-parameter  -Werror -g -O2 -DVERSION=\"$(shell git describe --tags)\"
+CFLAGS+=-Wall -Wextra -Wno-unused-parameter -Werror -g -O2 \
+	-DVERSION=\"$(shell git describe --all)\" \
+	-DSYSROOT=\"$(shell $(CC) -print-sysroot)\"
 #LDFLAGS+=-ldw
 #LDFLAGS+=-lunwind -lunwind-ptrace
 OBJECTS=ftrace.o breakpoint.o syscall.o ptrace.o hashmap.o libraries.o net.o fs.o log.o selftest.o process.o elf.o elf_file.o elf_sym.o debug_line.o debug_info.o debug_frame.o dwarf_expr.o dwarf_unwind.o strlist.o console.o
