@@ -96,7 +96,7 @@ typedef struct {
     size_t directory_count;
     size_t file_count;
     char *directories[256];
-    char *files[256];
+    char *files[512];
 } debug_line_ctx_t;
 
 static bool debug_line_interpret_special_opcode(uint32_t opcode, debug_line_ctx_t *ctx) {
@@ -356,6 +356,10 @@ bool debug_line_process_cu(debug_line_ctx_t *ctx) {
             break;
         }
 
+        if (i >= countof(ctx->directories)) {
+            TRACE_ERROR("Max directories reached");
+            break;
+        }
         assert((ctx->directories[i] = strdup(path)));
         TRACE_DWARF("  [%zu] %s", i, path);
         i++;
@@ -376,6 +380,10 @@ bool debug_line_process_cu(debug_line_ctx_t *ctx) {
         const char *directory = (directory_idx < ctx->directory_count) ?
             ctx->directories[directory_idx] : ".";
 
+        if (i >= countof(ctx->files)) {
+            TRACE_ERROR("Max files reached");
+            break;
+        }
         assert(asprintf(&ctx->files[i], "%s/%s", directory, path) > 0);
         TRACE_DWARF("  [%zu] %"PRIu32" %u %u %s/%s", i, directory_idx, lastchange, filelength, directory, path);
         i++;
