@@ -69,6 +69,7 @@ typedef struct {
     fs_t fs;
     ftrace_t ftrace;
     int pid;
+    bool attachpid;
     int libc_fd;
     libraries_t *libraries;
     hashmap_t allocations;
@@ -90,9 +91,10 @@ typedef struct {
     epoll_handler_t monitor_handler;
     bool (*unwind)(libraries_t *libraries, const ftrace_fcall_t *fcall, size_t *callstack, size_t size);
 } app_t;
+static bool exit_evlp = false;
 
 void memtrace_status(app_t *app);
-void memtrace_report(app_t *app);
+void memtrace_report(app_t *app, size_t max);
 void memtrace_clear(app_t *app);
 
 static bool raw_unwind(libraries_t *libraries, const ftrace_fcall_t *fcall, size_t *callstack, size_t size) {
@@ -136,14 +138,21 @@ static void memtrace_console_status(console_t *console, int argc, char *argv[]) 
 
 static void memtrace_console_monitor(console_t *console, int argc, char *argv[]) {
     app_t *app = container_of(console, app_t, console);
-    app->monitor ^= true;
+    int interval = 2;
+    if (argc > 1) {
+        interval = atoi(argv[1]);
+        app->monitor = interval;
+    }
+    else {
+        app->monitor ^= true;
+    }
 
     struct itimerspec itimer = {0};
 
     if (app->monitor) {
         CONSOLE("Start monitoring");
-        itimer.it_interval.tv_sec = 2;
-        itimer.it_value.tv_sec = 2;
+        itimer.it_interval.tv_sec = interval;
+        itimer.it_value.tv_sec = interval;
     }
     timerfd_settime(app->monitor_timerfd, 0, &itimer, NULL);
     memtrace_status(app);
@@ -159,7 +168,8 @@ static void memtrace_monitor_handler(epoll_handler_t *self, int events) {
 
 static void memtrace_console_report(console_t *console, int argc, char *argv[]) {
     app_t *app = container_of(console, app_t, console);
-    memtrace_report(app);
+    size_t max = argc > 1 ? atoi(argv[1]) : 0;
+    memtrace_report(app, max);
 }
 
 static void memtrace_console_clear(console_t *console, int argc, char *argv[]) {
@@ -291,7 +301,7 @@ static void memtrace_free(app_t *app, void *ptr) {
         app->free_size += allocation->ptr_size;
         hashmap_iterator_destroy(&allocation->it);
     }
-    else {
+    else if (!app->attachpid) {
         CONSOLE("[memtrace] free(%p) (not found)", ptr);
     }
 }
@@ -337,20 +347,22 @@ void memtrace_status(app_t *app) {
         block->size += allocation->ptr_size;
     }
 
-    CONSOLE("HEAP SUMMARY:");
+    time_t now = time(NULL);
+    CONSOLE("HEAP SUMMARY %s", asctime(localtime(&now)));
     CONSOLE("    in use: %zu bytes in %zu blocks", size, count);
     CONSOLE("    total heap usage: %zu allocs, %zu frees, %zu bytes allocated", app->alloc_count, app->free_count, app->alloc_size);
 
     hashmap_clear(&app->blocks);
 }
 
-void memtrace_report(app_t *app) {
+void memtrace_report(app_t *app, size_t max) {
     if (app->libraries) {
         libraries_print(app->libraries, stdout);
         //libraries_print_debug(app->pid);
     }
     CONSOLE("[memtrace] report");
 
+    size_t i = 0;
     size_t count = 0;
     size_t size = 0;
     hashmap_iterator_t *it = NULL;
@@ -381,9 +393,15 @@ void memtrace_report(app_t *app) {
     hashmap_for_each(it, &app->blocks) {
         block_t *block = container_of(it, block_t, it);
 
+        if (max > 0 && i >= max) {
+            break;
+        }
+
         CONSOLE("%zu bytes in %zu blocks were not free", block->size, block->count);
         addr2line_backtrace(app, block->callstack);
         CONSOLE("");
+
+        i++;
     }
 
     CONSOLE("HEAP SUMMARY:");
@@ -649,6 +667,7 @@ static bool mmap_handler(const ftrace_fcall_t *fcall, void *userdata) {
 
 static void signal_interrupt_handler(int sig) {
     CONSOLE("\nInterrupted");
+    exit_evlp = true;
 }
 
 static uint32_t allocations_maps_hash(hashmap_t *hashmap, void *key) {
@@ -682,7 +701,8 @@ static void help() {
     CONSOLE("   -a, --autoconnect           Auto connect to file server using multicast discovery");
     CONSOLE("   -c, --connect=HOST[:PORT]   Connect to file server specified by HOST and PORT");
     CONSOLE("   -l, --listen=HOST[:PORT]    Listen for file server on the specified HOST and PORT");
-    CONSOLE("   -m, --mode=VALUE            Set CPU mode [%s]", cpu_mode_list);
+    CONSOLE("   -u, --unwind=MODE           Set UNWIND mode [raw, dwarf]");
+    CONSOLE("   -s, --size=VALUE            Set callstack size (default: 10)");
     CONSOLE("   --selftest                  Run self test");
     CONSOLE("   --addr2line=ADDR            Convert address to line");
     CONSOLE("   --addr2func=ADDR            Convert address to function");
@@ -828,7 +848,7 @@ static const console_cmd_t memtrace_console_commands[] = {
 };
 
 int main(int argc, char* argv[]) {
-    const char *short_options = "+p:ac:l:m:u:tvz:hV";
+    const char *short_options = "+p:ac:l:m:u:s:tvz:hV";
     const struct option long_options[] = {
         {"pid",         required_argument,  0, 'p'},
         {"autoconnect", no_argument,        0, 'a'},
@@ -836,6 +856,7 @@ int main(int argc, char* argv[]) {
         {"listen",      required_argument,  0, 'l'},
         {"mode",        required_argument,  0, 'm'},
         {"unwind",      required_argument,  0, 'u'},
+        {"size",        required_argument,  0, 's'},
         {"selftest",    no_argument,        0, 't'},
         {"verbose",     no_argument,        0, 'v'},
         {"zone",        required_argument,  0, 'z'},
@@ -856,7 +877,6 @@ int main(int argc, char* argv[]) {
     const char *addr2func = NULL;
     const char *addr2frame = NULL;
     const char *func2addr = NULL;
-    bool attachpid = false;
     bool do_elfdump = false;
     int s = -1;
     app_t app = {
@@ -864,7 +884,7 @@ int main(int argc, char* argv[]) {
         .callstack_size = 10,
         .stdin_handler = {memtrace_stdin_handler},
         .monitor_handler = {memtrace_monitor_handler},
-        .unwind = dwarf_unwind,
+        .unwind = raw_unwind,
     };
     fs_cfg_t fs_cfg = {
         .type = fs_type_local,
@@ -876,7 +896,7 @@ int main(int argc, char* argv[]) {
         switch (opt) {
             case 'p':
                 app.pid = atoi(optarg);
-                attachpid = true;
+                app.attachpid = true;
                 break;
             case 'a':
                 fs_cfg.type = fs_type_tcp_client;
@@ -893,6 +913,9 @@ int main(int argc, char* argv[]) {
                 break;
             case 'm':
                 cpu_mode_str = optarg;
+                break;
+            case 's':
+                app.callstack_size = atoi(optarg);
                 break;
             case 'u':
                 if (!strcmp(optarg, "raw")) {
@@ -992,7 +1015,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    if (!attachpid) {
+    if (!app.attachpid) {
         if (argc <= 0) {
             help();
             return 1;
@@ -1054,7 +1077,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 #endif
-    if (attachpid) {
+    if (app.attachpid) {
         // Process is already running:
         // Try to set breakpoints now and create process maps
         app.libraries = libraries_create(app.pid, &app.fs);
@@ -1072,11 +1095,17 @@ int main(int argc, char* argv[]) {
     app.monitor_timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
     ftrace_set_fd_handler(&app.ftrace, &app.monitor_handler, app.monitor_timerfd, EPOLLIN);
 
-    while (ftrace_poll(&app.ftrace));
+    while (ftrace_poll(&app.ftrace)) {
+        if (exit_evlp) {
+            break;
+        }
+    }
 
     console_cleanup(&app.console);
 
-    memtrace_report(&app);
+    if (!exit_evlp) {
+        memtrace_report(&app, 0);
+    }
 
     hashmap_cleanup(&app.allocations);
     hashmap_cleanup(&app.blocks);
@@ -1085,7 +1114,7 @@ int main(int argc, char* argv[]) {
         CONSOLE("Detaching from pid %d", app.pid);
         ftrace_detach(&app.ftrace);
 
-        if (!attachpid) {
+        if (!app.attachpid) {
             kill(app.pid, SIGTERM);
             if (waitpid(app.pid, NULL, 0) != 0) {
                 kill(app.pid, SIGKILL);

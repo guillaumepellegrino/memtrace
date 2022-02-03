@@ -62,14 +62,23 @@ bool ptrace_terminated(int status) {
     if (WIFSTOPPED(status)) {
         signal = WSTOPSIG(status);
         if (signal != SIGTRAP && signal != (SIGTRAP|0x80)) {
-            TRACE_WARNING("process stopped by signal:%d", signal);
 
-            if (signal == SIGILL) {
-                //TRACE_WARNING("Ignore SIGILL signal");
-                return true;
+            switch (signal) {
+                case SIGTRAP:
+                case SIGABRT:
+                case SIGBUS:
+                case SIGFPE:
+                case SIGILL:
+                case SIGSEGV:
+                    TRACE_WARNING("process crashed with signal:%d", signal);
+                    return true;
+                case SIGKILL:
+                    TRACE_WARNING("process was killed by SIGKILL");
+                    return true;
+                default:
+                    TRACE_WARNING("process stopped by signal:%d (ignore)", signal);
+                    return false;
             }
-
-            return true;
         }
     }
 
