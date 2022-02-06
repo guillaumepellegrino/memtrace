@@ -147,7 +147,7 @@ static bool raw_unwind(libraries_t *libraries, const ftrace_fcall_t *fcall, size
 
     callstack[j++] = fcall->pc;
 
-    for (i = 0; i < 200 && j < size; i++) {
+    for (i = 0; i < 2000 && j < size; i++) {
         size_t pc = 0;
         if (!ftrace_read_word(fcall->ftrace, fcall->sp+i, &pc)) {
             break;

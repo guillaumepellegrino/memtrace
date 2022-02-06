@@ -50,3 +50,5 @@ stagingdir
 - Improve this README
 - Cleanup old references to libunwind and others
 - Improve console support (move cursor)
+- Ensure the 10x biggest memory leak always have an detailled callstack. Maybe by providing a coredump to gdb ?
+
