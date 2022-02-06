@@ -22,6 +22,14 @@
 #include "types.h"
 #include "strlist.h"
 
+#define GET_REQUEST "GET/REQUEST/"
+#define POST_SYSROOT "POST/SYSROOT/"
+#define GET_REPLY "GET/REPLY/"
+#define REPORT_REQUEST "REPORT/REQUEST/BEGIN"
+#define REPORT_REQUEST_END "REPORT/REQUEST/BEGIN"
+#define REPORT_REPLY "REPORT/REQUEST/BEGIN"
+#define REPORT_REPLY_END "REPORT/REQUEST/BEGIN"
+
 enum _fs_type {
     fs_type_local = 0,
     fs_type_tcp_client,
@@ -35,7 +43,6 @@ struct _fs_cfg {
     const char *hostname;
     const char *mcastaddr;
     const char *port;
-    char *sysroot;
     strlist_t directories;
     strlist_t files;
     strlist_t acls;
@@ -45,15 +52,9 @@ struct _fs {
     fs_cfg_t cfg;
     int mcastsrv;
     int mcastcli;
-    FILE *socket;
-};
-
-struct _fs_server {
-    fs_cfg_t cfg;
-    int mcastsrv;
-    int mcastcli;
     int server;
     FILE *socket;
+    char *sysroot;
 };
 
 /** 
@@ -68,15 +69,8 @@ void fs_cleanup(fs_t *fs);
 FILE *fs_fopen(fs_t *fs, const char *name, uint64_t size, uint64_t offset);
 
 /**
- * Initialize/Cleanup File System Server
- */
-bool fs_server_initialize(fs_server_t *server, const fs_cfg_t *cfg);
-void fs_server_cleanup(fs_t *fs);
-
-/**
  * Serve File System
  */
-bool fs_server_serve(fs_server_t *server);
-
+bool fs_serve(fs_t *server);
 
 #endif

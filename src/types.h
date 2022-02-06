@@ -51,7 +51,6 @@ typedef struct _elf_file elf_file_t;
 typedef enum _fs_type fs_type_t;
 typedef struct _fs_cfg fs_cfg_t;
 typedef struct _fs fs_t;
-typedef struct _fs_server fs_server_t;
 typedef struct _console_cmd console_cmd_t;
 typedef struct _console console_t;
 

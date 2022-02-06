@@ -116,18 +116,18 @@ static void libraries_entry_add(library_t *library, void *begin, void *end, cons
             TRACE_ERROR("%s: .debug_frame/.eh_frame section not found", library->name);
         }
     }
-    if (!(library->abbrev_file = elf_section_open_from_name(elf, ".debug_abbrev"))) {
-        TRACE_LOG("%s: .debug_abbrev section not found", library->name);
-    }
-    if (!(library->info_file = elf_section_open_from_name(elf, ".debug_info"))) {
-        TRACE_LOG("%s: .debug_info section not found", library->name);
-    }
-    if (!(library->str_file = elf_section_open_from_name(elf, ".debug_str"))) {
-        TRACE_LOG("%s: .debug_str section not found", library->name);
-    }
-    if (!(library->line_file = elf_section_open_from_name(elf, ".debug_line"))) {
-        TRACE_LOG("%s: .debug_line section not found", library->name);
-    }
+    //if (!(library->abbrev_file = elf_section_open_from_name(elf, ".debug_abbrev"))) {
+    //    TRACE_LOG("%s: .debug_abbrev section not found", library->name);
+    //}
+    //if (!(library->info_file = elf_section_open_from_name(elf, ".debug_info"))) {
+    //    TRACE_LOG("%s: .debug_info section not found", library->name);
+    //}
+    //if (!(library->str_file = elf_section_open_from_name(elf, ".debug_str"))) {
+    //    TRACE_LOG("%s: .debug_str section not found", library->name);
+    //}
+    //if (!(library->line_file = elf_section_open_from_name(elf, ".debug_line"))) {
+    //    TRACE_LOG("%s: .debug_line section not found", library->name);
+    //}
 
 
     if (!(library->dynsym_file = elf_section_open_from_name(elf, ".dynsym"))) {
@@ -137,15 +137,6 @@ static void libraries_entry_add(library_t *library, void *begin, void *end, cons
         TRACE_ERROR("%s: .dynstr section not found", library->name);
     }
     if (!library->abbrev_file || !library->info_file || !library->str_file || !library->line_file) {
-        // fallback to dynamic symbols
-        /*
-        if (!(library->dynsym_file = elf_section_open_from_name(elf, ".dynsym"))) {
-            TRACE_ERROR("%s: .dynsym section not found", library->name);
-        }
-        if (!(library->dynstr_file = elf_section_open_from_name(elf, ".dynstr"))) {
-            TRACE_ERROR("%s: .dynstr section not found", library->name);
-        }
-        */
         if (library->line_file) {
             elf_file_close(library->line_file);
             library->line_file = NULL;
@@ -270,7 +261,7 @@ void libraries_print(const libraries_t *libraries, FILE *fp) {
     fprintf(fp, "\n");
     fflush(fp);
 }
-
+/*
 void library_print_symbol(const library_t *library, size_t ra, FILE *fp) {
     debug_line_info_t *line = NULL;
     debug_info_t *info = NULL;
@@ -306,6 +297,7 @@ void library_print_symbol(const library_t *library, size_t ra, FILE *fp) {
         debug_line_info_free(line);
     }
 }
+*/
 
 const library_t *libraries_find(const libraries_t *libraries, size_t address) {
     assert(libraries);

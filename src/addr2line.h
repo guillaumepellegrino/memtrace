@@ -16,18 +16,14 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#ifndef PROCESS_H
-#define PROCESS_H
+#ifndef ADDR2LINE_H
+#define ADDR2LINE_H
 
 #include "types.h"
+#include <stdio.h>
 
-typedef struct {
-    int pid;
-    FILE *input;
-    FILE *output;
-} process_t;
-
-bool process_start(process_t *process, const char *argv[]);
-void process_stop(process_t *process);
+void addr2line_initialize(const char *binary);
+void addr2line_cleanup();
+void addr2line_print(const char *so, uint64_t address, FILE *out);
 
 #endif

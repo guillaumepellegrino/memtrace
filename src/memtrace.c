@@ -17,6 +17,7 @@
  */
 
 #define TRACE_ZONE TRACE_ZONE_MAIN
+#define _GNU_SOURCE
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/mman.h>
@@ -28,11 +29,6 @@
 #include <signal.h>
 #include <fcntl.h>
 #include <getopt.h>
-//#include <elfutils/elf-knowledge.h>
-//#include <elfutils/known-dwarf.h>
-//#include <elfutils/libdwfl.h>
-//#include <elfutils/libdwelf.h>
-//#include <elfutils/libdw.h>
 #include "ftrace.h"
 #include "hashmap.h"
 #include "libraries.h"
@@ -40,7 +36,6 @@
 #include "net.h"
 #include "selftest.h"
 #include "log.h"
-//#include "backtrace.h"
 #include "debug_line.h"
 #include "debug_info.h"
 #include "debug_frame.h"
@@ -50,6 +45,9 @@
 #include "elf_sym.h"
 #include "fs.h"
 #include "console.h"
+#include "addr2line.h"
+
+typedef struct _app app_t;
 
 typedef struct {
     hashmap_iterator_t it;
@@ -65,7 +63,7 @@ typedef struct {
     size_t *callstack;
 } block_t;
 
-typedef struct {
+struct _app {
     fs_t fs;
     ftrace_t ftrace;
     int pid;
@@ -90,12 +88,32 @@ typedef struct {
     epoll_handler_t stdin_handler;
     epoll_handler_t monitor_handler;
     bool (*unwind)(libraries_t *libraries, const ftrace_fcall_t *fcall, size_t *callstack, size_t size);
-} app_t;
+    void (*print_callstack)(app_t *app, size_t *callstack);
+    char *addr2line;
+};
 static bool exit_evlp = false;
 
 void memtrace_status(app_t *app);
 void memtrace_report(app_t *app, size_t max);
 void memtrace_clear(app_t *app);
+
+static char *addr2line_default_command() {
+    char *cmd = NULL;
+    char *toolchain = NULL;
+    char *sep = NULL;
+
+    assert((toolchain = strdup(COMPILER)));
+    if ((sep = strrchr(toolchain, '-'))) {
+        *sep = 0;
+        assert(asprintf(&cmd, "%s-addr2line", toolchain) >= 0);
+    }
+    else {
+        cmd = strdup("addr2line");
+    }
+
+    free(toolchain);
+    return cmd;
+}
 
 static bool raw_unwind(libraries_t *libraries, const ftrace_fcall_t *fcall, size_t *callstack, size_t size) {
     const library_t *library = NULL;
@@ -223,7 +241,9 @@ static void blocks_maps_destroy(void *key, hashmap_iterator_t *it) {
     free(block);
 }
 
-void addr2line_backtrace(app_t *app, size_t *callstack) {
+// TODO: remove function ?
+/*
+void dwarf_print_callstack(app_t *app, size_t *callstack) {
     size_t i;
     for (i = 0; i < app->callstack_size; i++) {
         size_t address = callstack[i];
@@ -231,7 +251,6 @@ void addr2line_backtrace(app_t *app, size_t *callstack) {
             break;
         }
 
-        //dwfl_print_symbol(stdout, (void *) address, app->pid);
         const library_t *library = libraries_find(app->libraries, address);
         if (library) {
             size_t ra = library_relative_address(library, address);
@@ -242,29 +261,23 @@ void addr2line_backtrace(app_t *app, size_t *callstack) {
         }
     }
 }
+*/
 
-
-
-void do_callstack_dummy(const ftrace_fcall_t *fcall, app_t *app, allocation_t *allocation) {
-    size_t callstackidx = 0;
-    allocation->callstack[callstackidx++] = fcall->pc;
-    allocation->callstack[callstackidx++] = fcall->ra;
-    size_t i = 0;
-    size_t word = 0;
-    for (i = 0; i < 1024; i++) {
-        size_t addr = fcall->sp + (i * sizeof(word));
-        if (!ftrace_read_word(&app->ftrace, addr, &word)) {
+static void raw_print_callstack(app_t *app, size_t *callstack) {
+    size_t i;
+    for (i = 0; i < app->callstack_size; i++) {
+        size_t address = callstack[i];
+        if (!address || !app->libraries) {
             break;
         }
 
-        if (!libraries_find(app->libraries, word)) {
-            continue;
+        const library_t *library = libraries_find(app->libraries, address);
+        if (library) {
+            size_t ra = library_relative_address(library, address);
+            addr2line_print(library->name, ra, stderr);
         }
-
-        allocation->callstack[callstackidx++] = word;
-
-        if (callstackidx >= app->callstack_size) {
-            break;
+        else {
+            //CONSOLE("    0x%zx", address);
         }
     }
 }
@@ -280,16 +293,6 @@ static void memtrace_alloc(const ftrace_fcall_t *fcall, const ftrace_fcall_t *rt
 
     app->alloc_count += 1;
     app->alloc_size += size;
-
-
-    //CONSOLE("pc = 0x%lx, ra = 0x%zx", fcall->pc, fcall->ra);
-
-    //CONSOLE("unw backtrace:");
-    //backtrace(&app->bt, allocation->callstack, app->alloc_size);
-    //CONSOLE("");
-    //CONSOLE("addr2line backtrace:");
-    //addr2line_backtrace(app, allocation->callstack);
-    //CONSOLE("");
 }
 
 static void memtrace_free(app_t *app, void *ptr) {
@@ -355,6 +358,105 @@ void memtrace_status(app_t *app) {
     hashmap_clear(&app->blocks);
 }
 
+void memtrace_client_report(app_t *app, size_t max) {
+
+}
+
+bool memtrace_is_local(app_t *app) {
+    return app->fs.cfg.type == fs_type_local;
+}
+
+
+static void memtrace_local_blocks_print(app_t *app, size_t max) {
+    size_t i = 0;
+    hashmap_iterator_t *it = NULL;
+
+    hashmap_for_each(it, &app->blocks) {
+        block_t *block = container_of(it, block_t, it);
+
+        if (max > 0 && i >= max) {
+            break;
+        }
+
+        CONSOLE("%zu bytes in %zu blocks were not free", block->size, block->count);
+        raw_print_callstack(app, block->callstack);
+        CONSOLE("");
+
+        i++;
+    }
+
+}
+
+static void memtrace_client_callstack_print(app_t *app, size_t *callstack, FILE *fp) {
+    size_t i;
+    for (i = 0; i < app->callstack_size; i++) {
+        size_t address = callstack[i];
+        if (!address || !app->libraries) {
+            break;
+        }
+
+        const library_t *library = libraries_find(app->libraries, address);
+        if (library) {
+            size_t ra = library_relative_address(library, address);
+            fprintf(fp, "ra=0x%zx:%s\n", ra, library->name);
+        }
+        else {
+            //fprintf(fp, "    0x%zx\n", address);
+        }
+    }
+}
+
+static void memtrace_client_blocks_print(app_t *app, size_t max) {
+    size_t i = 0;
+    hashmap_iterator_t *it = NULL;
+
+    FILE *fp = app->fs.socket;
+
+    // Send whole report to server
+    fprintf(fp, REPORT_REQUEST " addr2line=%s\n", app->addr2line);
+    hashmap_for_each(it, &app->blocks) {
+        block_t *block = container_of(it, block_t, it);
+
+        if (max > 0 && i >= max) {
+            break;
+        }
+
+
+        fprintf(fp, "%zu bytes in %zu blocks were not free\n", block->size, block->count);
+        memtrace_client_callstack_print(app, block->callstack, fp);
+        fprintf(fp, "\n");
+        i++;
+    }
+    fprintf(fp, REPORT_REQUEST_END "\n");
+    fflush(fp);
+
+    // Read back translated formated report from server
+    size_t len = 4096;
+    char *line = malloc(len);
+    while(fgets(line, len, fp)) {
+        if (!strcmp(line, REPORT_REPLY"\n")) {
+            break;
+        }
+    }
+
+    while(fgets(line, len, fp)) {
+        if (!strcmp(line, REPORT_REPLY_END"\n")) {
+            break;
+        }
+        CONSOLE_RAW("%s", line);
+    }
+    free(line);
+}
+
+void memtrace_blocks_print(app_t *app, size_t max) {
+    if (memtrace_is_local(app)) {
+        memtrace_local_blocks_print(app, max);
+    }
+    else {
+        memtrace_client_blocks_print(app, max);
+    }
+}
+
 void memtrace_report(app_t *app, size_t max) {
     if (app->libraries) {
         libraries_print(app->libraries, stdout);
@@ -362,7 +464,6 @@ void memtrace_report(app_t *app, size_t max) {
     }
     CONSOLE("[memtrace] report");
 
-    size_t i = 0;
     size_t count = 0;
     size_t size = 0;
     hashmap_iterator_t *it = NULL;
@@ -390,20 +491,7 @@ void memtrace_report(app_t *app, size_t max) {
     }
 
     hashmap_qsort(&app->blocks, blocks_map_compar);
-    hashmap_for_each(it, &app->blocks) {
-        block_t *block = container_of(it, block_t, it);
-
-        if (max > 0 && i >= max) {
-            break;
-        }
-
-        CONSOLE("%zu bytes in %zu blocks were not free", block->size, block->count);
-        addr2line_backtrace(app, block->callstack);
-        CONSOLE("");
-
-        i++;
-    }
-
+    memtrace_blocks_print(app, max);
     CONSOLE("HEAP SUMMARY:");
     CONSOLE("    in use at exit: %zu bytes in %zu blocks", size, count);
     CONSOLE("    total heap usage: %zu allocs, %zu frees, %zu bytes allocated", app->alloc_count, app->free_count, app->alloc_size);
@@ -704,7 +792,7 @@ static void help() {
     CONSOLE("   -u, --unwind=MODE           Set UNWIND mode [raw, dwarf]");
     CONSOLE("   -s, --size=VALUE            Set callstack size (default: 10)");
     CONSOLE("   --selftest                  Run self test");
-    CONSOLE("   --addr2line=ADDR            Convert address to line");
+    //CONSOLE("   --addr2line=ADDR            Convert address to line");
     CONSOLE("   --addr2func=ADDR            Convert address to function");
     CONSOLE("   --func2addr=ADDR            Convert function to address");
     CONSOLE("   --debugframe                Dump debug frame");
@@ -732,7 +820,7 @@ static int elfdump(const char *name, fs_t *fs) {
     elf_close(elf);
     return 0;
 }
-
+/*
 static int elfaddr2line(const char *name, uint64_t addr, fs_t *fs) {
     elf_t *elf = NULL;
     debug_line_info_t *info = NULL;
@@ -751,45 +839,39 @@ static int elfaddr2line(const char *name, uint64_t addr, fs_t *fs) {
 
     return info ? 0 : 1;
 }
-
+*/
 static int elfaddr2func(const char *name, uint64_t addr, fs_t *fs) {
     elf_t *elf = NULL;
-    debug_info_t *info = NULL;
     if (!(elf = elf_open(name, fs))) {
         CONSOLE("failed to open %s", name);
         return 1;
     }
-    if ((info = debug_info_function(elf, addr))) {
-        CONSOLE("0x%"PRIx64" = %s()+0x%"PRIx64, info->address, info->function, info->offset);
-        debug_info_free(info);
-    }
-    else {
-        CONSOLE("function not found: fallback to symbol table");
-        elf_file_t *symtab = elf_section_open_from_name(elf, ".dynsym");
-        elf_file_t *strtab = elf_section_open_from_name(elf, ".dynstr");
-        if (symtab && strtab) {
-            elf_sym_t sym = elf_sym(symtab, strtab, addr);
-            if (sym.name) {
-                CONSOLE("%s()+0x%"PRIx64, sym.name, sym.offset);
-            }
-            else {
-                CONSOLE("symbol not found");
-            }
+
+    elf_file_t *symtab = elf_section_open_from_name(elf, ".dynsym");
+    elf_file_t *strtab = elf_section_open_from_name(elf, ".dynstr");
+    elf_sym_t sym = {0};
+    if (symtab && strtab) {
+        sym = elf_sym(symtab, strtab, addr);
+        if (sym.name) {
+            CONSOLE("%s()+0x%"PRIx64, sym.name, sym.offset);
         }
         else {
-            CONSOLE("symbol table not found");
+            CONSOLE("symbol not found");
         }
+    }
+    else {
+        CONSOLE("symbol table not found");
+    }
 
-        if (symtab) {
-            elf_file_close(symtab);
-        }
-        if (strtab) {
-            elf_file_close(strtab);
-        }
+    if (symtab) {
+        elf_file_close(symtab);
+    }
+    if (strtab) {
+        elf_file_close(strtab);
     }
     elf_close(elf);
 
-    return info ? 0 : 1;
+    return sym.name ? 0 : 1;
 }
 
 static int elfdebugframe(const char *name, uint64_t addr, fs_t *fs) {
@@ -860,7 +942,7 @@ int main(int argc, char* argv[]) {
         {"selftest",    no_argument,        0, 't'},
         {"verbose",     no_argument,        0, 'v'},
         {"zone",        required_argument,  0, 'z'},
-        {"addr2line",   required_argument,  0, 'L'},
+        //{"addr2line",   required_argument,  0, 'L'},
         {"addr2func",   required_argument,  0, 'F'},
         {"func2addr",   required_argument,  0, 'f'},
         {"debugframe",  required_argument,  0, 'D'},
@@ -873,7 +955,7 @@ int main(int argc, char* argv[]) {
     int opt = -1;
     const cpu_mode_t *cpu_mode = NULL;
     const char *cpu_mode_str = NULL;
-    const char *addr2line = NULL;
+    //const char *addr2line = NULL;
     const char *addr2func = NULL;
     const char *addr2frame = NULL;
     const char *func2addr = NULL;
@@ -885,6 +967,7 @@ int main(int argc, char* argv[]) {
         .stdin_handler = {memtrace_stdin_handler},
         .monitor_handler = {memtrace_monitor_handler},
         .unwind = raw_unwind,
+        .addr2line = addr2line_default_command(),
     };
     fs_cfg_t fs_cfg = {
         .type = fs_type_local,
@@ -931,9 +1014,9 @@ int main(int argc, char* argv[]) {
                 break;
             case 't':
                 return selftest_main(argc, argv);
-            case 'L':
-                addr2line = optarg;
-                break;
+            //case 'L':
+            //    addr2line = optarg;
+            //    break;
             case 'F':
                 addr2func = optarg;
                 break;
@@ -979,6 +1062,7 @@ int main(int argc, char* argv[]) {
         }
         return elfdump(argv[0], &app.fs);
     }
+    /*
     if (addr2line) {
         if (argc != 1) {
             help();
@@ -986,6 +1070,7 @@ int main(int argc, char* argv[]) {
         }
         return elfaddr2line(argv[0], atoll(addr2line), &app.fs);
     }
+    */
     if (addr2func) {
         if (argc != 1) {
             help();
@@ -1088,7 +1173,7 @@ int main(int argc, char* argv[]) {
     }
 
     //backtrace_context_initialize(&app.bt, app.pid);
-
+    addr2line_initialize(app.addr2line);
     console_initiliaze(&app.console, memtrace_console_commands);
     ftrace_set_fd_handler(&app.ftrace, &app.stdin_handler, 0, EPOLLIN);
 
@@ -1121,9 +1206,13 @@ int main(int argc, char* argv[]) {
             }
         }
     }
+
+    addr2line_cleanup();
     if (app.libraries) {
         libraries_destroy(app.libraries);
     }
+    free(app.addr2line);
+    fs_cleanup(&app.fs);
     if (s >= 0) {
         close(s);
     }

@@ -40,13 +40,11 @@
 #include "fs.h"
 #include "net.h"
 #include "log.h"
+#include "addr2line.h"
 
 #define FS_DEFAULT_MCASTADDR "224.0.0.251"
 #define FS_DEFAULT_BINDADDR "::0"
 #define FS_DEFAULT_PORT "3002"
-#define GET_REQUEST "GET/REQUEST/"
-#define POST_SYSROOT "POST/SYSROOT/"
-#define GET_REPLY "GET/REPLY/"
 
 typedef struct {
     char msgtype[32]; /** message type: ["announce", "query" ] */
@@ -236,7 +234,7 @@ static char *fs_path(const char *sysroot, strlist_t *files, strlist_t *directori
 }
 
 /** Serve File System GET request */
-static bool fs_server_handle_get_request(fs_server_t *server, char *request) {
+static bool fs_serve_get_request(fs_t *server, char *request) {
     uint64_t size = 0;
     uint64_t offset_u64 = 0;
     uint64_t xbytes = 0;
@@ -261,7 +259,7 @@ static bool fs_server_handle_get_request(fs_server_t *server, char *request) {
 
     TRACE_LOG(GET_REQUEST "size=%"PRIu64"/offset=%"PRIu64":%s", size, offset_u64, filename);
 
-    if (!(path = fs_path(server->cfg.sysroot, &server->cfg.files, &server->cfg.directories, &server->cfg.acls, filename))) {
+    if (!(path = fs_path(server->sysroot, &server->cfg.files, &server->cfg.directories, &server->cfg.acls, filename))) {
         TRACE_ERROR("%s: not found", filename);
         goto error;
     }
@@ -305,18 +303,88 @@ error:
 }
 
 /**  memtrace server set the sysroot PATH according what tells the client */
-static bool fs_server_handle_post_sysroot(fs_server_t *server, char *request) {
+static bool fs_serve_post_sysroot(fs_t *server, char *request) {
     char *path = request + strlen(POST_SYSROOT);
 
-    free(server->cfg.sysroot);
-    server->cfg.sysroot = strdup(path);
+    free(server->sysroot);
+    server->sysroot = strdup(path);
     TRACE_LOG("Sysroot directory: %s", path);
 
     return true;
 }
 
+static bool fs_serve_report_request(fs_t *server, char *request) {
+    const char cmd[] = REPORT_REQUEST " addr2line=";
+    const char *binary = NULL;
+    char *sep = NULL;
+
+
+    if (!strstr(request, cmd)) {
+        TRACE_ERROR("Failed to parse command");
+        return false;
+    }
+    if ((sep = strchr(request, '\n'))) {
+        *sep = 0;
+    }
+    binary = request + strlen(cmd);
+
+    TRACE_LOG(REPORT_REQUEST " addr2line=%s", binary);
+
+    addr2line_initialize(binary);
+
+    // Read the whole report in RAM
+    char *buff = NULL;
+    size_t bufflen = 0;
+    FILE *mem = open_memstream(&buff, &bufflen);
+    if (!mem) {
+        TRACE_ERROR("Failed to open memstream");
+        return false;
+    }
+    size_t len = 4096;
+    char *line = malloc(len);
+    while(fgets(line, len, server->socket)) {
+        if (!strcmp(line, REPORT_REQUEST_END"\n")) {
+            break;
+        }
+        fprintf(mem, "%s", line);
+    }
+    rewind(mem);
+
+    // Send the translated report as a reply
+    fprintf(server->socket, REPORT_REPLY"\n");
+    while(fgets(line, len, mem)) {
+        uint64_t ra = 0;
+        const char *so = NULL;
+        char *path = NULL;
+        if (sscanf(line, "ra=0x%"PRIx64":", &ra) == 1) {
+            if ((sep = strchr(line, '\n'))) {
+                *sep = 0;
+            }
+            so = strchr(line, ':') + 1;
+
+            if (!(path = fs_path(server->sysroot, &server->cfg.files, &server->cfg.directories, &server->cfg.acls, so))) {
+                TRACE_ERROR("%s: not found", so);
+                fprintf(server->socket, "0x%"PRIx64" in %s\n", ra, so);
+                continue;
+            }
+            addr2line_print(path, ra, server->socket);
+        }
+        else {
+            fprintf(server->socket, "%s", line);
+        }
+        free(path);
+    }
+    fprintf(server->socket, REPORT_REPLY_END"\n");
+
+    fclose(mem);
+    free(line);
+
+    addr2line_cleanup();
+    return true;
+}
+
 /** Serve File System request */
-static bool fs_server_handle_request(fs_server_t *fs) {
+static bool fs_serve_request(fs_t *fs) {
     char request[512];
     char *sep = NULL;
     bool rt = false;
@@ -330,10 +398,13 @@ static bool fs_server_handle_request(fs_server_t *fs) {
     }
 
     if (!strncmp(request, GET_REQUEST, strlen(GET_REQUEST))) {
-        rt = fs_server_handle_get_request(fs, request);
+        rt = fs_serve_get_request(fs, request);
     }
     else if (!strncmp(request, POST_SYSROOT, strlen(POST_SYSROOT))) {
-        rt = fs_server_handle_post_sysroot(fs, request);
+        rt = fs_serve_post_sysroot(fs, request);
+    }
+    else if (!strncmp(request, REPORT_REQUEST, strlen(REPORT_REQUEST))) {
+        rt = fs_serve_report_request(fs, request);
     }
     else {
         TRACE_ERROR("Unknown request %s", request);
@@ -491,6 +562,11 @@ bool fs_initialize(fs_t *fs, const fs_cfg_t *cfg) {
     }
 
     fs->cfg = *cfg;
+    fs->mcastsrv = -1;
+    fs->mcastcli = -1;
+    fs->server = -1;
+    fs->socket = NULL;
+    fs->sysroot = NULL;
 
     /** Create multicast client and server socket to announce the service */
     if ((fs->mcastsrv = mcast_listen(fs_cfg_mcastaddr(cfg), FS_DEFAULT_PORT)) < 0) {
@@ -505,19 +581,15 @@ bool fs_initialize(fs_t *fs, const fs_cfg_t *cfg) {
             break;
         }
         case fs_type_tcp_server: {
-            int server = -1;
-
             CONSOLE("Listening on [%s]:%s", fs_cfg_bindaddr(cfg), fs_cfg_port(cfg));
-            if ((server = tcp_listen(fs_cfg_bindaddr(cfg), fs_cfg_port(cfg))) < 0) {
+            if ((fs->server = tcp_listen(fs_cfg_bindaddr(cfg), fs_cfg_port(cfg))) < 0) {
                 TRACE_ERROR("Failed to listen on %s:%s", fs_cfg_bindaddr(cfg), fs_cfg_port(cfg));
                 goto error;
             }
 
-            if (!(fs->socket = fs_tcp_accept(server, fs->mcastsrv, fs->mcastsrv, cfg))) {
-                close(server);
+            if (!(fs->socket = fs_tcp_accept(fs->server, fs->mcastsrv, fs->mcastsrv, cfg))) {
                 goto error;
             }
-            close(server);
             break;
         }
         case fs_type_tcp_client: {
@@ -532,8 +604,10 @@ bool fs_initialize(fs_t *fs, const fs_cfg_t *cfg) {
     }
 
 #ifdef SYSROOT
-    fprintf(fs->socket, POST_SYSROOT SYSROOT "\n");
-    fflush(fs->socket);
+    if (fs->socket) {
+        fprintf(fs->socket, POST_SYSROOT SYSROOT "\n");
+        fflush(fs->socket);
+    }
 #endif
 
     rt = true;
@@ -542,53 +616,24 @@ error:
     return rt;
 }
 
-/** Initialize file system server */
-// TODO: this can probably be merged with fs_initialize()
-// TODO: cleanup code
-bool fs_server_initialize(fs_server_t *fs, const fs_cfg_t *cfg) {
-    bool rt = false;
-
-    if (!fs || !cfg) {
-        TRACE_ERROR("Invalid arguments: %m");
-        return false;
+void fs_cleanup(fs_t *fs) {
+    if (fs->mcastsrv != -1) {
+        close(fs->mcastsrv);
     }
-
-    fs->cfg = *cfg;
-
-    /** Create multicast client and server socket to announce the service */
-    if ((fs->mcastsrv = mcast_listen(fs_cfg_mcastaddr(cfg), FS_DEFAULT_PORT)) < 0) {
-        TRACE_WARNING("Failed to create UDP multicast listening socket");
+    if (fs->mcastcli != -1) {
+        close(fs->mcastcli);
     }
-    if ((fs->mcastcli = udp_connect(fs_cfg_mcastaddr(cfg), FS_DEFAULT_PORT)) < 0) {
-        TRACE_WARNING("Failed to create UDP multicast client socket");
+    if (fs->server != -1) {
+        close(fs->server);
     }
-
-    switch (cfg->type) {
-        case fs_type_tcp_server:
-            CONSOLE("Listening on [%s]:%s", fs_cfg_bindaddr(cfg), fs_cfg_port(cfg));
-            if ((fs->server = tcp_listen(fs_cfg_bindaddr(cfg), fs_cfg_port(cfg))) < 0) {
-                TRACE_ERROR("Failed to listen on %s:%s", fs_cfg_bindaddr(cfg), fs_cfg_port(cfg));
-                goto error;
-            }
-            break;
-        case fs_type_tcp_client:
-            if (!(fs->socket = fs_tcp_connect(fs->mcastsrv, fs->mcastcli, cfg))) {
-                goto error;
-            }
-            break;
-        default:
-            goto error;
-
+    if (fs->socket) {
+        fclose(fs->socket);
     }
-
-    rt = true;
-
-error:
-    return rt;
+    free(fs->sysroot);
 }
 
 /** Serve the File System to connected client */
-bool fs_server_serve(fs_server_t *fs) {
+bool fs_serve(fs_t *fs) {
     bool rt = true;
 
     while (true) {
@@ -604,7 +649,7 @@ bool fs_server_serve(fs_server_t *fs) {
             break;
         }
 
-        if (!fs_server_handle_request(fs)) {
+        if (!fs_serve_request(fs)) {
             if (fs->cfg.type == fs_type_tcp_server) {
                 fclose(fs->socket);
                 fs->socket = NULL;

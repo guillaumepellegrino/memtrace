@@ -1,0 +1,143 @@
+/*
+ * Copyright (C) 2021 Guillaume Pellegrino
+ * This file is part of memtrace <https://github.com/guillaumepellegrino/memtrace>.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+#include "addr2line.h"
+#include "log.h"
+#include "list.h"
+#include "process.h"
+#include <stdlib.h>
+#include <string.h>
+
+typedef struct {
+    list_iterator_t it;
+    char *so;
+    process_t process;
+} addr2line_t;
+
+static const char *addr2line_binary = NULL;
+static list_t addr2line_list;
+
+static addr2line_t *addr2line_find_by_so(const char *so) {
+    list_iterator_t *it = NULL;
+
+    list_for_each(it, &addr2line_list) {
+        addr2line_t *addr2line = container_of(it, addr2line_t, it);
+        if (!strcmp(addr2line->so, so)) {
+            return addr2line;
+        }
+    }
+
+    return NULL;
+}
+
+static addr2line_t *addr2line_create(const char *so) {
+    const char *cmd[] = {addr2line_binary, "-e", so, "-f", NULL};
+
+    addr2line_t *addr2line = calloc(1, sizeof(addr2line_t));
+    addr2line->so = strdup(so);
+    if (!process_start(&addr2line->process, cmd)) {
+        TRACE_ERROR("Failed to start %s", addr2line_binary);
+    }
+
+    list_insert(&addr2line_list, &addr2line->it);
+
+    return addr2line;
+}
+
+static void addr2line_destroy(addr2line_t *addr2line) {
+    list_iterator_take(&addr2line->it);
+    free(addr2line->so);
+    process_stop(&addr2line->process);
+    free(addr2line);
+}
+
+static const char *addr2line_process_readline(addr2line_t *addr2line) {
+    static char line[4096];
+
+    if (addr2line->process.output) {
+        if (!fgets(line, sizeof(line), addr2line->process.output)) {
+            TRACE_ERROR("Failed to read line from %s: %m", addr2line->so);
+        }
+
+        char *eol = strchr(line, '\n');
+        if (eol) {
+            *eol = 0;
+        }
+    }
+
+    return line;
+}
+
+static void addr2line_resolve(addr2line_t *addr2line, uint64_t address, FILE *out) {
+    bool error = false;
+    const char *line = NULL;
+
+    if (addr2line->process.pid <= 0) {
+        fprintf(out, "%s:0x%"PRIx64" (shared libary not found)\n", addr2line->so, address);
+    }
+
+    fprintf(addr2line->process.input, "0x%"PRIx64"\n", address);
+    fflush(addr2line->process.input);
+
+    line = addr2line_process_readline(addr2line);
+    if (!strcmp(line, "??")) {
+        //fprintf(out, "0x%"PRIx64" in %s\n", address, addr2line->so);
+        error = true;
+    }
+    else {
+        fprintf(out, "%s()", line);
+    }
+
+    line = addr2line_process_readline(addr2line);
+    if (!error) {
+        if (!strcmp(line, ":?")) {
+            fprintf(out, " in %s\n", addr2line->so);
+        }
+        else {
+            fprintf(out, " in %s\n", line);
+        }
+    }
+}
+
+
+void addr2line_initialize(const char *binary) {
+    addr2line_binary = binary;
+}
+
+void addr2line_cleanup() {
+    list_iterator_t *it = NULL;
+
+    while ((it = list_first(&addr2line_list))) {
+        addr2line_t *addr2line = container_of(it, addr2line_t, it);
+        addr2line_destroy(addr2line);
+    }
+}
+
+void addr2line_print(const char *so, uint64_t address, FILE *out) {
+    addr2line_t *addr2line = NULL;
+
+    if (!so || !addr2line_binary) {
+        return;
+    }
+
+    if (!(addr2line = addr2line_find_by_so(so))) {
+        addr2line = addr2line_create(so);
+    }
+
+    addr2line_resolve(addr2line, address, out);
+}

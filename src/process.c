@@ -32,15 +32,23 @@
 
 bool process_start(process_t *process, const char *argv[]) {
     int pid = -1;
+    int pipe_in[2];
     int pipe_out[2];
 
     process->pid = 0;
+    process->input = NULL;
     process->output = NULL;
 
+    assert(pipe(pipe_in) == 0);
     assert(pipe(pipe_out) == 0);
 
     pid = fork();
     if (pid == 0) {
+        // redirect stdin to pipe_in
+        assert(close(0) == 0);
+        assert(dup2(pipe_in[PIPE_RDEND], 0) == 0);
+        assert(close(pipe_in[PIPE_WREND]) == 0);
+
         // redirect stdout and stderr to pipe_out
         assert(close(1) == 0);
         assert(close(2) == 0);
@@ -61,9 +69,11 @@ bool process_start(process_t *process, const char *argv[]) {
     }
 
 
+    assert(close(pipe_in[PIPE_RDEND]) == 0);
     assert(close(pipe_out[PIPE_WREND]) == 0);
 
     process->pid = pid;
+    assert((process->input = fdopen(pipe_in[PIPE_WREND], "w")));
     assert((process->output = fdopen(pipe_out[PIPE_RDEND], "r")));
 
     return true;

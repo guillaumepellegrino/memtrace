@@ -73,7 +73,7 @@ int main(int argc, char *argv[]) {
         .me = "memtrace-fs",
         .tgt = "memtrace",
     };
-    fs_server_t fs_server = {0};
+    fs_t fs = {0};
 
     strlist_insert(&fs_cfg.directories, "");
     strlist_insert(&fs_cfg.directories, ".");
@@ -134,15 +134,16 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    if (!fs_server_initialize(&fs_server, &fs_cfg)) {
+    if (!fs_initialize(&fs, &fs_cfg)) {
         CONSOLE("Failed to initialize File System Server");
         return 1;
     }
 
-    if (!fs_server_serve(&fs_server)) {
+    if (!fs_serve(&fs)) {
         return 1;
     }
 
+    fs_cleanup(&fs);
     strlist_cleanup(&fs_cfg.directories);
     strlist_cleanup(&fs_cfg.files);
     strlist_cleanup(&fs_cfg.acls);

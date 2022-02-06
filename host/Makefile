@@ -5,7 +5,10 @@ LDFLAGS_HOST+=
 
 all: memtrace-fs
 
-memtrace-fs: memtrace-fs.o net.o strlist.o fs.o elf.o elf_file.o log.o
+install:
+	install -m 0755 memtrace-fs /usr/bin/
+
+memtrace-fs: memtrace-fs.o net.o strlist.o fs.o elf.o elf_file.o process.o addr2line.o log.o
 	$(CC_HOST) -o $(@) $(^) $(LDFLAGS_HOST)
 
 -include $(OBJECTS:.o=.d)
@@ -16,5 +19,5 @@ memtrace-fs: memtrace-fs.o net.o strlist.o fs.o elf.o elf_file.o log.o
 clean:
 	rm -f memtrace-fs *.o *.d
 
-.PHONY: all clean
+.PHONY: all install clean
 
