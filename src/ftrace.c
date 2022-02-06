@@ -40,66 +40,6 @@
 #include "breakpoint.h"
 #include "ptrace.h"
 #include "log.h"
-/*
-struct library {
-    const char *name;
-    size_t begin;
-    size_t end;
-};
-
-static int getlibrary(struct library *library, int pid, const char *name) {
-    char line[2048];
-    char path[64];
-    snprintf(path, sizeof(path), "/proc/%d/maps", pid);
-    FILE *fp = fopen(path, "r");
-    int rt = 1;
-
-    if (!fp) {
-        return rt;
-    }
-
-    while (fgets(line, sizeof(line), fp)) {
-        if (!strstr(line, name)) {
-            continue;
-        }
-
-        const char *begin = strtok(line, "-");
-        const char *end   = strtok(NULL, " ");
-        const char *rwxp  = strtok(NULL, " ");
-
-        if (!rwxp) {
-            continue;
-        }
-        if (rwxp[0] != 'r') {
-            continue;
-        }
-        if (rwxp[2] != 'x') {
-            continue;
-        }
-
-        library->name = name;
-        sscanf(begin, "%zx", &library->begin);
-        sscanf(end, "%zx", &library->end);
-        rt = 0;
-        break;
-    }
-
-    fclose(fp);
-
-
-    return rt;
-}
-
-size_t relative_addr(struct library *library, void *function) {
-    size_t addr = (size_t) function;
-    return addr - library->begin;
-}
-
-size_t absolute_addr(struct library *library, size_t relative) {
-    size_t addr = relative;
-    return addr + library->begin;
-}
-*/
 
 bool ftrace_wait(ftrace_t *ftrace, int *status) {
     struct epoll_event event = {0};

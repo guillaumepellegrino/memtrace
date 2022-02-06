@@ -76,7 +76,7 @@ bool ptrace_terminated(int status) {
                     TRACE_WARNING("process was killed by SIGKILL");
                     return true;
                 default:
-                    TRACE_WARNING("process stopped by signal:%d (ignore)", signal);
+                    TRACE_LOG("process stopped by signal:%d (ignore)", signal);
                     return false;
             }
         }
