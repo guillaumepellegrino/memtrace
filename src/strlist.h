@@ -42,8 +42,11 @@ typedef struct {
 void strlist_initialize(strlist_t *strlist);
 void strlist_cleanup(strlist_t *strlist);
 void strlist_insert(strlist_t *strlist, const char *str);
+void strlist_append(strlist_t *strlist, const char *str);
 strlist_iterator_t *strlist_first(strlist_t *strlist);
+strlist_iterator_t *strlist_last(strlist_t *strlist);
 strlist_iterator_t *strlist_iterator_next(strlist_iterator_t *strit);
+strlist_iterator_t *strlist_iterator_prev(strlist_iterator_t *strit);
 const char *strlist_iterator_value(strlist_iterator_t *strit);
 
 #endif

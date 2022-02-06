@@ -48,6 +48,17 @@ void strlist_insert(strlist_t *strlist, const char *str) {
     assert((strit->value = strdup(str)));
 }
 
+#include "log.h"
+void strlist_append(strlist_t *strlist, const char *str) {
+    strlist_iterator_t *strit = NULL;
+
+    assert(strlist);
+    assert(str);
+    assert((strit = calloc(1, sizeof(strlist_iterator_t))));
+    list_append(&strlist->list, &strit->it);
+    assert((strit->value = strdup(str)));
+}
+
 strlist_iterator_t *strlist_first(strlist_t *strlist) {
     assert(strlist);
 
@@ -55,10 +66,24 @@ strlist_iterator_t *strlist_first(strlist_t *strlist) {
     return it ? container_of(it, strlist_iterator_t, it) : NULL;
 }
 
+strlist_iterator_t *strlist_last(strlist_t *strlist) {
+    assert(strlist);
+
+    list_iterator_t *it = list_last(&strlist->list);
+    return it ? container_of(it, strlist_iterator_t, it) : NULL;
+}
+
 strlist_iterator_t *strlist_iterator_next(strlist_iterator_t *strit) {
     assert(strit);
 
     list_iterator_t *it = list_iterator_next(&strit->it);
+    return it ? container_of(it, strlist_iterator_t, it) : NULL;
+}
+
+strlist_iterator_t *strlist_iterator_prev(strlist_iterator_t *strit) {
+    assert(strit);
+
+    list_iterator_t *it = list_iterator_prev(&strit->it);
     return it ? container_of(it, strlist_iterator_t, it) : NULL;
 }
 

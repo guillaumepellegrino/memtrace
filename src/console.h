@@ -21,6 +21,7 @@
 
 #include <termios.h>
 #include "types.h"
+#include "strlist.h"
 
 struct _console_cmd {
     const char *name;
@@ -35,6 +36,8 @@ struct _console {
     size_t bufflen;
     char buff[512];
     struct termios backup;
+    strlist_t history;
+    strlist_iterator_t *history_iterator;
 };
 
 bool console_initiliaze(console_t *console, const console_cmd_t *cmd_list);

@@ -49,4 +49,4 @@ stagingdir
 - Add MIPS support
 - Improve this README
 - Cleanup old references to libunwind and others
-- Improve console support (history, ..)
+- Improve console support (move cursor)

@@ -29,6 +29,7 @@ typedef struct _list list_t;
 /** a linked list */
 struct _list {
     list_iterator_t *first;
+    list_iterator_t *last;
 };
 
 /** linked list iterator */
@@ -41,6 +42,7 @@ struct _list_iterator {
 /** intialize list */
 static inline void list_initialize(list_t *list) {
     list->first = NULL;
+    list->last = NULL;
 }
 
 /** insert a new iterator at the head of the list */
@@ -52,6 +54,23 @@ static inline void list_insert(list_t *list, list_iterator_t *it) {
         list->first->prev = it;
     }
     list->first = it;
+    if (!list->last) {
+        list->last = it;
+    }
+}
+
+/** append a new iterator at the tail of the list */
+static inline void list_append(list_t *list, list_iterator_t *it) {
+    it->list = list;
+    it->next = NULL;
+    it->prev = list->last;
+    if (list->last) {
+        list->last->next = it;
+    }
+    list->last = it;
+    if (!list->first) {
+        list->first = it;
+    }
 }
 
 /** return the first iterator from the list */
@@ -59,16 +78,19 @@ static inline list_iterator_t *list_first(list_t *list) {
     return list->first;
 }
 
-/** initialize list iterator */
-static inline void list_iterator_initialize(list_iterator_t *it) {
-    it->list = NULL;
-    it->next = NULL;
-    it->prev = NULL;
+/** return the last iterator from the list */
+static inline list_iterator_t *list_last(list_t *list) {
+    return list->last;
 }
 
 /** return next it from the list */
 static inline list_iterator_t *list_iterator_next(list_iterator_t *it) {
     return it->next;
+}
+
+/** return prev it from the list */
+static inline list_iterator_t *list_iterator_prev(list_iterator_t *it) {
+    return it->prev;
 }
 
 /** take iterator from list */
@@ -79,6 +101,9 @@ static inline void list_iterator_take(list_iterator_t *it) {
     if (list) {
         if (list->first == it) {
             list->first = it->next;
+        }
+        if (list->last == it) {
+            list->last = it->prev;
         }
         if (prev) {
             prev->next = next;
@@ -92,6 +117,14 @@ static inline void list_iterator_take(list_iterator_t *it) {
     }
 }
 
+/** initialize list iterator */
+static inline void list_iterator_initialize(list_iterator_t *it) {
+    it->list = NULL;
+    it->next = NULL;
+    it->prev = NULL;
+}
+
+/** cleanup list iterator */
 static inline void list_cleanup(list_t *list) {
     list_iterator_t *it;
     while ((it = list_first(list))) {
