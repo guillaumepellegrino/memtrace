@@ -50,8 +50,7 @@ struct _fs_cfg {
 
 struct _fs {
     fs_cfg_t cfg;
-    int mcastsrv;
-    int mcastcli;
+    int mcast;
     int server;
     FILE *socket;
     char *sysroot;

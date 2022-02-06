@@ -37,13 +37,13 @@ int tcp_listen(const char *address, const char *port);
 int tcp_accept(int server);
 
 /**
- * Create an UDP socket and 'connect' to the desgined addr:port using getaddrinfo()
- */
-int udp_connect(const char *address, const char *port);
-
-/**
  * Create an UDP Multicast listening socket using getaddrinfo()
  */
 int mcast_listen(const char *address, const char *port);
+
+/**
+ * Send packet on UDP Multicast socket
+ */
+int mcast_send(int fd, const void *buf, size_t count, const char *address, const char *port);
 
 #endif

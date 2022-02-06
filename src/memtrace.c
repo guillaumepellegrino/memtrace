@@ -97,22 +97,41 @@ void memtrace_status(app_t *app);
 void memtrace_report(app_t *app, size_t max);
 void memtrace_clear(app_t *app);
 
+/** Deduct the default addr2line command from compiler command */
 static char *addr2line_default_command() {
     char *cmd = NULL;
     char *toolchain = NULL;
     char *sep = NULL;
 
     assert((toolchain = strdup(COMPILER)));
-    if ((sep = strrchr(toolchain, '-'))) {
-        *sep = 0;
-        assert(asprintf(&cmd, "%s-addr2line", toolchain) >= 0);
+
+    if ((sep = strrchr(toolchain, '/'))) {
+        if ((sep = strrchr(sep, '-'))) {
+            *sep = 0;
+            assert(asprintf(&cmd, "%s-addr2line", toolchain) >= 0);
+        }
     }
-    else {
+
+    if (!cmd) {
         cmd = strdup("addr2line");
     }
 
     free(toolchain);
     return cmd;
+}
+
+/** Deduct from compiler command if this program was cross-compiled */
+static bool is_cross_compiled() {
+    bool rt = false;
+    char *sep = NULL;
+
+    if ((sep = strrchr(COMPILER, '/'))) {
+        if (strchr(sep, '-')) {
+            rt = true;
+        }
+    }
+
+    return rt;
 }
 
 static bool raw_unwind(libraries_t *libraries, const ftrace_fcall_t *fcall, size_t *callstack, size_t size) {
@@ -679,7 +698,7 @@ breakpoint_t *app_set_breakpoint(app_t *app, const char *func, ftrace_handler_t 
 
     uint64_t address = library_absolute_address(library, sym.offset);
 
-    TRACE_WARNING("Set breakpoint on %s in %s:0x%"PRIx64" (0x%"PRIx64")", func, library->name, sym.offset, address);
+    CONSOLE("Set breakpoint on %s in %s:0x%"PRIx64" (0x%"PRIx64")", func, library->name, sym.offset, address);
     return ftrace_set_breakpoint(&app->ftrace, func, address, handler, app);
 }
 
@@ -970,7 +989,7 @@ int main(int argc, char* argv[]) {
         .addr2line = addr2line_default_command(),
     };
     fs_cfg_t fs_cfg = {
-        .type = fs_type_local,
+        .type = is_cross_compiled() ? fs_type_tcp_client : fs_type_local,
         .me = "memtrace",
         .tgt = "memtrace-fs",
     };
