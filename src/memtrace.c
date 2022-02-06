@@ -800,18 +800,18 @@ static void help() {
         strcat(cpu_mode_list, cpu_mode->str);
     }
 
-    CONSOLE("Usage: memtrace [OPTION]... PID");
+    CONSOLE("Usage: memtrace [OPTION]... -p PID");
     CONSOLE("       memtrace [OPTION]... PROGRAM [ARG]...");
-    CONSOLE("Trace memory allocations and report memory leak");
+    CONSOLE("Trace memory allocations and report memory leak.");
     CONSOLE("");
     CONSOLE("Options:");
+    CONSOLE("   -p, --pid                   Attach to specified PID");
     CONSOLE("   -a, --autoconnect           Auto connect to file server using multicast discovery");
     CONSOLE("   -c, --connect=HOST[:PORT]   Connect to file server specified by HOST and PORT");
     CONSOLE("   -l, --listen=HOST[:PORT]    Listen for file server on the specified HOST and PORT");
     CONSOLE("   -u, --unwind=MODE           Set UNWIND mode [raw, dwarf]");
     CONSOLE("   -s, --size=VALUE            Set callstack size (default: 10)");
     CONSOLE("   --selftest                  Run self test");
-    //CONSOLE("   --addr2line=ADDR            Convert address to line");
     CONSOLE("   --addr2func=ADDR            Convert address to function");
     CONSOLE("   --func2addr=ADDR            Convert function to address");
     CONSOLE("   --debugframe                Dump debug frame");
