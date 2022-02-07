@@ -51,17 +51,19 @@ typedef struct _app app_t;
 
 typedef struct {
     hashmap_iterator_t it;
-    size_t ptr_size;
-    void *ptr;
+    ssize_t count;
+    ssize_t size;
     size_t *callstack;
-} allocation_t;
+    size_t *big_callstack;
+    bool do_big_callstack;
+} block_t;
 
 typedef struct {
     hashmap_iterator_t it;
-    size_t count;
-    size_t size;
-    size_t *callstack;
-} block_t;
+    size_t ptr_size;
+    void *ptr;
+    block_t *block;
+} allocation_t;
 
 struct _app {
     fs_t fs;
@@ -73,10 +75,7 @@ struct _app {
     hashmap_t allocations;
     hashmap_t blocks;
     size_t callstack_size;
-    size_t alloc_count;
-    size_t alloc_size;
-    size_t free_count;
-    size_t free_size;
+    size_t big_callstack_size;
     breakpoint_t *calloc_bp;
     breakpoint_t *malloc_bp;
     breakpoint_t *realloc_bp;
@@ -85,12 +84,23 @@ struct _app {
     console_t console;
     bool monitor;
     int monitor_timerfd;
+    int worker_timerfd;
     epoll_handler_t stdin_handler;
     epoll_handler_t monitor_handler;
+    epoll_handler_t worker_handler;
     bool (*unwind)(libraries_t *libraries, const ftrace_fcall_t *fcall, size_t *callstack, size_t size);
     void (*print_callstack)(app_t *app, size_t *callstack);
     char *addr2line;
 };
+
+static struct {
+    size_t alloc_count;
+    size_t alloc_size;
+    size_t free_count;
+    size_t free_size;
+    size_t byte_inuse;
+    size_t block_inuse;
+} stats;
 static bool exit_evlp = false;
 
 void memtrace_status(app_t *app);
@@ -134,6 +144,65 @@ static bool is_cross_compiled() {
     return rt;
 }
 
+static void allocations_maps_destroy(void *key, hashmap_iterator_t *it) {
+    allocation_t *allocation = container_of(it, allocation_t, it);
+    block_t *block = allocation->block;
+    block->count -= 1;
+    block->size -= allocation->ptr_size;
+
+    stats.free_count += 1;
+    stats.free_size += allocation->ptr_size;
+    stats.byte_inuse -= allocation->ptr_size;
+
+    if (block->count <= 0) {
+        hashmap_iterator_destroy(&block->it);
+    }
+
+    free(allocation);
+}
+
+static uint32_t blocks_maps_hash(hashmap_t *hashmap, void *key) {
+    app_t *app = container_of(hashmap, app_t, blocks);
+    size_t *callstack = key;
+    uint32_t hash = 0;
+    size_t i = 0;
+
+    for (i = 0; i < app->callstack_size && callstack[i]; i++) {
+        hash ^= callstack[i];
+    }
+
+    return hash;
+}
+
+static bool blocks_maps_match(hashmap_t *hashmap, void *lkey, void *rkey) {
+    app_t *app = container_of(hashmap, app_t, blocks);
+    size_t *lcallstack = lkey;
+    size_t *rcallstack = rkey;
+    size_t i = 0;
+
+    for (i = 0; i < app->callstack_size && lcallstack[i]; i++) {
+        if (lcallstack[i] != rcallstack[i]) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static int blocks_map_compar(const hashmap_iterator_t **lval, const hashmap_iterator_t **rval) {
+    block_t *lblock = container_of(*lval, block_t, it);
+    block_t *rblock = container_of(*rval, block_t, it);
+
+    return rblock->count - lblock->count;
+}
+
+static void blocks_maps_destroy(void *key, hashmap_iterator_t *it) {
+    block_t *block = container_of(it, block_t, it);
+    stats.block_inuse -= 1;
+    free(block->callstack);
+    free(block);
+}
+
 static bool raw_unwind(libraries_t *libraries, const ftrace_fcall_t *fcall, size_t *callstack, size_t size) {
     const library_t *library = NULL;
     size_t i = 0, j = 0;
@@ -147,7 +216,7 @@ static bool raw_unwind(libraries_t *libraries, const ftrace_fcall_t *fcall, size
 
     callstack[j++] = fcall->pc;
 
-    for (i = 0; i < 2000 && j < size; i++) {
+    for (i = 0; i < 150*size && j < size; i++) {
         size_t pc = 0;
         if (!ftrace_read_word(fcall->ftrace, fcall->sp+i, &pc)) {
             break;
@@ -202,6 +271,24 @@ static void memtrace_monitor_handler(epoll_handler_t *self, int events) {
     memtrace_status(app);
 }
 
+static void memtrace_worker_handler(epoll_handler_t *self, int events) {
+    uint64_t value = 0;
+    app_t *app = container_of(self, app_t, worker_handler);
+    assert(read(app->worker_timerfd, &value, sizeof(value)) > 0);
+
+    hashmap_qsort(&app->blocks, blocks_map_compar);
+
+    size_t i = 0;
+    hashmap_iterator_t *it = NULL;
+    hashmap_for_each(it, &app->blocks) {
+        block_t *block = container_of(it, block_t, it);
+
+        if (i++ >= 20) {
+            break;
+        }
+        block->do_big_callstack = true;
+    }
+}
 
 static void memtrace_console_report(console_t *console, int argc, char *argv[]) {
     app_t *app = container_of(console, app_t, console);
@@ -212,52 +299,6 @@ static void memtrace_console_report(console_t *console, int argc, char *argv[]) 
 static void memtrace_console_clear(console_t *console, int argc, char *argv[]) {
     app_t *app = container_of(console, app_t, console);
     memtrace_clear(app);
-}
-
-static void allocations_maps_destroy(void *key, hashmap_iterator_t *it) {
-    allocation_t *allocation = container_of(it, allocation_t, it);
-    free(allocation->callstack);
-    free(allocation);
-}
-
-static uint32_t blocks_maps_hash(hashmap_t *hashmap, void *key) {
-    app_t *app = container_of(hashmap, app_t, blocks);
-    size_t *callstack = key;
-    uint32_t hash = 0;
-    size_t i = 0;
-
-    for (i = 0; i < app->callstack_size && callstack[i]; i++) {
-        hash ^= callstack[i];
-    }
-
-    return hash;
-}
-
-static bool blocks_maps_match(hashmap_t *hashmap, void *lkey, void *rkey) {
-    app_t *app = container_of(hashmap, app_t, blocks);
-    size_t *lcallstack = lkey;
-    size_t *rcallstack = rkey;
-    size_t i = 0;
-
-    for (i = 0; i < app->callstack_size && lcallstack[i]; i++) {
-        if (lcallstack[i] != rcallstack[i]) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-static int blocks_map_compar(const hashmap_iterator_t **lval, const hashmap_iterator_t **rval) {
-    block_t *lblock = container_of(*lval, block_t, it);
-    block_t *rblock = container_of(*rval, block_t, it);
-
-    return rblock->count - lblock->count;
-}
-
-static void blocks_maps_destroy(void *key, hashmap_iterator_t *it) {
-    block_t *block = container_of(it, block_t, it);
-    free(block);
 }
 
 // TODO: remove function ?
@@ -282,9 +323,9 @@ void dwarf_print_callstack(app_t *app, size_t *callstack) {
 }
 */
 
-static void raw_print_callstack(app_t *app, size_t *callstack) {
+static void raw_print_callstack(app_t *app, size_t *callstack, size_t size) {
     size_t i;
-    for (i = 0; i < app->callstack_size; i++) {
+    for (i = 0; i < size; i++) {
         size_t address = callstack[i];
         if (!address || !app->libraries) {
             break;
@@ -301,17 +342,50 @@ static void raw_print_callstack(app_t *app, size_t *callstack) {
     }
 }
 
-static void memtrace_alloc(const ftrace_fcall_t *fcall, const ftrace_fcall_t *rtfcall, app_t *app, void *ptr, size_t size, size_t *callstack) {
-    allocation_t *allocation = calloc(1, sizeof(allocation_t));
+block_t *alloc_unwind(app_t *app, const ftrace_fcall_t *fcall) {
+    hashmap_iterator_t *it = NULL;
+    size_t *callstack = NULL;
+    block_t *block = NULL;
+
+    assert((callstack = calloc(app->callstack_size, sizeof(size_t))));
+    app->unwind(app->libraries, fcall, callstack, app->callstack_size);
+
+    if ((it = hashmap_get(&app->blocks, callstack))) {
+        block = container_of(it, block_t, it);
+        if (block->do_big_callstack && !block->big_callstack) {
+            assert((block->big_callstack = calloc(app->big_callstack_size, sizeof(size_t))));
+            app->unwind(app->libraries, fcall, block->big_callstack, app->big_callstack_size);
+        }
+        free(callstack);
+    }
+    else {
+        block = calloc(1, sizeof(block_t));
+        assert(block);
+        block->callstack = callstack;
+        hashmap_add(&app->blocks, block->callstack, &block->it);
+        stats.block_inuse += 1;
+    }
+    block->count += 1;
+
+    return block;
+}
+
+static void memtrace_alloc(app_t *app, void *ptr, size_t size, block_t *block) {
+    allocation_t *allocation = NULL;
+
+    // create allocation
+    assert((allocation = calloc(1, sizeof(allocation_t))));
     assert(allocation);
     allocation->ptr_size = size;
     allocation->ptr = ptr;
-    allocation->callstack = callstack;
-    assert(allocation->callstack);
+    allocation->block = block;
     hashmap_add(&app->allocations, ptr, &allocation->it);
 
-    app->alloc_count += 1;
-    app->alloc_size += size;
+    // increment statistics
+    block->size += allocation->ptr_size;
+    stats.alloc_count += 1;
+    stats.alloc_size += size;
+    stats.byte_inuse += size;
 }
 
 static void memtrace_free(app_t *app, void *ptr) {
@@ -319,8 +393,6 @@ static void memtrace_free(app_t *app, void *ptr) {
 
     if (ptr && (it = hashmap_get(&app->allocations, ptr))) {
         allocation_t *allocation = container_of(it, allocation_t, it);
-        app->free_count += 1;
-        app->free_size += allocation->ptr_size;
         hashmap_iterator_destroy(&allocation->it);
     }
     else if (!app->attachpid) {
@@ -343,38 +415,10 @@ void libraries_print_debug(int pid) {
 }
 
 void memtrace_status(app_t *app) {
-    size_t count = 0;
-    size_t size = 0;
-    hashmap_iterator_t *it = NULL;
-
-    hashmap_for_each(it, &app->allocations) {
-        allocation_t *allocation = container_of(it, allocation_t, it);
-        block_t *block = NULL;
-        hashmap_iterator_t *sit = NULL;
-
-        count++;
-        size += allocation->ptr_size;
-
-        if (!(sit = hashmap_get(&app->blocks, allocation->callstack))) {
-            block = calloc(1, sizeof(block_t));
-            assert(block);
-            block->callstack = allocation->callstack;
-            hashmap_add(&app->blocks, block->callstack, &block->it);
-        }
-        else {
-            block = container_of(sit, block_t, it);
-        }
-
-        block->count += 1;
-        block->size += allocation->ptr_size;
-    }
-
     time_t now = time(NULL);
     CONSOLE("HEAP SUMMARY %s", asctime(localtime(&now)));
-    CONSOLE("    in use: %zu bytes in %zu blocks", size, count);
-    CONSOLE("    total heap usage: %zu allocs, %zu frees, %zu bytes allocated", app->alloc_count, app->free_count, app->alloc_size);
-
-    hashmap_clear(&app->blocks);
+    CONSOLE("    in use: %zu bytes in %zu blocks", stats.byte_inuse, stats.block_inuse);
+    CONSOLE("    total heap usage: %zu allocs, %zu frees, %zu bytes allocated", stats.alloc_count, stats.free_count, stats.alloc_size);
 }
 
 void memtrace_client_report(app_t *app, size_t max) {
@@ -397,8 +441,13 @@ static void memtrace_local_blocks_print(app_t *app, size_t max) {
             break;
         }
 
-        CONSOLE("%zu bytes in %zu blocks were not free", block->size, block->count);
-        raw_print_callstack(app, block->callstack);
+        CONSOLE("%zd bytes in %zd blocks were not free", block->size, block->count);
+        if (block->big_callstack) {
+            raw_print_callstack(app, block->big_callstack, app->big_callstack_size);
+        }
+        else {
+            raw_print_callstack(app, block->callstack, app->callstack_size);
+        }
         CONSOLE("");
 
         i++;
@@ -406,9 +455,9 @@ static void memtrace_local_blocks_print(app_t *app, size_t max) {
 
 }
 
-static void memtrace_client_callstack_print(app_t *app, size_t *callstack, FILE *fp) {
+static void memtrace_client_callstack_print(app_t *app, size_t *callstack, size_t size, FILE *fp) {
     size_t i;
-    for (i = 0; i < app->callstack_size; i++) {
+    for (i = 0; i < size; i++) {
         size_t address = callstack[i];
         if (!address || !app->libraries) {
             break;
@@ -441,8 +490,13 @@ static void memtrace_client_blocks_print(app_t *app, size_t max) {
         }
 
 
-        fprintf(fp, "%zu bytes in %zu blocks were not free\n", block->size, block->count);
-        memtrace_client_callstack_print(app, block->callstack, fp);
+        fprintf(fp, "%zd bytes in %zd blocks were not free\n", block->size, block->count);
+        if (block->big_callstack) {
+            memtrace_client_callstack_print(app, block->big_callstack, app->big_callstack_size, fp);
+        }
+        else {
+            memtrace_client_callstack_print(app, block->callstack, app->callstack_size, fp);
+        }
         fprintf(fp, "\n");
         i++;
     }
@@ -483,48 +537,21 @@ void memtrace_report(app_t *app, size_t max) {
     }
     CONSOLE("[memtrace] report");
 
-    size_t count = 0;
-    size_t size = 0;
-    hashmap_iterator_t *it = NULL;
-
-    hashmap_for_each(it, &app->allocations) {
-        allocation_t *allocation = container_of(it, allocation_t, it);
-        block_t *block = NULL;
-        hashmap_iterator_t *sit = NULL;
-
-        count++;
-        size += allocation->ptr_size;
-
-        if (!(sit = hashmap_get(&app->blocks, allocation->callstack))) {
-            block = calloc(1, sizeof(block_t));
-            assert(block);
-            block->callstack = allocation->callstack;
-            hashmap_add(&app->blocks, block->callstack, &block->it);
-        }
-        else {
-            block = container_of(sit, block_t, it);
-        }
-
-        block->count += 1;
-        block->size += allocation->ptr_size;
-    }
-
     hashmap_qsort(&app->blocks, blocks_map_compar);
     memtrace_blocks_print(app, max);
-    CONSOLE("HEAP SUMMARY:");
-    CONSOLE("    in use at exit: %zu bytes in %zu blocks", size, count);
-    CONSOLE("    total heap usage: %zu allocs, %zu frees, %zu bytes allocated", app->alloc_count, app->free_count, app->alloc_size);
-
-    hashmap_clear(&app->blocks);
+    memtrace_status(app);
 }
 
 void memtrace_clear(app_t *app) {
     CONSOLE("Clearing list of allocations");
 
     hashmap_clear(&app->allocations);
-    app->alloc_count = 0;
-    app->free_count = 0;
-    app->alloc_size = 0;
+    stats.alloc_count = 0;
+    stats.alloc_size = 0;
+    stats.free_count = 0;
+    stats.free_size = 0;
+    stats.byte_inuse = 0;
+    stats.block_inuse = 0;
 }
 
 bool malloc_handler(const ftrace_fcall_t *fcall, void *userdata) {
@@ -536,8 +563,7 @@ bool malloc_handler(const ftrace_fcall_t *fcall, void *userdata) {
         return true;
     }
 
-    size_t *callstack = calloc(app->callstack_size, sizeof(size_t));
-    app->unwind(app->libraries, fcall, callstack, app->callstack_size);
+    block_t *block = alloc_unwind(app, fcall);
 
     if (!ftrace_fcall_get_rv(fcall, &rtfcall)) {
         TRACE_ERROR("failed to get fcall return value");
@@ -546,14 +572,13 @@ bool malloc_handler(const ftrace_fcall_t *fcall, void *userdata) {
         if (ftrace_get_registers(&app->ftrace, &here)) {
             ftrace_fcall_dump(&here);
         }
-        free(callstack);
         return false;
     }
 
     size_t size = fcall->arg1;
     void *newptr = (void *) rtfcall.retval;
     TRACE_DEBUG("malloc(%zu) -> %p", size, newptr);
-    memtrace_alloc(fcall, &rtfcall, app, newptr, size, callstack);
+    memtrace_alloc(app, newptr, size, block);
     return true;
 }
 
@@ -566,19 +591,17 @@ bool calloc_handler(const ftrace_fcall_t *fcall, void *userdata) {
         return true;
     }
 
-    size_t *callstack = calloc(app->callstack_size, sizeof(size_t));
-    app->unwind(app->libraries, fcall, callstack, app->callstack_size);
+    block_t *block = alloc_unwind(app, fcall);
 
     if (!ftrace_fcall_get_rv(fcall, &rtfcall)) {
         TRACE_ERROR("calloc: Failed to get fcall return value");
-        free(callstack);
         return false;
     }
 
     size_t size = fcall->arg1 * fcall->arg2;
     void *newptr = (void *) rtfcall.retval;
     TRACE_DEBUG("calloc(%zu) -> %p", size, newptr);
-    memtrace_alloc(fcall, &rtfcall, app, newptr, size, callstack);
+    memtrace_alloc(app, newptr, size, block);
 
     return true;
 }
@@ -592,12 +615,10 @@ bool realloc_handler(const ftrace_fcall_t *fcall, void *userdata) {
         return true;
     }
 
-    size_t *callstack = calloc(app->callstack_size, sizeof(size_t));
-    app->unwind(app->libraries, fcall, callstack, app->callstack_size);
+    block_t *block = alloc_unwind(app, fcall);
 
     if (!ftrace_fcall_get_rv(fcall, &rtfcall)) {
         TRACE_ERROR("failed to get fcall return value");
-        free(callstack);
         return false;
     }
 
@@ -611,7 +632,7 @@ bool realloc_handler(const ftrace_fcall_t *fcall, void *userdata) {
     }
     if (newptr) {
         TRACE_DEBUG("realloc.alloc(%zu) -> %p", size, newptr);
-        memtrace_alloc(fcall, &rtfcall, app, newptr, size, callstack);
+        memtrace_alloc(app, newptr, size, block);
     }
 
     return true;
@@ -626,12 +647,10 @@ bool reallocarray_handler(const ftrace_fcall_t *fcall, void *userdata) {
         return true;
     }
 
-    size_t *callstack = calloc(app->callstack_size, sizeof(size_t));
-    app->unwind(app->libraries, fcall, callstack, app->callstack_size);
+    block_t *block = alloc_unwind(app, fcall);
 
     if (!ftrace_fcall_get_rv(fcall, &rtfcall)) {
         TRACE_ERROR("failed to get fcall return value");
-        free(callstack);
         return false;
     }
     void *oldptr = (void *) fcall->arg1;
@@ -644,7 +663,7 @@ bool reallocarray_handler(const ftrace_fcall_t *fcall, void *userdata) {
     }
     if (newptr) {
         TRACE_DEBUG("reallocarray.alloc(%zu) -> %p", size, newptr);
-        memtrace_alloc(fcall, &rtfcall, app, newptr, size, callstack);
+        memtrace_alloc(app, newptr, size, block);
     }
 
     return true;
@@ -983,8 +1002,10 @@ int main(int argc, char* argv[]) {
     app_t app = {
         .libc_fd = -1,
         .callstack_size = 10,
+        .big_callstack_size = 200,
         .stdin_handler = {memtrace_stdin_handler},
         .monitor_handler = {memtrace_monitor_handler},
+        .worker_handler = {memtrace_worker_handler},
         .unwind = raw_unwind,
         .addr2line = addr2line_default_command(),
     };
@@ -1198,6 +1219,14 @@ int main(int argc, char* argv[]) {
 
     app.monitor_timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
     ftrace_set_fd_handler(&app.ftrace, &app.monitor_handler, app.monitor_timerfd, EPOLLIN);
+
+    app.worker_timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
+    ftrace_set_fd_handler(&app.ftrace, &app.worker_handler, app.worker_timerfd, EPOLLIN);
+    struct itimerspec itimer = {0};
+    itimer.it_interval.tv_sec = 3;
+    itimer.it_value.tv_sec = itimer.it_interval.tv_sec;
+    timerfd_settime(app.worker_timerfd, 0, &itimer, NULL);
+
 
     while (ftrace_poll(&app.ftrace)) {
         if (exit_evlp) {
