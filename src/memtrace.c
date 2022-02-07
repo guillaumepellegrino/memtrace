@@ -46,6 +46,7 @@
 #include "fs.h"
 #include "console.h"
 #include "addr2line.h"
+#include "coredump.h"
 
 typedef struct _app app_t;
 
@@ -966,6 +967,7 @@ int main(int argc, char* argv[]) {
         {"func2addr",   required_argument,  0, 'f'},
         {"debugframe",  required_argument,  0, 'D'},
         {"elfdump",     no_argument,        0, 'E'},
+        {"coredump",    no_argument,        0, 'C'},
         {"help",        no_argument,        0, 'h'},
         {"version",     no_argument,        0, 'V'},
         {0}
@@ -979,6 +981,7 @@ int main(int argc, char* argv[]) {
     const char *addr2frame = NULL;
     const char *func2addr = NULL;
     bool do_elfdump = false;
+    bool do_coredump = false;
     int s = -1;
     app_t app = {
         .libc_fd = -1,
@@ -1047,6 +1050,9 @@ int main(int argc, char* argv[]) {
                 break;
             case 'E':
                 do_elfdump = true;
+                break;
+            case 'C':
+                do_coredump = true;
                 break;
             case 'v':
                 verbose++;
@@ -1185,6 +1191,22 @@ int main(int argc, char* argv[]) {
         // Process is already running:
         // Try to set breakpoints now and create process maps
         app.libraries = libraries_create(app.pid, &app.fs);
+
+        if (do_coredump) {
+            if (!app.libraries) {
+                TRACE_ERROR("Failed to open libraries");
+                return 1;
+            }
+
+            FILE *fp = fopen("core", "w");
+            if (fp) {
+                CONSOLE("Generating coredump");
+                coredump_write(app.pid, fp);
+                CONSOLE("Generating coredump..Done");
+                fclose(fp);
+            }
+            return 0;
+        }
 
         if (!app_set_breakpoints(&app)) {
             return 1;

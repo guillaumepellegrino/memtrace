@@ -81,6 +81,7 @@ typedef enum {
 } p_type_t;
 
 typedef enum {
+    p_flags_none= 0x0,
     p_flags_x   = 0x1,
     p_flags_w   = 0x2,
     p_flags_wx  = 0x3,
@@ -111,6 +112,14 @@ typedef enum {
     sh_type_num,
     sh_type_loos = 0x60000000,
 } sh_type_t;
+
+typedef enum {
+    sh_flags_none = 0,
+    sh_flags_write = 0x1,
+    sh_flags_alloc = 0x2,
+    sh_flags_execinstr = 0x4,
+    sh_flags_maskproc = 0xf0000000,
+} sh_flags_t;
 
 struct _elf_header {
     unsigned char   ei_magic[4];
