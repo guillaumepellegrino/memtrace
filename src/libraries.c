@@ -326,6 +326,17 @@ const library_t *libraries_find_by_name(const libraries_t *libraries, const char
     return NULL;
 }
 
+library_t *libraries_first(const libraries_t *libraries) {
+    assert(libraries);
+    return libraries->list;
+}
+
+/** Return the count of libraries */
+size_t libraries_count(const libraries_t *libraries) {
+    assert(libraries);
+    return libraries->count;
+}
+
 size_t library_relative_address(const library_t *library, size_t address) {
     assert(library);
     return (address - ((size_t) library->begin)) + library->offset;

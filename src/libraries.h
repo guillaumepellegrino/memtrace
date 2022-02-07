@@ -64,10 +64,17 @@ const library_t *libraries_find(const libraries_t *libraries, size_t address);
 /** Return the library corresponding to this name */
 const library_t *libraries_find_by_name(const libraries_t *libraries, const char *regex);
 
+/** Return the first library from array */
+library_t *libraries_first(const libraries_t *libraries);
+
+/** Return the count of libraries */
+size_t libraries_count(const libraries_t *libraries);
+
 /** Return the address value relatively to the library */
 size_t library_relative_address(const library_t *library, size_t address);
 
 /** Return the absolute address value */
 size_t library_absolute_address(const library_t *library, size_t address);
+
 
 #endif
