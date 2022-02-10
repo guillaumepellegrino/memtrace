@@ -55,7 +55,6 @@ typedef struct {
     ssize_t size;
     size_t *callstack;
     size_t *big_callstack;
-    bool do_big_callstack;
 } block_t;
 
 typedef struct {
@@ -76,6 +75,7 @@ struct _app {
     hashmap_t blocks;
     size_t callstack_size;
     size_t big_callstack_size;
+    ssize_t big_callstack_threshold;
     breakpoint_t *calloc_bp;
     breakpoint_t *malloc_bp;
     breakpoint_t *realloc_bp;
@@ -284,9 +284,9 @@ static void memtrace_worker_handler(epoll_handler_t *self, int events) {
         block_t *block = container_of(it, block_t, it);
 
         if (i++ >= 20) {
+            app->big_callstack_threshold = block->size;
             break;
         }
-        block->do_big_callstack = true;
     }
 }
 
@@ -352,7 +352,7 @@ block_t *alloc_unwind(app_t *app, const ftrace_fcall_t *fcall) {
 
     if ((it = hashmap_get(&app->blocks, callstack))) {
         block = container_of(it, block_t, it);
-        if (block->do_big_callstack && !block->big_callstack) {
+        if (app->big_callstack_threshold > 0 && block->size >= app->big_callstack_threshold && !block->big_callstack) {
             assert((block->big_callstack = calloc(app->big_callstack_size, sizeof(size_t))));
             app->unwind(app->libraries, fcall, block->big_callstack, app->big_callstack_size);
         }
