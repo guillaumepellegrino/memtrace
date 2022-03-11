@@ -30,6 +30,7 @@ static const struct {
     {TRACE_ZONE_DEBUG_LINE,     "debug_line"},
     {TRACE_ZONE_UNWIND,         "unwind"},
     {TRACE_ZONE_CONSOLE,        "console"},
+    {TRACE_ZONE_COREDUMP,       "coredump"},
 };
 
 int verbose = 0;

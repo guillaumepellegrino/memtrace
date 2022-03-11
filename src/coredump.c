@@ -17,6 +17,7 @@
  */
 
 #define _GNU_SOURCE
+#define TRACE_ZONE TRACE_ZONE_COREDUMP
 #include <sys/procfs.h>
 #include <linux/elf.h>
 #include <linux/elf-fdpic.h>
@@ -492,7 +493,8 @@ void elf_program_note_add_prstatus(elf_program_note_t *note, int pid) {
         .iov_len = sizeof(prstatus.pr_reg),
     };
     if (ptrace(PTRACE_GETREGSET, pid, NT_PRSTATUS, &iovec) != 0) {
-        TRACE_ERROR("Failed to get NT_PRSTATUS registers: %m");
+        TRACE_LOG("Failed to get NT_PRSTATUS registers: %m");
+        return;
     }
     elf_program_note_add(note, NT_PRSTATUS, "CORE", &prstatus, sizeof(prstatus));
 }
@@ -504,7 +506,8 @@ void elf_program_note_add_prfpreg(elf_program_note_t *note, int pid) {
         .iov_len = sizeof(buff),
     };
     if (ptrace(PTRACE_GETREGSET, pid, NT_PRFPREG, &iovec) != 0) {
-        TRACE_ERROR("Failed to get NT_PRFPREG registers: %m");
+        TRACE_LOG("Failed to get NT_PRFPREG registers: %m");
+        return;
     }
     elf_program_note_add(note, NT_PRFPREG, "CORE", iovec.iov_base, iovec.iov_len);
 }
@@ -516,7 +519,8 @@ void elf_program_note_add_xstate(elf_program_note_t *note, int pid) {
         .iov_len = sizeof(buff),
     };
     if (ptrace(PTRACE_GETREGSET, pid, NT_X86_XSTATE, &iovec) != 0) {
-        TRACE_ERROR("Failed to get NT_X86_XSTATE registers: %m");
+        TRACE_LOG("Failed to get NT_X86_XSTATE registers: %m");
+        return;
     }
     elf_program_note_add(note, NT_X86_XSTATE, "LINUX", iovec.iov_base, iovec.iov_len);
 }
@@ -525,6 +529,7 @@ void elf_program_note_add_siginfo(elf_program_note_t *note, int pid) {
     siginfo_t siginfo = {0};
     if (ptrace(PTRACE_GETSIGINFO, pid, 0, &siginfo) != 0) {
         TRACE_ERROR("Failed to get SIGINFO registers: %m");
+        return;
     }
     elf_program_note_add(note, NT_SIGINFO, "CORE", &siginfo, sizeof(siginfo));
 }
@@ -616,6 +621,7 @@ static size_t program_library_write(elf_program_t *program, FILE *fp) {
     size_t addr = 0;
     bool error = false;
 
+    TRACE_LOG("Write %s at [%zx:%zx]", (pl->name?pl->name:""), pl->begin, pl->end);
     for (addr = pl->begin; addr < pl->end; addr += sizeof(addr)) {
         size_t word = 0;
         if (!error) {

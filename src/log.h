@@ -31,6 +31,7 @@ extern int zone;
 #define TRACE_ZONE_DEBUG_LINE   1 << 3
 #define TRACE_ZONE_UNWIND       1 << 4
 #define TRACE_ZONE_CONSOLE      1 << 5
+#define TRACE_ZONE_COREDUMP     1 << 6
 
 #ifndef TRACE_ZONE
 #define TRACE_ZONE TRACE_ZONE_NONE
