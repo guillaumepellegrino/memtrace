@@ -26,6 +26,14 @@
 #include <inttypes.h>
 #include <sys/types.h>
 
+#if (SIZE_MAX == UINT64_MAX)
+#define __64BIT
+#elif (SIZE_MAX == UINT32_MAX)
+#define __32BIT
+#else
+#error "Unknown Architecture"
+#endif
+
 #define container_of(item, type, member) \
     ((type *)(((void *) item) - offsetof(type, member)))
 

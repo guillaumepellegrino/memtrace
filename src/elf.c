@@ -38,6 +38,30 @@ struct _elf {
     section_header_t *section_shstrtab;
 };
 
+static void elf_header_parse(elf_t *elf, elf_file_t *fp) {
+    elf->header.ei_class = elf_file_read_u8(fp);
+    elf->header.ei_data = elf_file_read_u8(fp);
+    elf_file_set64bit(fp, elf->header.ei_class == ei_class_64bit);
+    elf_file_setlowendian(fp, elf->header.ei_data == ei_data_le);
+    elf->header.ei_version = elf_file_read_u8(fp);
+    elf->header.ei_osabi = elf_file_read_u8(fp);
+    elf->header.ei_abiversion = elf_file_read_u8(fp);
+    elf_file_discard(fp, 7);
+    elf->header.e_type = elf_file_read_u16(fp);
+    elf->header.e_machine = elf_file_read_u16(fp);
+    elf->header.e_version = elf_file_read_u32(fp);
+    elf->header.e_entry = elf_file_read_addr(fp);
+    elf->header.e_phoff = elf_file_read_addr(fp);
+    elf->header.e_shoff = elf_file_read_addr(fp);
+    elf->header.e_flags = elf_file_read_u32(fp);
+    elf->header.e_ehsize = elf_file_read_u16(fp);
+    elf->header.e_phentsize = elf_file_read_u16(fp);
+    elf->header.e_phnum = elf_file_read_u16(fp);
+    elf->header.e_shentsize = elf_file_read_u16(fp);
+    elf->header.e_shnum = elf_file_read_u16(fp);
+    elf->header.e_shstrndx = elf_file_read_u16(fp);
+}
+
 static bool elf_program_parse(elf_t *elf, elf_file_t *fp, size_t i) {
     program_header_t *program = &elf->programs[i];
 
@@ -116,27 +140,7 @@ elf_t *elf_open(const char *name, fs_t *fs) {
     }
 
     // Parse ELF Header
-    elf->header.ei_class = elf_file_read_u8(fp);
-    elf->header.ei_data = elf_file_read_u8(fp);
-    elf_file_set64bit(fp, elf->header.ei_class == ei_class_64bit);
-    elf_file_setlowendian(fp, elf->header.ei_data == ei_data_le);
-    elf->header.ei_version = elf_file_read_u8(fp);
-    elf->header.ei_osabi = elf_file_read_u8(fp);
-    elf->header.ei_abiversion = elf_file_read_u8(fp);
-    elf_file_discard(fp, 7);
-    elf->header.e_type = elf_file_read_u16(fp);
-    elf->header.e_machine = elf_file_read_u16(fp);
-    elf->header.e_version = elf_file_read_u32(fp);
-    elf->header.e_entry = elf_file_read_addr(fp);
-    elf->header.e_phoff = elf_file_read_addr(fp);
-    elf->header.e_shoff = elf_file_read_addr(fp);
-    elf->header.e_flags = elf_file_read_u32(fp);
-    elf->header.e_ehsize = elf_file_read_u16(fp);
-    elf->header.e_phentsize = elf_file_read_u16(fp);
-    elf->header.e_phnum = elf_file_read_u16(fp);
-    elf->header.e_shentsize = elf_file_read_u16(fp);
-    elf->header.e_shnum = elf_file_read_u16(fp);
-    elf->header.e_shstrndx = elf_file_read_u16(fp);
+    elf_header_parse(elf, fp);
 
     // Basic safety check
     if (elf->header.e_phnum > 256) {
