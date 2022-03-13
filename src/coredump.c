@@ -19,6 +19,7 @@
 #define _GNU_SOURCE
 #define TRACE_ZONE TRACE_ZONE_COREDUMP
 #include <sys/procfs.h>
+#include <sys/types.h>
 #include <linux/elf.h>
 #include <linux/elf-fdpic.h>
 #include <errno.h>
@@ -107,6 +108,8 @@ typedef struct {
     elf_header_packed_t eh;
     list_t program_list;
     list_t section_list;
+    int pid;
+    int memfd; // reference on /proc/$pid/mem
 } elf_coredump_t;
 
 typedef struct {
@@ -159,7 +162,7 @@ size_t fwrite_align4(const void *ptr, size_t size, FILE *stream) {
     return size + remain;
 }
 
-void elf_coredump_init(elf_coredump_t *coredump) {
+bool elf_coredump_init(elf_coredump_t *coredump, int pid, int memfd) {
     static elf_header_packed_t me;
 
     if (me.ei_magic[0] == 0) {
@@ -191,6 +194,10 @@ void elf_coredump_init(elf_coredump_t *coredump) {
         .e_shnum        = 0,
     };
     list_initialize(&coredump->program_list);
+    coredump->pid = pid;
+    coredump->memfd = memfd;
+
+    return true;
 }
 
 void elf_coredump_cleanup(elf_coredump_t *coredump) {
@@ -203,6 +210,11 @@ void elf_coredump_cleanup(elf_coredump_t *coredump) {
             program->destroy(program);
         }
     }
+}
+
+static inline elf_coredump_t *elf_program_get_coredump(elf_program_t *program) {
+    list_t *program_list = program->it.list;
+    return container_of(program_list, elf_coredump_t, program_list);
 }
 
 void elf_coredump_add_program(elf_coredump_t *coredump, elf_program_t *program) {
@@ -408,7 +420,6 @@ void elf_program_note_add(elf_program_note_t *note, uint32_t type, const char *n
 }
 
 void elf_program_note_add_prpsinfo(elf_program_note_t *note, int pid) {
-    char buff[512] = {0};
     struct elf_prpsinfo info = {0};
     FILE *fp = NULL;
 
@@ -428,16 +439,16 @@ void elf_program_note_add_prpsinfo(elf_program_note_t *note, int pid) {
 
 
     // Fill pr_fname from /proc/%d/exe
-    snprintf(buff, sizeof (buff), "/proc/%d/exe", pid);
-    if (readlink(buff, buff, sizeof(buff)) > 0) {
-        const char *sep = strrchr(buff, '/');
-        const char *name = sep ? sep + 1 : buff;
+    snprintf(g_buff, sizeof(g_buff), "/proc/%d/exe", pid);
+    if (readlink(g_buff, g_buff, sizeof(g_buff)) > 0) {
+        const char *sep = strrchr(g_buff, '/');
+        const char *name = sep ? sep + 1 : g_buff;
         snprintf(info.pr_fname, sizeof(info.pr_fname), "%s", name);
     }
 
     // Fill pr_psargs from /proc/%d/cmdline
-    snprintf(buff, sizeof (buff), "/proc/%d/cmdline", pid);
-    if ((fp = fopen(buff, "r"))) {
+    snprintf(g_buff, sizeof(g_buff), "/proc/%d/cmdline", pid);
+    if ((fp = fopen(g_buff, "r"))) {
         ssize_t len = 0;
         len = fread(info.pr_psargs, 1, sizeof(info.pr_psargs)-1, fp);
         if (len > 1) {
@@ -456,14 +467,14 @@ void elf_program_note_add_prpsinfo(elf_program_note_t *note, int pid) {
     }
 
     // Fill from /proc/%d/stat
-    snprintf(buff, sizeof(buff), "/proc/%d/stat", pid);
-    if ((fp = fopen(buff, "r"))) {
+    snprintf(g_buff, sizeof(g_buff), "/proc/%d/stat", pid);
+    if ((fp = fopen(g_buff, "r"))) {
         char *sep = NULL;
         char pr_sname = 0;
         unsigned int pr_flag = 0;
         long pr_nice = 0;
-        assert(fread(buff, 1, sizeof(buff), fp) > 0);
-        assert((sep = strchr(buff, ')')));
+        assert(fread(g_buff, 1, sizeof(g_buff), fp) > 0);
+        assert((sep = strchr(g_buff, ')')));
         sscanf(sep + 1,
             "%c"            /* Process state. */
             "%d%d%d"        /* Parent PID, group ID, session ID. */
@@ -500,10 +511,9 @@ void elf_program_note_add_prstatus(elf_program_note_t *note, int pid) {
 }
 
 void elf_program_note_add_prfpreg(elf_program_note_t *note, int pid) {
-    char buff[4096] = {0};
     struct iovec iovec = {
-        .iov_base = buff,
-        .iov_len = sizeof(buff),
+        .iov_base = g_buff,
+        .iov_len = sizeof(g_buff),
     };
     if (ptrace(PTRACE_GETREGSET, pid, NT_PRFPREG, &iovec) != 0) {
         TRACE_LOG("Failed to get NT_PRFPREG registers: %m");
@@ -513,10 +523,9 @@ void elf_program_note_add_prfpreg(elf_program_note_t *note, int pid) {
 }
 
 void elf_program_note_add_xstate(elf_program_note_t *note, int pid) {
-    char buff[4096] = {0};
     struct iovec iovec = {
-        .iov_base = buff,
-        .iov_len = sizeof(buff),
+        .iov_base = g_buff,
+        .iov_len = sizeof(g_buff),
     };
     if (ptrace(PTRACE_GETREGSET, pid, NT_X86_XSTATE, &iovec) != 0) {
         TRACE_LOG("Failed to get NT_X86_XSTATE registers: %m");
@@ -535,14 +544,13 @@ void elf_program_note_add_siginfo(elf_program_note_t *note, int pid) {
 }
 
 void elf_program_note_add_auxv(elf_program_note_t *note, int pid) {
-    char buff[4096] = {0};
     int fd = -1;
     ssize_t len = 0;
 
-    snprintf(buff, sizeof (buff), "/proc/%d/auxv", pid);
-    if ((fd = open(buff, O_RDONLY)) >= 0) {
-        if ((len = read(fd, buff, sizeof(buff))) >= 0) {
-            elf_program_note_add(note, NT_AUXV, "CORE", buff, len);
+    snprintf(g_buff, sizeof(g_buff), "/proc/%d/auxv", pid);
+    if ((fd = open(g_buff, O_RDONLY)) >= 0) {
+        if ((len = read(fd, g_buff, sizeof(g_buff))) >= 0) {
+            elf_program_note_add(note, NT_AUXV, "CORE", g_buff, len);
         }
         else {
             TRACE_ERROR("Failed to read /proc/$pid/auxv: %m");
@@ -616,26 +624,42 @@ static void section_library_initialize_header(elf_program_t *program, section_he
 }
 
 static size_t program_library_write(elf_program_t *program, FILE *fp) {
-    size_t size = 0;
+    elf_coredump_t *coredump = elf_program_get_coredump(program);
     elf_program_library_t *pl = container_of(program, elf_program_library_t, program);
-    size_t addr = 0;
-    bool error = false;
+    size_t pl_size = pl->end - pl->begin;
+    size_t i;
+    size_t remain;
 
     TRACE_LOG("Write %s at [%zx:%zx]", (pl->name?pl->name:""), pl->begin, pl->end);
-    for (addr = pl->begin; addr < pl->end; addr += sizeof(addr)) {
-        size_t word = 0;
-        if (!error) {
-            errno = 0;
-            word = ptrace(PTRACE_PEEKDATA, pl->pid, addr, NULL);
-            if (errno != 0) {
-                error = true;
-                TRACE_LOG("Failed to read at address 0x%zx: %m", addr);
-                word = 0;
-            }
-        }
-        size += fwrite(&word, 1, sizeof(addr), fp);
+
+    if (lseek64(coredump->memfd, pl->begin, SEEK_SET) < 0) {
+        TRACE_ERROR("lseek 0x%zx: %m (%s)", pl->begin, pl->name);
     }
-    return size;
+
+    for (i = 0; (i + sizeof(g_buff)) < pl_size; i+= sizeof(g_buff)) {
+        if (read(coredump->memfd, g_buff, sizeof(g_buff)) <= 0) {
+            goto error;
+        }
+        fwrite(g_buff, sizeof(g_buff), 1, fp);
+    }
+
+    remain = pl_size - i;
+    if (read(coredump->memfd, g_buff, remain) <= 0) {
+        goto error;
+    }
+    fwrite(g_buff, remain, 1, fp);
+    return pl_size;
+
+error:
+    TRACE_LOG("Failed to read 0x%zx: %m (%s)", i, pl->name);
+    memset(g_buff, 0, sizeof(g_buff));
+    for (; (i + sizeof(g_buff)) < pl_size; i+= sizeof(g_buff)) {
+        fwrite(g_buff, sizeof(g_buff), 1, fp);
+    }
+    remain = pl_size - i;
+    fwrite(g_buff, remain, 1, fp);
+
+    return pl_size;
 }
 
 static void program_library_destroy(elf_program_t *program) {
@@ -658,16 +682,15 @@ void elf_coredump_add_library(elf_coredump_t *coredump, int pid, size_t begin, s
 }
 
 static void elf_coredump_map_files(elf_coredump_t *coredump, elf_note_files_t *note_files, int pid) {
-    char buff[1024];
     FILE *fp = NULL;
 
-    snprintf(buff, sizeof(buff), "/proc/%d/maps", pid);
-    if (!(fp = fopen(buff, "r"))) {
-        TRACE_ERROR("Failed to open %s", buff);
+    snprintf(g_buff, sizeof(g_buff), "/proc/%d/maps", pid);
+    if (!(fp = fopen(g_buff, "r"))) {
+        TRACE_ERROR("Failed to open %s", g_buff);
         return;
     }
 
-    while (fgets(buff, sizeof(buff), fp)) {
+    while (fgets(g_buff, sizeof(g_buff), fp)) {
         char *sep = NULL;
         void *begin = NULL;
         void *end = NULL;
@@ -678,12 +701,12 @@ static void elf_coredump_map_files(elf_coredump_t *coredump, elf_note_files_t *n
         const char *topic = NULL;
 
         // Strip new line character
-        if ((sep = strchr(buff, '\n'))) {
+        if ((sep = strchr(g_buff, '\n'))) {
             *sep = 0;
         }
 
         // Scan line
-        if ((sscanf(buff, "%p-%p %4s %zx", &begin, &end, perm, &offset) != 4)) {
+        if ((sscanf(g_buff, "%p-%p %4s %zx", &begin, &end, perm, &offset) != 4)) {
             continue;
         }
         flags |= (perm[0] == 'r') ? p_flags_r : 0;
@@ -691,11 +714,11 @@ static void elf_coredump_map_files(elf_coredump_t *coredump, elf_note_files_t *n
         flags |= (perm[2] == 'x') ? p_flags_x : 0;
 
         // Get file name
-        if ((name = strchr(buff, '/'))) {
+        if ((name = strchr(g_buff, '/'))) {
             elf_note_files_add(note_files, (size_t) begin, (size_t) end, offset, name);
         }
         else {
-            topic = strchr(buff, '[');
+            topic = strchr(g_buff, '[');
         }
 
         if (!topic || strcmp(topic, "[vvar]") != 0) {
@@ -705,12 +728,12 @@ static void elf_coredump_map_files(elf_coredump_t *coredump, elf_note_files_t *n
     fclose(fp);
 }
 
-void coredump_write(int pid, FILE *fp) {
+void coredump_write(int pid, int memfd, FILE *fp) {
     elf_coredump_t coredump = {0};
     elf_program_note_t note = {0};
     elf_note_files_t note_files = {0};
 
-    elf_coredump_init(&coredump);
+    elf_coredump_init(&coredump, pid, memfd);
     elf_coredump_add_null_section(&coredump);
 
     elf_program_note_initialize(&note, &coredump);

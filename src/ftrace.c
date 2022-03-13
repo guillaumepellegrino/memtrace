@@ -41,6 +41,8 @@
 #include "ptrace.h"
 #include "log.h"
 
+__attribute__((aligned)) char g_buff[G_BUFF_SIZE];
+
 bool ftrace_wait(ftrace_t *ftrace, int *status) {
     struct epoll_event event = {0};
     struct signalfd_siginfo fdsi;
@@ -82,6 +84,12 @@ bool ftrace_attach(ftrace_t *ftrace, int pid) {
 
     if ((ftrace->epfd = epoll_create1(EPOLL_CLOEXEC)) < 0) {
         TRACE_ERROR("epoll_create1() error: %m");
+        return false;
+    }
+
+    snprintf(g_buff, sizeof(g_buff), "/proc/%d/mem", pid);
+    if ((ftrace->memfd = open(g_buff, O_RDONLY|O_LARGEFILE)) <= 0) {
+        TRACE_ERROR("Failed to open %s: %m", g_buff);
         return false;
     }
 
@@ -158,6 +166,8 @@ void ftrace_detach(ftrace_t *ftrace) {
         free(syscall);
     }
 
+    close(ftrace->memfd);
+
     if (running && ptrace(PTRACE_DETACH, ftrace->pid, NULL, NULL) != 0) {
         TRACE_ERROR("ptrace(DETACH) failed: %m");
     }
@@ -191,6 +201,10 @@ bool ftrace_step(ftrace_t *ftrace) {
 
 int ftrace_pid(ftrace_t *ftrace) {
     return ftrace->pid;
+}
+
+int ftrace_memfd(ftrace_t *ftrace) {
+    return ftrace->memfd;
 }
 
 bool ftrace_exited(ftrace_t *ftrace) {

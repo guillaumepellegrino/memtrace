@@ -38,6 +38,8 @@
     ((type *)(((void *) item) - offsetof(type, member)))
 
 #define countof(array) (sizeof(array)/sizeof(*array))
+#define min(lval, rval) (((lval) < (rval)) ? (lval) : (rval))
+#define max(lval, rval) (((lval) > (rval)) ? (lval) : (rval))
 
 typedef enum _breakpoint_state breakpoint_state_t;
 typedef union _variant_value variant_value_t;
@@ -81,5 +83,8 @@ struct _epoll_handler {
     void (*fn)(epoll_handler_t *self, int events);
 };
 
+#define G_BUFF_SIZE 32768
+
+extern char g_buff[G_BUFF_SIZE];
 
 #endif

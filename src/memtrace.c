@@ -28,6 +28,7 @@
 #include <string.h>
 #include <signal.h>
 #include <fcntl.h>
+#include <time.h>
 #include <getopt.h>
 #include "ftrace.h"
 #include "hashmap.h"
@@ -205,29 +206,29 @@ static void blocks_maps_destroy(void *key, hashmap_iterator_t *it) {
 }
 
 static bool raw_unwind(libraries_t *libraries, const ftrace_fcall_t *fcall, size_t *callstack, size_t size) {
-    const library_t *library = NULL;
-    size_t i = 0, j = 0;
-
     if (!libraries || !fcall || !callstack || !size) {
         TRACE_ERROR("NULL");
         return false;
     }
 
-    TRACE_LOG("Unwind callstack at 0x%lx", fcall->pc);
+    const library_t *library = NULL;
+    ssize_t i = 0;
+    size_t j = 0;
+    ssize_t len = 0;
+    int memfd = ftrace_memfd(fcall->ftrace);
 
-    callstack[j++] = fcall->pc;
+    if ((len = pread64(memfd, g_buff, sizeof(g_buff), fcall->sp)) < 0) {
+        TRACE_ERROR("Failed to read SP at 0x%zx: %m", fcall->sp);
+        return false;
+    }
+    len /= sizeof(size_t);
 
-    for (i = 0; i < 150*size && j < size; i++) {
-        size_t pc = 0;
-        if (!ftrace_read_word(fcall->ftrace, fcall->sp+i, &pc)) {
-            break;
+    for (i = 0; i < len && j < size; i++) {
+        size_t pc = ((size_t *) g_buff)[i];
+
+        if ((library = libraries_find(libraries, pc))) {
+            callstack[j++] = pc;
         }
-
-        if (!(library = libraries_find(libraries, pc))) {
-            continue;
-        }
-
-        callstack[j++] = pc;
     }
 
     return true;
@@ -402,15 +403,14 @@ static void memtrace_free(app_t *app, void *ptr) {
 }
 
 void libraries_print_debug(int pid) {
-    char buff[1024];
-    snprintf(buff, sizeof(buff), "/proc/%d/maps", pid);
-    FILE *fp = fopen(buff, "r");
+    snprintf(g_buff, sizeof(g_buff), "/proc/%d/maps", pid);
+    FILE *fp = fopen(g_buff, "r");
     if (!fp) {
         return;
     }
 
-    while (fgets(buff, sizeof(buff), fp)) {
-        printf("%s", buff);
+    while (fgets(g_buff, sizeof(g_buff), fp)) {
+        printf("%s", g_buff);
     }
     fclose(fp);
 }
@@ -955,6 +955,21 @@ static void memtrace_stdin_handler(epoll_handler_t *self, int events) {
     console_poll(&app->console);
 }
 
+static uint64_t clock_elapsed(struct timespec start) {
+    struct timespec stop, diff;
+    clock_gettime(CLOCK_MONOTONIC, &stop);
+
+    if ((stop.tv_nsec - start.tv_nsec) < 0) {
+        diff.tv_sec = stop.tv_sec - start.tv_sec - 1;
+        diff.tv_nsec = stop.tv_nsec - start.tv_nsec + 1000000000ULL;
+    } else {
+        diff.tv_sec = stop.tv_sec - start.tv_sec;
+        diff.tv_nsec = stop.tv_nsec - start.tv_nsec;
+    }
+
+    return (1000ULL * diff.tv_sec) + (diff.tv_nsec / 1000000ULL);
+}
+
 static const console_cmd_t memtrace_console_commands[] = {
     {.name = "help",        .help = "Display this help", .handler = console_cmd_help},
     {.name = "quit",        .help = "Quit memtrace and show report", .handler = memtrace_console_quit},
@@ -1222,8 +1237,12 @@ int main(int argc, char* argv[]) {
             FILE *fp = fopen("core", "w");
             if (fp) {
                 CONSOLE("Generating coredump");
-                coredump_write(app.pid, fp);
-                CONSOLE("Generating coredump..Done");
+                struct timespec start;
+                clock_gettime(CLOCK_MONOTONIC, &start);
+                coredump_write(app.pid, ftrace_memfd(&app.ftrace), fp);
+                uint64_t duration = clock_elapsed(start);
+
+                CONSOLE("Done in %"PRIu64" msec", duration);
                 fclose(fp);
             }
             return 0;

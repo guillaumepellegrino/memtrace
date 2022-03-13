@@ -39,7 +39,6 @@ struct _libraries {
     fs_t *fs;
     size_t count;
     library_t *list;
-    char buff[1024];
 };
 
 static int so_qsort_compar(const void *lval, const void *rval) {
@@ -170,16 +169,16 @@ libraries_t *libraries_create(int pid, fs_t *fs) {
 void libraries_update(libraries_t *libraries) {
     assert(libraries);
 
-    snprintf(libraries->buff, sizeof(libraries->buff), "/proc/%d/maps", libraries->pid);
+    snprintf(g_buff, sizeof(g_buff), "/proc/%d/maps", libraries->pid);
 
     //copy file in buffer
-    FILE *fp = fopen(libraries->buff, "r");
+    FILE *fp = fopen(g_buff, "r");
     if (!fp) {
-        TRACE_ERROR("Failed to open %s", libraries->buff);
+        TRACE_ERROR("Failed to open %s", g_buff);
         return;
     }
 
-    while (fgets(libraries->buff, sizeof(libraries->buff), fp)) {
+    while (fgets(g_buff, sizeof(g_buff), fp)) {
         char *sep = NULL;
         void *begin = NULL;
         void *end = NULL;
@@ -187,17 +186,17 @@ void libraries_update(libraries_t *libraries) {
         char *name = NULL;
 
         // Strip new line character
-        if ((sep = strchr(libraries->buff, '\n'))) {
+        if ((sep = strchr(g_buff, '\n'))) {
             *sep = 0;
         }
 
         // Scan line
-        if ((sscanf(libraries->buff, "%p-%p %3s", &begin, &end, perm) != 3)) {
+        if ((sscanf(g_buff, "%p-%p %3s", &begin, &end, perm) != 3)) {
             continue;
         }
 
         // We are looking for files mapped in memory with READ/EXECUTE attributes
-        if (perm[0] == 'r' && perm[2] == 'x' && (name = strchr(libraries->buff, '/'))) {
+        if (perm[0] == 'r' && perm[2] == 'x' && (name = strchr(g_buff, '/'))) {
             library_t *library = NULL;
 
             // skip ld library

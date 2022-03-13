@@ -72,6 +72,7 @@ struct _ftrace {
     int pid                 FTRACE_PRIVATE;
     int epfd                FTRACE_PRIVATE;
     int sigfd               FTRACE_PRIVATE;
+    int memfd               FTRACE_PRIVATE;
     size_t syscall_count    FTRACE_PRIVATE;
     int depth               FTRACE_PRIVATE;
     bool exited             FTRACE_PRIVATE;
@@ -89,8 +90,13 @@ bool ftrace_continue(ftrace_t *ftrace);
 
 bool ftrace_step(ftrace_t *ftrace);
 
+/** Return the target process pid */
 int ftrace_pid(ftrace_t *ftrace);
 
+/** Return a file descriptor on /proc/$pid/mem */
+int ftrace_memfd(ftrace_t *ftrace);
+
+/** Return true if the target process exited */
 bool ftrace_exited(ftrace_t *ftrace);
 
 /** Return the address of this function */
