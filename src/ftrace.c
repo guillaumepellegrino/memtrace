@@ -41,8 +41,6 @@
 #include "ptrace.h"
 #include "log.h"
 
-__attribute__((aligned)) char g_buff[G_BUFF_SIZE];
-
 bool ftrace_wait(ftrace_t *ftrace, int *status) {
     struct epoll_event event = {0};
     struct signalfd_siginfo fdsi;

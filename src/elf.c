@@ -109,6 +109,57 @@ static bool elf_section_parse(elf_t *elf, elf_file_t *fp, size_t i) {
     return true;
 }
 
+elf_t *elf_parse_header(const char *name, fs_t *fs) {
+    static const unsigned char elf_magic[] = {0x7F, 'E', 'L', 'F'};
+    elf_t *elf = NULL;
+    elf_file_t *fp = NULL;
+
+    if (!(elf = calloc(1, sizeof(elf_t)))) {
+        goto error;
+    }
+    if (!name) {
+        goto error;
+    }
+    assert((elf->name = strdup(name)));
+    elf->fs = fs;
+
+    if (!(fp = elf_file_open(elf, 0x40, 0))) {
+        TRACE_ERROR("Failed to open %s: %m", name);
+        goto error;
+    }
+
+    // Verify ELF Magic
+    if (elf_file_read(fp, &elf->header.ei_magic, sizeof(elf->header.ei_magic)) != sizeof(elf->header.ei_magic)) {
+        TRACE_ERROR("Failed to read %s elf header: %m", name);
+        goto error;
+    }
+    if (memcmp(&elf->header.ei_magic, elf_magic, sizeof(elf_magic)) != 0) {
+        TRACE_ERROR("%s is not an ELF file", name);
+        goto error;
+    }
+
+    // Parse ELF Header
+    elf_header_parse(elf, fp);
+
+    // Basic safety check
+    if (elf->header.e_phnum > 256) {
+        TRACE_ERROR("%s: Program header num > 256", name);
+        goto error;
+    }
+    if (elf->header.e_shnum > 256) {
+        TRACE_ERROR("%s: Section header num > 256", name);
+        goto error;
+    }
+
+    elf_file_close(fp);
+    return elf;
+
+error:
+    elf_file_close(fp);
+    elf_close(elf);
+    return NULL;
+}
+
 elf_t *elf_open(const char *name, fs_t *fs) {
     static const unsigned char elf_magic[] = {0x7F, 'E', 'L', 'F'};
     elf_t *elf = NULL;

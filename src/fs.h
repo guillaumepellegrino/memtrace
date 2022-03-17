@@ -29,6 +29,9 @@
 #define REPORT_REQUEST_END "REPORT/REQUEST/BEGIN"
 #define REPORT_REPLY "REPORT/REQUEST/BEGIN"
 #define REPORT_REPLY_END "REPORT/REQUEST/BEGIN"
+#define GDB_REQUEST "GDB/REQUEST/"
+#define GDB_REPLY "GDB/REPLY/"
+
 
 enum _fs_type {
     fs_type_local = 0,
@@ -71,5 +74,53 @@ FILE *fs_fopen(fs_t *fs, const char *name, uint64_t size, uint64_t offset);
  * Serve File System
  */
 bool fs_serve(fs_t *server);
+
+
+
+
+typedef struct {
+    list_t list;
+} map_t;
+
+typedef struct _fs_topic fs_topic_t;
+struct _fs_topic {
+    list_t it;
+    const char *topic;
+    bool (*read)(fs_topic_t *topic, map_t *options, FILE *fp);
+};
+
+void fs_register_topic(fs_topic_t *topic);
+
+FILE *fs_write_request(const char *topic, map_t *options);
+
+/**
+ * Simple Message Protocol
+ *
+ * > POST TOPIC\r\n
+ * > $KEY0=$VALUE0\n
+ * > $KEY1=$VALUE1\n
+ * > \n
+ * > $DATA
+ *
+ * < /REPLY/$TOPIC\n
+ * < $KEY2=$VALUE2\n
+ * < $KEY3=$VALUE3\n
+ * < \n
+ * < $DATA
+ */
+typedef struct _smp smp_t;
+typedef struct _smp_topic smp_topic_t;
+struct _smp_topic {
+    list_t it;
+    const char *name;
+    bool (*read)(smp_topic_t *topic, map_t *options, FILE *fp);
+};
+
+void smp_initialize(smp_t *smp);
+void smp_cleanup(smp_t *smp);
+void smp_register_topic(smp_t *smp, smp_topic_t *topic);
+FILE *smp_write_request(smp_t *smp, const char *topic, map_t *options);
+
+
 
 #endif

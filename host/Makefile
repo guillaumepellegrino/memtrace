@@ -8,7 +8,7 @@ all: memtrace-fs
 install:
 	install -m 0755 memtrace-fs /usr/bin/
 
-memtrace-fs: memtrace-fs.o net.o strlist.o fs.o elf.o elf_file.o process.o addr2line.o log.o
+memtrace-fs: memtrace-fs.o net.o strlist.o fs.o elf.o elf_file.o process.o addr2line.o gdb.o log.o
 	$(CC_HOST) -o $(@) $(^) $(LDFLAGS_HOST)
 
 -include $(OBJECTS:.o=.d)

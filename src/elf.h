@@ -170,6 +170,7 @@ struct _section_header {
 
 /** Open/Close ELF file */
 elf_t *elf_open(const char *name, fs_t *fs);
+elf_t *elf_parse_header(const char *name, fs_t *fs);
 void elf_close(elf_t *elf);
 const char *elf_name(elf_t *elf);
 fs_t *elf_fs(elf_t *elf);

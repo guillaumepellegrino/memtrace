@@ -37,6 +37,8 @@
 #include "fs.h"
 #include "log.h"
 
+__attribute__((aligned)) char g_buff[G_BUFF_SIZE];
+
 static void help() {
     CONSOLE("Usage: memtrace-fs [OPTION].. [PATH]..");
     CONSOLE("A simple file-server for serving shared library with debug symbols to memtrace");
@@ -74,6 +76,7 @@ int main(int argc, char *argv[]) {
         .tgt = "memtrace",
     };
     fs_t fs = {0};
+    //gdb_cfg_t gdb_cfg = {0};
 
     strlist_insert(&fs_cfg.directories, "");
     strlist_insert(&fs_cfg.directories, ".");

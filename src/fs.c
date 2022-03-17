@@ -41,6 +41,8 @@
 #include "net.h"
 #include "log.h"
 #include "addr2line.h"
+#include "elf.h"
+#include "gdb.h"
 
 #define FS_DEFAULT_MCASTADDR "224.0.0.251"
 #define FS_DEFAULT_BINDADDR "::0"
@@ -383,6 +385,136 @@ static bool fs_serve_report_request(fs_t *server, char *request) {
     return true;
 }
 
+static bool file_transfer(FILE *in, FILE *out, size_t size) {
+    size_t xbytes = 0;
+    size_t remain = 0;
+
+    for (xbytes = 0; (xbytes + sizeof(g_buff)) < size; xbytes += sizeof(g_buff)) {
+        if (fread(g_buff, sizeof(g_buff), 1, in) != 1) {
+            TRACE_ERROR("Failed to read: %m");
+            return false;
+        }
+        if (fwrite(g_buff, sizeof(g_buff), 1, out) != 1) {
+            TRACE_ERROR("Failed to write: %m");
+            return false;
+        }
+    }
+    remain = size - xbytes;
+
+    if (fread(g_buff, remain, 1, in) != 1) {
+        TRACE_ERROR("Failed to read: %m");
+        return false;
+    }
+    if (fwrite(g_buff, remain, 1, out) != 1) {
+        TRACE_ERROR("Failed to write: %m");
+        return false;
+    }
+
+    return true;
+}
+
+static bool fs_transfer_coredump(fs_t *server, const char *filename) {
+    bool rt = false;
+    ssize_t elf_header_len = 0x40;
+    FILE *fp = NULL;
+    fs_cfg_t fs_cfg = {
+        .type = fs_type_local,
+        .me = server->cfg.me,
+    };
+    fs_t localfs = {0};
+    elf_t *elf = NULL;
+    const elf_header_t *hdr = NULL;
+    size_t xbytes = 0;
+
+    assert(fs_initialize(&localfs, &fs_cfg));
+
+    if (fread(g_buff, elf_header_len, 1, server->socket) != 1) {
+        TRACE_ERROR("Failed to read socket: %m");
+        goto error;
+    }
+    if (!(fp = fopen(filename, "w"))) {
+        TRACE_ERROR("Failed to open %s: %m", filename);
+        goto error;
+    }
+    if (fwrite(g_buff, elf_header_len, 1, fp) != 1) {
+        TRACE_ERROR("Failed to write: %m");
+        goto error;
+    }
+    fflush(fp);
+
+    if (!(elf = elf_parse_header(filename, &localfs))) {
+        TRACE_ERROR("Failed to parse coredump header");
+        goto error;
+    }
+    hdr = elf_header(elf);
+    xbytes = hdr->e_shoff + (hdr->e_shentsize * hdr->e_shnum) - elf_header_len;
+
+    CONSOLE("xbytes=0x%zx", xbytes);
+    if (!file_transfer(server->socket, fp, xbytes)) {
+        TRACE_ERROR("Failed to transfer coredump");
+        goto error;
+    }
+    CONSOLE("Coredump transfered");
+
+    rt = true;
+error:
+    if (elf) {
+        elf_close(elf);
+    }
+    if (fp) {
+        fclose(fp);
+    }
+    fs_cleanup(&localfs);
+    return rt;
+}
+
+static bool fs_serve_gdb_request(fs_t *server, char *request) {
+    TRACE_WARNING("%s", request);
+
+    bool rt = false;
+    const char cmd[] = GDB_REQUEST " gdb=";
+    char filename[] = "/tmp/memtrace-target.core";
+    gdb_cfg_t cfg = {
+        .solib_search_path = server->sysroot,
+        .coredump = filename,
+    };
+    char *sep = NULL;
+
+
+    if (!strstr(request, cmd)) {
+        TRACE_ERROR("Failed to parse command");
+        return false;
+    }
+    cfg.gdb_binary = request + strlen(cmd);
+    if (!fgets(g_buff, sizeof(g_buff), server->socket)) {
+        TRACE_ERROR("Failed to read program name");
+        return false;
+    }
+    if ((sep = strchr(g_buff, '\n'))) {
+        *sep = 0;
+    }
+    cfg.tgt_binary = strdup(g_buff);
+
+    if (!fs_transfer_coredump(server, filename)) {
+        goto error;
+    }
+
+    if (!cfg.solib_search_path) {
+        TRACE_ERROR("Unknown sysroot");
+        goto error;
+    }
+
+    if (!gdb_initialize(&cfg)) {
+        TRACE_ERROR("Failed to start gdb");
+        goto error;
+    }
+
+    rt = true;
+error:
+    gdb_cleanup();
+    return rt;
+}
+
 /** Serve File System request */
 static bool fs_serve_request(fs_t *fs) {
     char request[512];
@@ -405,6 +537,9 @@ static bool fs_serve_request(fs_t *fs) {
     }
     else if (!strncmp(request, REPORT_REQUEST, strlen(REPORT_REQUEST))) {
         rt = fs_serve_report_request(fs, request);
+    }
+    else if (!strncmp(request, GDB_REQUEST, strlen(GDB_REQUEST))) {
+        rt = fs_serve_gdb_request(fs, request);
     }
     else {
         TRACE_ERROR("Unknown request %s", request);

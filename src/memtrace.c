@@ -93,6 +93,8 @@ struct _app {
     bool (*unwind)(libraries_t *libraries, const ftrace_fcall_t *fcall, size_t *callstack, size_t size);
     void (*print_callstack)(app_t *app, size_t *callstack);
     char *addr2line;
+    char *gdb;
+    char *program_name;
 };
 
 static struct {
@@ -104,13 +106,14 @@ static struct {
     size_t block_inuse;
 } stats;
 static bool exit_evlp = false;
+__attribute__((aligned)) char g_buff[G_BUFF_SIZE];
 
 void memtrace_status(app_t *app);
 void memtrace_report(app_t *app, size_t max);
 void memtrace_clear(app_t *app);
 
-/** Deduct the default addr2line command from compiler command */
-static char *addr2line_default_command() {
+/** Deduct the default command from compiler toolchain */
+static char *toolchain_default_command(const char *program) {
     char *cmd = NULL;
     char *toolchain = NULL;
     char *sep = NULL;
@@ -120,12 +123,12 @@ static char *addr2line_default_command() {
     if ((sep = strrchr(toolchain, '/'))) {
         if ((sep = strrchr(sep, '-'))) {
             *sep = 0;
-            assert(asprintf(&cmd, "%s-addr2line", toolchain) >= 0);
+            assert(asprintf(&cmd, "%s-%s", toolchain, program) >= 0);
         }
     }
 
     if (!cmd) {
-        cmd = strdup("addr2line");
+        cmd = strdup(program);
     }
 
     free(toolchain);
@@ -144,6 +147,13 @@ static bool is_cross_compiled() {
     }
 
     return rt;
+}
+
+void memtrace_gdb_request(app_t *app) {
+    FILE *fp = app->fs.socket;
+    fprintf(fp, GDB_REQUEST " gdb=%s\n", app->gdb);
+    fprintf(fp, "%s\n", app->program_name);
+    coredump_write(app->pid, ftrace_memfd(&app->ftrace), fp);
 }
 
 static void allocations_maps_destroy(void *key, hashmap_iterator_t *it) {
@@ -996,12 +1006,12 @@ int main(int argc, char* argv[]) {
         {"selftest",    no_argument,        0, 't'},
         {"verbose",     no_argument,        0, 'v'},
         {"zone",        required_argument,  0, 'z'},
-        //{"addr2line",   required_argument,  0, 'L'},
         {"addr2func",   required_argument,  0, 'F'},
         {"func2addr",   required_argument,  0, 'f'},
         {"debugframe",  required_argument,  0, 'D'},
         {"elfdump",     no_argument,        0, 'E'},
         {"coredump",    no_argument,        0, 'C'},
+        {"gdb",         no_argument,        0, 'G'},
         {"help",        no_argument,        0, 'h'},
         {"version",     no_argument,        0, 'V'},
         {0}
@@ -1016,6 +1026,7 @@ int main(int argc, char* argv[]) {
     const char *func2addr = NULL;
     bool do_elfdump = false;
     bool do_coredump = false;
+    bool do_gdb = false;
     int s = -1;
     app_t app = {
         .libc_fd = -1,
@@ -1025,7 +1036,8 @@ int main(int argc, char* argv[]) {
         .monitor_handler = {memtrace_monitor_handler},
         .worker_handler = {memtrace_worker_handler},
         .unwind = raw_unwind,
-        .addr2line = addr2line_default_command(),
+        .addr2line = toolchain_default_command("addr2line"),
+        .gdb = toolchain_default_command("gdb"),
     };
     fs_cfg_t fs_cfg = {
         .type = is_cross_compiled() ? fs_type_tcp_client : fs_type_local,
@@ -1089,6 +1101,9 @@ int main(int argc, char* argv[]) {
                 break;
             case 'C':
                 do_coredump = true;
+                break;
+            case 'G':
+                do_gdb = true;
                 break;
             case 'v':
                 verbose++;
@@ -1183,7 +1198,7 @@ int main(int argc, char* argv[]) {
     };
 
     if (sigaction(SIGINT, &sa, NULL) < 0) {
-        perror("sigaction");
+        TRACE_ERROR("sigaction error: %m");
         return 1;
     }
 
@@ -1192,6 +1207,13 @@ int main(int argc, char* argv[]) {
     if (!ftrace_attach(&app.ftrace, app.pid)) {
         return 1;
     }
+
+    snprintf(g_buff, sizeof(g_buff), "/proc/%d/exe", app.pid);
+    if (readlink(g_buff, g_buff, sizeof(g_buff)) < 0) {
+        TRACE_ERROR("Failed to read program name: %m");
+        return 1;
+    }
+    app.program_name = strdup(g_buff);
 
     const hashmap_cfg_t allocations_maps_cfg = {
         .size       = 4000,
@@ -1247,6 +1269,19 @@ int main(int argc, char* argv[]) {
             }
             return 0;
         }
+        if (do_gdb) {
+            if (!app.libraries) {
+                TRACE_ERROR("Failed to open libraries");
+                return 1;
+            }
+
+            CONSOLE("Send GDB Request");
+            struct timespec start;
+            clock_gettime(CLOCK_MONOTONIC, &start);
+            memtrace_gdb_request(&app);
+            uint64_t duration = clock_elapsed(start);
+            CONSOLE("Done in %"PRIu64" msec", duration);
+        }
 
         if (!app_set_breakpoints(&app)) {
             return 1;
@@ -1301,6 +1336,8 @@ int main(int argc, char* argv[]) {
         libraries_destroy(app.libraries);
     }
     free(app.addr2line);
+    free(app.gdb);
+    free(app.program_name);
     fs_cleanup(&app.fs);
     if (s >= 0) {
         close(s);
