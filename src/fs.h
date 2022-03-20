@@ -31,6 +31,7 @@
 #define REPORT_REPLY_END "REPORT/REQUEST/BEGIN"
 #define GDB_REQUEST "GDB/REQUEST/"
 #define GDB_REPLY "GDB/REPLY/"
+#define GDB_REPLY_END "GDB/REPLY/END"
 
 
 enum _fs_type {

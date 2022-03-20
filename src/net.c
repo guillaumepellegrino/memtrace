@@ -219,3 +219,22 @@ int mcast_send(int fd, const void *buf, size_t count, const char *address, const
 
     return rt;
 }
+
+bool fd_transfer(int from, int to) {
+    ssize_t len = read(from, g_buff, sizeof(g_buff));
+    if (len < 0) {
+        TRACE_ERROR("read error: %m");
+        return false;
+    }
+    if (len == 0) {
+        TRACE_ERROR("read-end closed");
+        return false;
+    }
+    if (write(to, g_buff, len) < 0) {
+        TRACE_ERROR("write error: %m");
+        return false;
+    }
+
+    return true;
+}
+

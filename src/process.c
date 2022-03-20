@@ -57,6 +57,10 @@ bool process_start(process_t *process, const char *argv[]) {
         assert(close(pipe_out[PIPE_WREND]) == 0);
         assert(close(pipe_out[PIPE_RDEND]) == 0);
 
+        setvbuf(stdin, NULL, _IONBF, 0);
+        setvbuf(stderr, NULL, _IONBF, 0);
+        setvbuf(stderr, NULL, _IONBF, 0);
+
         // run program
         execvp(argv[0], (char **) argv);
 

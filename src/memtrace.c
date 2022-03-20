@@ -30,6 +30,7 @@
 #include <fcntl.h>
 #include <time.h>
 #include <getopt.h>
+#include <poll.h>
 #include "ftrace.h"
 #include "hashmap.h"
 #include "libraries.h"
@@ -57,6 +58,9 @@ typedef struct {
     ssize_t size;
     size_t *callstack;
     size_t *big_callstack;
+    size_t number;
+    size_t do_coredump : 1;
+    size_t do_gdb : 1;
 } block_t;
 
 typedef struct {
@@ -149,11 +153,136 @@ static bool is_cross_compiled() {
     return rt;
 }
 
-void memtrace_gdb_request(app_t *app) {
+/** Compute the the time elapsed in millisecond since start */
+static uint64_t clock_elapsed(struct timespec start) {
+    struct timespec stop, diff;
+    clock_gettime(CLOCK_MONOTONIC, &stop);
+
+    if ((stop.tv_nsec - start.tv_nsec) < 0) {
+        diff.tv_sec = stop.tv_sec - start.tv_sec - 1;
+        diff.tv_nsec = stop.tv_nsec - start.tv_nsec + 1000000000ULL;
+    } else {
+        diff.tv_sec = stop.tv_sec - start.tv_sec;
+        diff.tv_nsec = stop.tv_nsec - start.tv_nsec;
+    }
+
+    return (1000ULL * diff.tv_sec) + (diff.tv_nsec / 1000000ULL);
+}
+
+/** Write coredump to file in local filesystem */
+static bool memtrace_write_local_coredump(app_t *app, const char *file) {
+    FILE *fp = fopen(file, "w");
+    if (!fp) {
+        TRACE_ERROR("Failed to open %s: %m", file);
+        return false;
+    }
+
+    CONSOLE("Writing coredump to %s", file);
+    struct timespec start;
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    coredump_write(app->pid, ftrace_memfd(&app->ftrace), fp);
+    fclose(fp);
+
+    uint64_t duration = clock_elapsed(start);
+
+    CONSOLE("Coredump written in %"PRIu64" msec", duration);
+    return true;
+}
+
+/**
+ *  Spawn a remote gdb console.
+ *
+ *  This is done in three steps:
+ *  - Write coredump on memtrace-fs socket
+ *  - Open coredump with gdb on Host
+ *  - Forward user input to gdb on Host
+ * */
+static bool memtrace_gdb(app_t *app) {
+    enum {
+        FS_SOCKET,
+        USERIN,
+    };
     FILE *fp = app->fs.socket;
+
+    if (!fp) {
+        TRACE_ERROR("gdb not supported when running memtrace in local mode");
+        return false;
+    }
+
     fprintf(fp, GDB_REQUEST " gdb=%s\n", app->gdb);
     fprintf(fp, "%s\n", app->program_name);
     coredump_write(app->pid, ftrace_memfd(&app->ftrace), fp);
+
+    int fs_socket = fileno(app->fs.socket);
+
+    while (true) {
+        struct pollfd fds[] = {
+            [FS_SOCKET] = {
+                .fd = fs_socket,
+                .events = POLLIN,
+            },
+            [USERIN] = {
+                .fd = 0,
+                .events = POLLIN,
+            },
+        };
+
+        if (poll(fds, countof(fds), -1) < 0) {
+            TRACE_ERROR("poll error: %m");
+            return false;
+        }
+
+        if (fds[FS_SOCKET].revents & POLLIN) {
+            char *end = NULL;
+            ssize_t len = read(fs_socket, g_buff, sizeof(g_buff));
+            if (len < 0) {
+                TRACE_ERROR("read error: %m");
+                return false;
+            }
+            if (len == 0) {
+                TRACE_ERROR("read-end closed");
+                return false;
+            }
+            if ((end = strstr(g_buff, GDB_REPLY_END))) {
+                *end = 0;
+                write(1, g_buff, (end-g_buff));
+                return true;
+            }
+            if (write(1, g_buff, len) < 0) {
+                TRACE_ERROR("write error: %m");
+                return false;
+            }
+        }
+        if (fds[USERIN].revents & POLLIN) {
+            ssize_t len = read(0, g_buff, sizeof(g_buff));
+            if (len < 0) {
+                TRACE_ERROR("read error: %m");
+                return false;
+            }
+            if (len == 0) {
+                TRACE_ERROR("read-end closed");
+                return false;
+            }
+            if (write(1, g_buff, len) < 0) {
+                TRACE_ERROR("write error: %m");
+                return false;
+            }
+            if (write(fs_socket, g_buff, len) < 0) {
+                TRACE_ERROR("write error: %m");
+                return false;
+            }
+        }
+        if (fds[FS_SOCKET].revents & POLLHUP) {
+            CONSOLE("fs socket POLLHUP");
+            return false;
+        }
+        if (fds[USERIN].revents & POLLHUP) {
+            TRACE_ERROR("user input POLLHUP");
+            return false;
+        }
+    }
+
+    return true;
 }
 
 static void allocations_maps_destroy(void *key, hashmap_iterator_t *it) {
@@ -313,6 +442,60 @@ static void memtrace_console_clear(console_t *console, int argc, char *argv[]) {
     memtrace_clear(app);
 }
 
+static void memtrace_console_coredump(console_t *console, int argc, char *argv[]) {
+    app_t *app = container_of(console, app_t, console);
+
+    if (argc <= 1) {
+        CONSOLE("Usage: coredump [NUMBER]\n"
+                "Mark the memory allocation context [NUMBER] for coredump generation\n");
+        return;
+    }
+
+    int number = 0;
+    int lookup = atoi(argv[1]);
+    hashmap_iterator_t *it = NULL;
+    hashmap_for_each(it, &app->blocks) {
+        block_t *block = container_of(it, block_t, it);
+
+        if (number == lookup) {
+            block->number = number;
+            block->do_coredump = true;
+            CONSOLE("Marking context number %d for coredump generation", lookup);
+            return;
+        }
+        number++;
+    }
+
+    CONSOLE("Memory allocation context number %d not found", lookup);
+}
+
+static void memtrace_console_gdb(console_t *console, int argc, char *argv[]) {
+    app_t *app = container_of(console, app_t, console);
+
+    if (argc <= 1) {
+        CONSOLE("Usage: gdb [NUMBER]\n"
+                "Mark the memory allocation context [NUMBER] for gdb inspection\n");
+        return;
+    }
+
+    int number = 0;
+    int lookup = atoi(argv[1]);
+    hashmap_iterator_t *it = NULL;
+    hashmap_for_each(it, &app->blocks) {
+        block_t *block = container_of(it, block_t, it);
+
+        if (number == lookup) {
+            block->number = number;
+            block->do_gdb = true;
+            CONSOLE("Marking context number %d for gdb inspection", lookup);
+            return;
+        }
+        number++;
+    }
+
+    CONSOLE("Memory allocation context number %d not found", lookup);
+}
+
 // TODO: remove function ?
 /*
 void dwarf_print_callstack(app_t *app, size_t *callstack) {
@@ -379,6 +562,25 @@ block_t *alloc_unwind(app_t *app, const ftrace_fcall_t *fcall) {
     }
     block->count += 1;
 
+    // check flags
+    if (block->do_coredump) {
+        CONSOLE("Generating coredump for memory allocation context n°%zu", block->number);
+        CONSOLE("%zd bytes in %zd blocks were not free", block->size, block->count);
+        memtrace_write_local_coredump(app, "/tmp/core");
+        CONSOLE_RAW("\n> ");
+        block->do_coredump = false;
+    }
+    if (block->do_gdb) {
+        CONSOLE("Attaching gdb to memory allocation context n°%zu", block->number);
+        CONSOLE("%zd bytes in %zd blocks were not free", block->size, block->count);
+        memtrace_gdb(app);
+        CONSOLE("Memtrace resuming execution");
+        CONSOLE_RAW("> ");
+        block->do_gdb = false;
+        // CTRL+C may be used to interrupt gdb. We should not exit event loop
+        exit_evlp = false;
+    }
+
     return block;
 }
 
@@ -440,7 +642,6 @@ bool memtrace_is_local(app_t *app) {
     return app->fs.cfg.type == fs_type_local;
 }
 
-
 static void memtrace_local_blocks_print(app_t *app, size_t max) {
     size_t i = 0;
     hashmap_iterator_t *it = NULL;
@@ -452,6 +653,7 @@ static void memtrace_local_blocks_print(app_t *app, size_t max) {
             break;
         }
 
+        CONSOLE("Memory allocation context n°%zu", i);
         CONSOLE("%zd bytes in %zd blocks were not free", block->size, block->count);
         if (block->big_callstack) {
             raw_print_callstack(app, block->big_callstack, app->big_callstack_size);
@@ -501,6 +703,7 @@ static void memtrace_client_blocks_print(app_t *app, size_t max) {
         }
 
 
+        fprintf(fp, "Memory allocation context n°%zu\n", i);
         fprintf(fp, "%zd bytes in %zd blocks were not free\n", block->size, block->count);
         if (block->big_callstack) {
             memtrace_client_callstack_print(app, block->big_callstack, app->big_callstack_size, fp);
@@ -784,7 +987,12 @@ static bool mmap_handler(const ftrace_fcall_t *fcall, void *userdata) {
         fcall->arg1, fcall->arg2, fcall->arg3, fcall->arg4, (int)fcall->arg5, fcall->arg6, rtfcall.retval);
 
     if (!app->libraries) {
-        app->libraries = libraries_create(app->pid, &app->fs);
+        const libraries_cfg_t cfg = {
+            .pid = app->pid,
+            .fs = &app->fs,
+            .debug_frame_section = (app->unwind == dwarf_unwind),
+        };
+        app->libraries = libraries_create(&cfg);
     }
     else {
         libraries_update(app->libraries);
@@ -846,6 +1054,8 @@ static void help() {
     CONSOLE("   --func2addr=ADDR            Convert function to address");
     CONSOLE("   --debugframe                Dump debug frame");
     CONSOLE("   --elfdump                   Dump ELF file");
+    CONSOLE("   --coredump                  Generate coredump from target process");
+    CONSOLE("   --gdb                       Inspect target process with gdb");
     CONSOLE("   -v, --verbose               Increase logging verbosity");
     fprintf(stderr,
             "   -z, --zone                  Set logging debug zone (");
@@ -965,21 +1175,6 @@ static void memtrace_stdin_handler(epoll_handler_t *self, int events) {
     console_poll(&app->console);
 }
 
-static uint64_t clock_elapsed(struct timespec start) {
-    struct timespec stop, diff;
-    clock_gettime(CLOCK_MONOTONIC, &stop);
-
-    if ((stop.tv_nsec - start.tv_nsec) < 0) {
-        diff.tv_sec = stop.tv_sec - start.tv_sec - 1;
-        diff.tv_nsec = stop.tv_nsec - start.tv_nsec + 1000000000ULL;
-    } else {
-        diff.tv_sec = stop.tv_sec - start.tv_sec;
-        diff.tv_nsec = stop.tv_nsec - start.tv_nsec;
-    }
-
-    return (1000ULL * diff.tv_sec) + (diff.tv_nsec / 1000000ULL);
-}
-
 static const console_cmd_t memtrace_console_commands[] = {
     {.name = "help",        .help = "Display this help", .handler = console_cmd_help},
     {.name = "quit",        .help = "Quit memtrace and show report", .handler = memtrace_console_quit},
@@ -987,9 +1182,8 @@ static const console_cmd_t memtrace_console_commands[] = {
     {.name = "monitor",     .help = "Monitor memory allocations", .handler = memtrace_console_monitor},
     {.name = "report",      .help = "Show memtrace report", .handler = memtrace_console_report},
     {.name = "clear",       .help = "Clear memory statistics", .handler = memtrace_console_clear},
-    {.name = "continue",    .help = "Continue process execution", .handler = NULL},
-    {.name = "backtrace",   .help = "Print process backtrace", .handler = NULL},
-    {.name = "breakpoint",  .help = "Set breakpoint", .handler = NULL},
+    {.name = "coredump",    .help = "Inspect memory alllocation with a coredump", .handler = memtrace_console_coredump},
+    {.name = "gdb",         .help = "Inspect memory allocation with gdb", .handler = memtrace_console_gdb},
     {0},
 };
 
@@ -1208,12 +1402,20 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    snprintf(g_buff, sizeof(g_buff), "/proc/%d/exe", app.pid);
-    if (readlink(g_buff, g_buff, sizeof(g_buff)) < 0) {
+    char name[32];
+    snprintf(name, sizeof(name), "/proc/%d/exe", app.pid);
+    if (readlink(name, g_buff, sizeof(g_buff)) < 0) {
         TRACE_ERROR("Failed to read program name: %m");
         return 1;
     }
     app.program_name = strdup(g_buff);
+
+    if (do_coredump) {
+        return memtrace_write_local_coredump(&app, "/tmp/core") ? 0 : 1;
+    }
+    if (do_gdb) {
+        return memtrace_gdb(&app) ? 0 : 1;
+    }
 
     const hashmap_cfg_t allocations_maps_cfg = {
         .size       = 4000,
@@ -1248,40 +1450,12 @@ int main(int argc, char* argv[]) {
     if (app.attachpid) {
         // Process is already running:
         // Try to set breakpoints now and create process maps
-        app.libraries = libraries_create(app.pid, &app.fs);
-
-        if (do_coredump) {
-            if (!app.libraries) {
-                TRACE_ERROR("Failed to open libraries");
-                return 1;
-            }
-
-            FILE *fp = fopen("core", "w");
-            if (fp) {
-                CONSOLE("Generating coredump");
-                struct timespec start;
-                clock_gettime(CLOCK_MONOTONIC, &start);
-                coredump_write(app.pid, ftrace_memfd(&app.ftrace), fp);
-                uint64_t duration = clock_elapsed(start);
-
-                CONSOLE("Done in %"PRIu64" msec", duration);
-                fclose(fp);
-            }
-            return 0;
-        }
-        if (do_gdb) {
-            if (!app.libraries) {
-                TRACE_ERROR("Failed to open libraries");
-                return 1;
-            }
-
-            CONSOLE("Send GDB Request");
-            struct timespec start;
-            clock_gettime(CLOCK_MONOTONIC, &start);
-            memtrace_gdb_request(&app);
-            uint64_t duration = clock_elapsed(start);
-            CONSOLE("Done in %"PRIu64" msec", duration);
-        }
+        const libraries_cfg_t cfg = {
+            .pid = app.pid,
+            .fs = &app.fs,
+            .debug_frame_section = (app.unwind == dwarf_unwind),
+        };
+        app.libraries = libraries_create(&cfg);
 
         if (!app_set_breakpoints(&app)) {
             return 1;

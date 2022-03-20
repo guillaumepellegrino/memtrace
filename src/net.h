@@ -21,6 +21,8 @@
 #ifndef FTRACE_NET_H
 #define FTRACE_NET_H
 
+#include "types.h"
+
 /**
  * Create a TCP socket and connect to the client denominated by addr:port using getaddrinfo()
  */
@@ -45,5 +47,7 @@ int mcast_listen(const char *address, const char *port);
  * Send packet on UDP Multicast socket
  */
 int mcast_send(int fd, const void *buf, size_t count, const char *address, const char *port);
+
+bool fd_transfer(int from, int to);
 
 #endif

@@ -332,6 +332,21 @@ static void test_hugecalloc(selftest_t *st) {
     */
 }
 
+static bool action_loop() {
+    CONSOLE("malloc=%p", malloc);
+    while (true) {
+        size_t i = 0;
+        for (i = 0; i < 3; i++) {
+            int *ptr = action_do_alloc_2(4);
+            TRACE_DEBUG("%p", ptr);
+        }
+        sleep(1);
+        int *ptr = malloc(8);
+        TRACE_DEBUG("%p", ptr);
+    }
+    return true;
+}
+
 static test_scenario_t test_scenarios[] = {
     {"calloc", action_calloc, test_calloc},
     {"malloc", action_malloc, test_malloc},
@@ -341,6 +356,7 @@ static test_scenario_t test_scenarios[] = {
     {"reallocarray", action_reallocarray, test_reallocarray},
     {"multimalloc", action_multimalloc, test_multimalloc},
     {"hugecalloc", action_hugecalloc, test_hugecalloc},
+    {"loop", action_loop, NULL},
 };
 
 static bool run_action(const char *action) {
@@ -421,6 +437,9 @@ static bool selftest(const char *scenario_name) {
         test_scenario_t *scenario = &test_scenarios[st.idx];
 
         if (scenario_name && strcmp(scenario->name, scenario_name)) {
+            continue;
+        }
+        if (!scenario->action || !scenario->test) {
             continue;
         }
 

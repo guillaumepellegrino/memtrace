@@ -43,6 +43,7 @@
 #include "addr2line.h"
 #include "elf.h"
 #include "gdb.h"
+#include "net.h"
 
 #define FS_DEFAULT_MCASTADDR "224.0.0.251"
 #define FS_DEFAULT_BINDADDR "::0"
@@ -449,7 +450,6 @@ static bool fs_transfer_coredump(fs_t *server, const char *filename) {
     hdr = elf_header(elf);
     xbytes = hdr->e_shoff + (hdr->e_shentsize * hdr->e_shnum) - elf_header_len;
 
-    CONSOLE("xbytes=0x%zx", xbytes);
     if (!file_transfer(server->socket, fp, xbytes)) {
         TRACE_ERROR("Failed to transfer coredump");
         goto error;
@@ -475,9 +475,13 @@ static bool fs_serve_gdb_request(fs_t *server, char *request) {
     const char cmd[] = GDB_REQUEST " gdb=";
     char filename[] = "/tmp/memtrace-target.core";
     gdb_cfg_t cfg = {
-        .solib_search_path = server->sysroot,
+        .solib_search_path = &server->cfg.directories,
+        .sysroot = server->sysroot,
         .coredump = filename,
+        .userin = server->socket,
+        .userout = server->socket,
     };
+    gdb_t gdb = {0};
     char *sep = NULL;
 
 
@@ -499,19 +503,24 @@ static bool fs_serve_gdb_request(fs_t *server, char *request) {
         goto error;
     }
 
-    if (!cfg.solib_search_path) {
+    if (!cfg.sysroot) {
         TRACE_ERROR("Unknown sysroot");
         goto error;
     }
 
-    if (!gdb_initialize(&cfg)) {
+    CONSOLE("Starting %s", cfg.gdb_binary);
+    if (!gdb_initialize(&gdb, &cfg)) {
         TRACE_ERROR("Failed to start gdb");
         goto error;
     }
+    gdb_backtrace(&gdb);
+    gdb_interact(&gdb);
+    fprintf(server->socket, "\n"GDB_REPLY_END"\n");
+    CONSOLE("Done");
 
     rt = true;
 error:
-    gdb_cleanup();
+    gdb_cleanup(&gdb);
     return rt;
 }
 

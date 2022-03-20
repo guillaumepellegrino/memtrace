@@ -439,11 +439,15 @@ void elf_program_note_add_prpsinfo(elf_program_note_t *note, int pid) {
 
 
     // Fill pr_fname from /proc/%d/exe
-    snprintf(g_buff, sizeof(g_buff), "/proc/%d/exe", pid);
-    if (readlink(g_buff, g_buff, sizeof(g_buff)) > 0) {
+    char name[32];
+    snprintf(name, sizeof(name), "/proc/%d/exe", pid);
+    if (readlink(name, g_buff, sizeof(g_buff)) > 0) {
         const char *sep = strrchr(g_buff, '/');
         const char *name = sep ? sep + 1 : g_buff;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-truncation"
         snprintf(info.pr_fname, sizeof(info.pr_fname), "%s", name);
+#pragma GCC diagnostic pop
     }
 
     // Fill pr_psargs from /proc/%d/cmdline

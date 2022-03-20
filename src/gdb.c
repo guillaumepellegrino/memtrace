@@ -4,64 +4,161 @@
 #include <string.h>
 #include <unistd.h>
 #include <stdarg.h>
+#include <poll.h>
 #include "gdb.h"
+#include "net.h"
 #include "log.h"
-#include "process.h"
 
-static process_t gdb_process;
-
-void gdb_cmd(const char *fmt, ...) {
+static void gdb_print(gdb_t *gdb, const char *fmt, ...) {
     va_list ap;
+
     va_start(ap, fmt);
-    vfprintf(stderr, fmt, ap);
-    vfprintf(gdb_process.input, fmt, ap);
-    fflush(gdb_process.input);
+    vfprintf(gdb->userout, fmt, ap);
     va_end(ap);
 }
 
-bool gdb_initialize(const gdb_cfg_t *cfg) {
+static void gdb_expect(gdb_t *gdb, const char *expect) {
+    int i = 0;
+    int c = 0;
+    while ((c = fgetc(gdb->process.output)) != EOF) {
+        fputc(c, gdb->userout);
+        fflush(gdb->userout);
+
+        if (c == '\n') {
+            i = 0;
+            continue;
+        }
+
+        g_buff[i++] = c;
+        g_buff[i] = 0;
+
+        if (!strncmp(g_buff, expect, strlen(expect))) {
+            break;
+        }
+    }
+}
+
+static void gdb_cmd(gdb_t *gdb, const char *fmt, ...) {
+    va_list ap;
+
+    va_start(ap, fmt);
+    vfprintf(gdb->userout, fmt, ap);
+    va_end(ap);
+
+    va_start(ap, fmt);
+    vfprintf(gdb->process.input, fmt, ap);
+    va_end(ap);
+
+    fflush(gdb->process.input);
+    gdb_expect(gdb, "(gdb) ");
+}
+
+bool gdb_initialize(gdb_t *gdb, const gdb_cfg_t *cfg) {
     const char *argv[] = {cfg->gdb_binary, NULL};
 
-    if (!process_start(&gdb_process, argv)) {
+    if (!cfg->gdb_binary) {
+        TRACE_ERROR("Missing gdb binary");
+        return false;
+    }
+    if (!cfg->sysroot) {
+        TRACE_ERROR("Missing gdb sysroot");
+        return false;
+    }
+    if (!cfg->tgt_binary) {
+        TRACE_ERROR("Missing gdb target binary");
+        return false;
+    }
+    if (!cfg->coredump) {
+        TRACE_ERROR("Missing gdb target binary");
+        return false;
+    }
+    if (!cfg->userin || !cfg->userout) {
+        TRACE_ERROR("Missing user input or output parameter");
+        return false;
+    }
+
+    gdb->userin = cfg->userin;
+    gdb->userout = cfg->userout;
+    gdb_print(gdb, "Starting process '%s'\n", cfg->gdb_binary);
+    if (!process_start(&gdb->process, argv)) {
         TRACE_ERROR("Failed to start gdb");
         return false;
     }
 
-    gdb_cmd("set pagination off\n");
-    gdb_cmd("directory .\n");
-    gdb_cmd("set sysroot %s\n", cfg->sysroot);
-    gdb_cmd("set solib-search-path %s\n", cfg->solib_search_path);
-    gdb_cmd("set file %s\n", cfg->tgt_binary);
-    gdb_cmd("core-file %s\n", cfg->coredump);
-
-    while (fgets(g_buff, sizeof(g_buff), gdb_process.output)) {
-        char *sep = NULL;
-
-        if ((sep = strchr(g_buff, '\n'))) {
-            *sep = 0;
-        }
-
-        CONSOLE("%s", g_buff);
+    gdb_expect(gdb, "(gdb) ");
+    gdb_cmd(gdb, "set sysroot %s\n", cfg->sysroot);
+    strlist_iterator_t *it = NULL;
+    strlist_for_each(it, cfg->solib_search_path) {
+        const char *str = strlist_iterator_value(it);
+        gdb_cmd(gdb, "set solib-search-path %s\n", str);
     }
+    gdb_cmd(gdb, "directory .\n");
+    gdb_cmd(gdb, "file %s\n", cfg->tgt_binary);
+    gdb_cmd(gdb, "core-file %s\n", cfg->coredump);
 
     return true;
 }
 
-void gdb_cleanup() {
-    process_stop(&gdb_process);
+void gdb_cleanup(gdb_t *gdb) {
+    process_stop(&gdb->process);
 }
 
-void gdb_load(const char *filename) {
-
+void gdb_backtrace(gdb_t *gdb) {
+    gdb_cmd(gdb, "backtrace\n");
 }
 
-char *gdb_backtrace() {
-    char *backtrace = NULL;
+bool gdb_interact(gdb_t *gdb) {
+    enum {
+        GDBOUT,
+        USERIN,
+    };
 
-    fprintf(gdb_process.input, "backtrace\n");
-    fflush(gdb_process.input);
+    int gdbin = fileno(gdb->process.input);
+    int gdbout = fileno(gdb->process.output);
+    int userin = fileno(gdb->userin);
+    int userout = fileno(gdb->userout);
 
-    return backtrace;
+    fflush(gdb->process.output);
+    fflush(gdb->userout);
+
+    while (true) {
+        struct pollfd fds[] = {
+            [GDBOUT] = {
+                .fd = gdbout,
+                .events = POLLIN,
+            },
+            [USERIN] = {
+                .fd = userin,
+                .events = POLLIN,
+            },
+        };
+
+        if (poll(fds, countof(fds), -1) < 0) {
+            TRACE_ERROR("poll error: %m");
+            break;
+        }
+
+        if (fds[GDBOUT].revents & POLLIN) {
+            if (!fd_transfer(gdbout, userout)) {
+                TRACE_ERROR("Failed to transfer gdb output to user output");
+                return false;
+            }
+        }
+        if (fds[USERIN].revents & POLLIN) {
+            if (!fd_transfer(userin, gdbin)) {
+                TRACE_ERROR("Failed to transfer user input to user input");
+                return false;
+            }
+        }
+        if (fds[GDBOUT].revents & POLLHUP) {
+            CONSOLE("gdbout POLLHUP");
+            return true;
+        }
+        if (fds[USERIN].revents & POLLHUP) {
+            TRACE_ERROR("userin POLLHUP");
+            return false;
+        }
+    };
+
+    return true;
 }
-
-

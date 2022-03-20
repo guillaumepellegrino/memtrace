@@ -41,20 +41,21 @@
 #include "ptrace.h"
 #include "log.h"
 
-bool ftrace_wait(ftrace_t *ftrace, int *status) {
+static bool ftrace_wait(ftrace_t *ftrace, int *status, int timeout) {
     struct epoll_event event = {0};
     struct signalfd_siginfo fdsi;
 
 
     while (true) {
         int cnt = 0;
-        if ((cnt = epoll_wait(ftrace->epfd, &event, 1, 1000)) < 0) {
+        if ((cnt = epoll_wait(ftrace->epfd, &event, 1, timeout)) < 0) {
             TRACE_ERROR("epoll_wait() error: %m");
             return false;
         }
 
         if (cnt == 0) {
-            continue;
+            TRACE_WARNING("epoll_wait() timeout");
+            return false;
         }
         if (event.data.ptr == ftrace) {
             break;
@@ -122,7 +123,7 @@ bool ftrace_attach(ftrace_t *ftrace, int pid) {
     }
 
     //if (!ptrace_wait(ftrace->pid, &status)) {
-    if (!ftrace_wait(ftrace, &status)) {
+    if (!ftrace_wait(ftrace, &status, -1)) {
         return false;
     }
 
@@ -146,9 +147,8 @@ void ftrace_detach(ftrace_t *ftrace) {
         }
 
         int status = 0;
-        //if (!ptrace_wait(ftrace->pid, &status)) {
-        if (!ftrace_wait(ftrace, &status)) {
-            TRACE_ERROR("ptrace wait failed: %m");
+        if (!ftrace_wait(ftrace, &status, 1000)) {
+            TRACE_WARNING("ptrace wait error");
         }
     }
 
@@ -283,6 +283,14 @@ bool ftrace_set_syscall_breakpoint(ftrace_t *ftrace, int syscallnumber, ftrace_h
     return true;
 }
 
+static bool ftrace_fill_fcall(ftrace_t *ftrace) {
+    if (!arch.ftrace_fcall_fill(&ftrace->fcall, ftrace->pid)) {
+        return false;
+    }
+    ftrace->fcall.ftrace = ftrace;
+    return true;
+}
+
 bool ftrace_poll(ftrace_t *ftrace) {
     bool rt = false;
     int status = -1;
@@ -322,7 +330,7 @@ bool ftrace_poll(ftrace_t *ftrace) {
     }
 
     //if (!ptrace_wait(ftrace->pid, &status)) {
-    if (!ftrace_wait(ftrace, &status)) {
+    if (!ftrace_wait(ftrace, &status, -1)) {
         if (errno == EINTR) {
             // ptrace_wait() was interrupted
             // interrupt child process and exit poll function
@@ -334,15 +342,10 @@ bool ftrace_poll(ftrace_t *ftrace) {
         goto exit;
     }
 
-    if (!arch.ftrace_fcall_fill(&ftrace->fcall, ftrace->pid)) {
-        goto exit;
-    }
-    ftrace->fcall.ftrace = ftrace;
-
-
     if (ptrace_terminated(status)) {
         TRACE_WARNING("Process terminated");
         if (WIFSTOPPED(status)) {
+            ftrace_fill_fcall(ftrace);
             ftrace_fcall_dump(&ftrace->fcall);
         }
         goto exit;
@@ -355,6 +358,7 @@ bool ftrace_poll(ftrace_t *ftrace) {
             list_for_each(it, &ftrace->syscalls) {
                 syscall_t *syscall = syscall_from_iterator(it);
                 if (ftrace->fcall.syscall == syscall_number(syscall)) {
+                    ftrace_fill_fcall(ftrace);
                     ftrace_fcall_t fcall = ftrace->fcall;
                     if (!syscall_call(syscall, &fcall)) {
                         goto exit;
@@ -364,6 +368,7 @@ bool ftrace_poll(ftrace_t *ftrace) {
         }
     }
     else {
+        ftrace_fill_fcall(ftrace);
         TRACE_DEBUG("Process %d stopped by interrupt at 0x%lx", ftrace->pid, ftrace->fcall.pc);
         list_iterator_t *it;
         list_for_each(it, &ftrace->breakpoints) {
@@ -447,7 +452,7 @@ bool ftrace_syscall_get_rv(const ftrace_fcall_t *fcall, ftrace_fcall_t *rtfcall)
         return false;
     }
     //if (!ptrace_wait(ftrace->pid, &status)) {
-    if (!ftrace_wait(ftrace, &status)) {
+    if (!ftrace_wait(ftrace, &status, -1)) {
         TRACE_ERROR("ptrace_wait(%d) failed: %m", ftrace->pid);
         return false;
     }

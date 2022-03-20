@@ -35,8 +35,7 @@
 #include "log.h"
 
 struct _libraries {
-    int pid;
-    fs_t *fs;
+    libraries_cfg_t cfg;
     size_t count;
     library_t *list;
 };
@@ -92,8 +91,8 @@ static bool libraries_contains(libraries_t *libraries, const void *begin, const 
     return NULL;
 }
 
-static void libraries_entry_add(library_t *library, void *begin, void *end, const char *name, fs_t *fs) {
-    elf_t *elf = elf_open(name, fs);
+static void libraries_entry_add(libraries_t *libraries, library_t *library, void *begin, void *end, const char *name) {
+    elf_t *elf = elf_open(name, libraries->cfg.fs);
     const program_header_t *program = elf_program_header_executable(elf);
 
     memset(library, 0, sizeof(*library));
@@ -105,29 +104,33 @@ static void libraries_entry_add(library_t *library, void *begin, void *end, cons
 
     CONSOLE("Opening %s begin=%p offset=%zx", name, library->begin, library->offset);
 
-    if (!(library->frame_hdr_file = elf_section_open_from_name(elf, ".debug_frame_hdr"))) {
-        if (!(library->frame_hdr_file = elf_section_open_from_name(elf, ".eh_frame_hdr"))) {
-            TRACE_LOG("%s: .debug_frame_hdr/.eh_frame_hdr section not found", library->name);
+    if (libraries->cfg.debug_frame_section) {
+        if (!(library->frame_hdr_file = elf_section_open_from_name(elf, ".debug_frame_hdr"))) {
+            if (!(library->frame_hdr_file = elf_section_open_from_name(elf, ".eh_frame_hdr"))) {
+                TRACE_LOG("%s: .debug_frame_hdr/.eh_frame_hdr section not found", library->name);
+            }
+        }
+        if (!(library->frame_file = elf_section_open_from_name(elf, ".debug_frame"))) {
+            if (!(library->frame_file = elf_section_open_from_name(elf, ".eh_frame"))) {
+                TRACE_ERROR("%s: .debug_frame/.eh_frame section not found", library->name);
+            }
         }
     }
-    if (!(library->frame_file = elf_section_open_from_name(elf, ".debug_frame"))) {
-        if (!(library->frame_file = elf_section_open_from_name(elf, ".eh_frame"))) {
-            TRACE_ERROR("%s: .debug_frame/.eh_frame section not found", library->name);
-        }
-    }
-    //if (!(library->abbrev_file = elf_section_open_from_name(elf, ".debug_abbrev"))) {
-    //    TRACE_LOG("%s: .debug_abbrev section not found", library->name);
-    //}
-    //if (!(library->info_file = elf_section_open_from_name(elf, ".debug_info"))) {
-    //    TRACE_LOG("%s: .debug_info section not found", library->name);
-    //}
-    //if (!(library->str_file = elf_section_open_from_name(elf, ".debug_str"))) {
-    //    TRACE_LOG("%s: .debug_str section not found", library->name);
-    //}
-    //if (!(library->line_file = elf_section_open_from_name(elf, ".debug_line"))) {
-    //    TRACE_LOG("%s: .debug_line section not found", library->name);
-    //}
 
+    if (libraries->cfg.debug_info_section) {
+        if (!(library->abbrev_file = elf_section_open_from_name(elf, ".debug_abbrev"))) {
+            TRACE_LOG("%s: .debug_abbrev section not found", library->name);
+        }
+        if (!(library->info_file = elf_section_open_from_name(elf, ".debug_info"))) {
+            TRACE_LOG("%s: .debug_info section not found", library->name);
+        }
+        if (!(library->str_file = elf_section_open_from_name(elf, ".debug_str"))) {
+            TRACE_LOG("%s: .debug_str section not found", library->name);
+        }
+        if (!(library->line_file = elf_section_open_from_name(elf, ".debug_line"))) {
+            TRACE_LOG("%s: .debug_line section not found", library->name);
+        }
+    }
 
     if (!(library->dynsym_file = elf_section_open_from_name(elf, ".dynsym"))) {
         TRACE_ERROR("%s: .dynsym section not found", library->name);
@@ -155,12 +158,11 @@ static void libraries_entry_add(library_t *library, void *begin, void *end, cons
     }
 }
 
-libraries_t *libraries_create(int pid, fs_t *fs) {
+libraries_t *libraries_create(const libraries_cfg_t *cfg) {
     libraries_t *libraries = calloc(1, sizeof(libraries_t));
     assert(libraries);
 
-    libraries->pid = pid;
-    libraries->fs = fs;
+    libraries->cfg = *cfg;
 
     libraries_update(libraries);
     return libraries;
@@ -169,7 +171,7 @@ libraries_t *libraries_create(int pid, fs_t *fs) {
 void libraries_update(libraries_t *libraries) {
     assert(libraries);
 
-    snprintf(g_buff, sizeof(g_buff), "/proc/%d/maps", libraries->pid);
+    snprintf(g_buff, sizeof(g_buff), "/proc/%d/maps", libraries->cfg.pid);
 
     //copy file in buffer
     FILE *fp = fopen(g_buff, "r");
@@ -213,7 +215,7 @@ void libraries_update(libraries_t *libraries) {
             libraries->list = realloc(libraries->list, sizeof(library_t)*(libraries->count + 1));
             assert(libraries->list);
             library = &libraries->list[libraries->count];
-            libraries_entry_add(library, begin, end, name, libraries->fs);
+            libraries_entry_add(libraries, library, begin, end, name);
             libraries->count++;
         }
     }
@@ -343,5 +345,9 @@ size_t library_relative_address(const library_t *library, size_t address) {
 
 size_t library_absolute_address(const library_t *library, size_t address) {
     assert(library);
-    return (address + ((size_t) library->begin)) + library->offset;
+
+    // TODO : Is it still working on ARM ?
+    //return (address + ((size_t) library->begin)) + library->offset;
+
+    return (address + ((size_t) library->begin)) - library->offset;
 }

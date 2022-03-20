@@ -1,47 +1,58 @@
 
-## Overview
-memtrace is a debugger allowing to trace memory allocations for debugging memory leaks.
+## 1. Overview
+memtrace is a debugger allowing to trace memory allocations for debugging memory leaks targeted for Linux Embedded Systems.
 
 It's main advantages are:
+
 - It can be attached to a process already runninng
-- Reliable callstack based on debug symbols (implementation in progress)
 - Cross-debugging (No debug symbols needed on the target process)
+- gdb support for inspecting memory allocation context
 - Supported Platforms: x64, arm
 
-## Debugging with MEMTRACE
+## 2. Local debugging with MEMTRACE
+### 2.1 Architecture
 ```
- TARGET   ptrace TARGET
-memtrace <-----> process (with debug symbols)
+  HOST    ptrace   HOST
+memtrace <------> process (with debug symbols)
+addr2line
+gdb
 ```
 
 - memtrace set breakpoints on malloc, calloc, free, realloc (with ptrace) to follow memory allocations
 - memtrace retrieve the callstack of the target process each time it performs a memory allocation
+- memtrace rely on addr2line and gdb to analyse callstack
 - target process and libraries MUST have debug symbols (.debug_info elf section)
 
-### Compilation
+### 2.2 Compilation
 ```
 $ cd memtrace
 $ make
 $ make install
 ```
 
-### Usage
+### 2.3 Usage
 ```
 memtrace [OPTION]... -p PID
 memtrace [OPTION]... PROGRAM [ARG]...
 ```
 
-## Cross-debugging with MEMTRACE
+## 3. Cross-debugging with MEMTRACE
+### 3.1 Architecture
+
 ```
-    HOST       TCP    TARGET   ptrace TARGET
-memtrace-fs <------> memtrace <-----> process (without debug symbols)
+    HOST       TCP    TARGET   ptrace  TARGET
+memtrace-fs <------> memtrace <------> process (without debug symbols)
 stagingdir
+gdb
+addr2line
 ```
 
 - memtrace can be attached to a process without debug symbols (Example: Embedded systems with limited flash memory)
+- memtrace-fs provide addr2line and gdb tools to memtrace for callstack analysis
 - memtrace-fs provide the libraries with debug symbols to memtrace through a TCP socket
 
-### Cross-Compilation
+
+### 3.2 Cross-Compilation
 ```
 $ cd memtrace
 $ export CC=arm-linux-gnueabi-gcc
@@ -49,7 +60,7 @@ $ make
 $ make install
 ```
 
-### Local network
+### 3.3 Local network
 ```
 # Start memtrace-fs on Host.
 # The service will listen on port 3002 and annouce itself with multicast.
@@ -90,7 +101,7 @@ Set breakpoint on reallocarray in /lib/libc.so.6:0x74484 (0xf6e47484)
 Set breakpoint on free in /lib/libc.so.6:0x7162c (0xf6e4462c)
 ```
 
-### Non local nework
+### 3.4 Non local nework
 When target is not running on local network, memtrace can not rely on multicast to discover memtrace-fs.
 In this case, it is useful to start memtrace as a tcp server and memtrace-fs as a tcp client. Roles can be inverted if needed.
 
@@ -133,26 +144,35 @@ Set breakpoint on free in /lib/libc.so.6:0x7162c (0xf6e4462c)
 > 
 ```
 
-### Usage
+## 4. Console Usage
 memtrace provide a console to inspect the HEAP usage. It currently offers the following commands:
 ```
 > help
 List of commands:
        help: Display this help
-       quit: Quit memtrace
+       quit: Quit memtrace and show report
      status: Show memtrace status
     monitor: Monitor memory allocations
      report: Show memtrace report
       clear: Clear memory statistics
+   coredump: Inspect memory alllocation with a coredump
+        gdb: Inspect memory allocation with gdb
+```
 
-# Show HEAP summary
+### 4.1 Show HEAP summary
+This command allow to show the HEAP status.
+  
+Following the HEAP status evolution may help to detect when a program is leaking meory.
+```
 > status
 HEAP SUMMARY Wed Feb 23 16:31:51 2022
 
     in use: 0 bytes in 0 blocks
     total heap usage: 205 allocs, 205 frees, 51885 bytes allocated
+```
 
-# Clear current statistics
+### 4.2 Clear current statistics
+```
 > clear
 Clearing list of allocations
 >
@@ -162,45 +182,135 @@ HEAP SUMMARY Wed Feb 23 16:32:08 2022
     in use: 0 bytes in 0 blocks
     total heap usage: 0 allocs, 0 frees, 0 bytes allocated
 >
+```
 
-# Monitor every 3x seconds the HEAP status
+### 4.3 Monitor the HEAP status
+This command allow to monitor every 3x seconds the HEAP status.
+
+It is convenient way to avoid running **status** command in loop.
+```
 > monitor 3 
 Start monitoring
 HEAP SUMMARY Wed Feb 23 16:35:43 2022
 
     in use: 0 bytes in 0 blocks
     total heap usage: 82 allocs, 82 frees, 20754 bytes allocated
-> HEAP SUMMARY Wed Feb 23 16:35:46 2022
+
+HEAP SUMMARY Wed Feb 23 16:35:46 2022
 
     in use: 0 bytes in 0 blocks
     total heap usage: 123 allocs, 123 frees, 31131 bytes allocated
+```
 
-# Show complete HEAP report with backtrace of each allocation
-# No memory loss, here
+### 4.4 Show complete HEAP report with backtrace of each allocation
+Example with selftest:
+```
 > report
 [libraries]
-[0xab0b2000-0xab0eb000] [/sbin/dnsmasq]
-[0xf6d58000-0xf6d70000] [/usr/lib/pcb/libpcb_serialize_odl.so]
-[0xf6d81000-0xf6d8b000] [/usr/lib/pcb/libpcb_serialize_ddw.so]
-[0xf6d9c000-0xf6da5000] [/lib/libnss_files.so.2]
-[0xf6dbc000-0xf6dc2000] [/lib/librt.so.1]
-[0xf6dd3000-0xf6efe000] [/lib/libc.so.6]
-[0xf6f14000-0xf6f16000] [/lib/libsahtrace.so]
-[0xf6f27000-0xf6f29000] [/lib/libdl.so.2]
-[0xf6f3a000-0xf6f50000] [/lib/libpthread.so.0]
-[0xf6f63000-0xf6f7b000] [/lib/libpcb_utils.so]
-[0xf6f8c000-0xf6f98000] [/lib/libpcb_sl.so]
-[0xf6fa9000-0xf6fe9000] [/lib/libpcb_dm.so]
-[0xf6ffb000-0xf6ffc000] [/lib/libpcb_preload.so]
-[0xf700d000-0xf702e000] [/lib/ld-2.26.so]
+[0x55d5771b6000-0x55d5771cb000] [/home/guillaume/Workspace/memtrace/target/memtrace]
+[0x7fada9bc6000-0x7fada9d0e000] [/usr/lib/x86_64-linux-gnu/libc-2.33.so]
+[0x7fada9d89000-0x7fada9dad000] [/usr/lib/x86_64-linux-gnu/ld-2.33.so]
 
 [memtrace] report
-HEAP SUMMARY:
-    in use at exit: 0 bytes in 0 blocks
-    total heap usage: 164 allocs, 164 frees, 41508 bytes allocated
+Memory allocation context n°0
+252 bytes in 63 blocks were not free
+action_loop() in /home/guillaume/Workspace/memtrace/target/../src/selftest.c:341
+selftest_main() in /home/guillaume/Workspace/memtrace/target/../src/selftest.c:510
+??:?() in thrd_yield
+??:?() in confstr
+main() in /home/guillaume/Workspace/memtrace/target/../src/memtrace.c:1280
+??:?() in _dl_rtld_di_serinfo
+??:?() in _dl_catch_exception
+??:?() in _dl_rtld_di_serinfo
+??:?() in _dl_exception_free
+memtrace_stdin_handler() in /home/guillaume/Workspace/memtrace/target/../src/memtrace.c:1175
 
+Memory allocation context n°1
+168 bytes in 21 blocks were not free
+action_loop() in /home/guillaume/Workspace/memtrace/target/../src/selftest.c:345
+selftest_main() in /home/guillaume/Workspace/memtrace/target/../src/selftest.c:510
+??:?() in thrd_yield
+??:?() in confstr
+main() in /home/guillaume/Workspace/memtrace/target/../src/memtrace.c:1280
+??:?() in _dl_rtld_di_serinfo
+??:?() in _dl_catch_exception
+??:?() in _dl_rtld_di_serinfo
+??:?() in _dl_exception_free
+memtrace_stdin_handler() in /home/guillaume/Workspace/memtrace/target/../src/memtrace.c:1175
 
-# Memtrace can also be run until program termination
+HEAP SUMMARY Sun Mar 20 12:38:54 2022
+
+    in use: 420 bytes in 2 blocks
+    total heap usage: 84 allocs, 0 frees, 420 bytes allocated
+> 
+```
+
+### 4.5 Generate a coredump for post-mortem analysis
+Let's generate a coredump for Memory allocation context n°0 from previous chapter.
+```
+> coredump 0
+Marking context number 0 for coredump generation
+> Generating coredump for memory allocation context n°0
+552 bytes in 139 blocks were not free
+Writing coredump to /tmp/core
+Coredump written in 5 msec
+
+```
+
+### 4.6 Inspect Memory allocation with GDB
+This command generate a coredump for Memory allocation context n°0 from Chapter 4.4 and open it with GDB. It provide an interactive console to GDB. When GDB exist, memtrace resume normal execution.
+```
+> gdb 0
+Marking context number 0 for gdb inspection
+> Attaching gdb to memory allocation context n°0
+1632 bytes in 409 blocks were not free
+Starting process 'gdb'
+GNU gdb (Debian 10.1-2) 10.1.90.20210103-git
+Copyright (C) 2021 Free Software Foundation, Inc.
+License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.
+Type "show copying" and "show warranty" for details.
+This GDB was configured as "x86_64-linux-gnu".
+Type "show configuration" for configuration details.
+For bug reporting instructions, please see:
+<https://www.gnu.org/software/gdb/bugs/>.
+Find the GDB manual and other documentation resources online at:
+    <http://www.gnu.org/software/gdb/documentation/>.
+
+For help, type "help".
+Type "apropos word" to search for commands related to "word".
+(gdb) set sysroot 
+(gdb) set solib-search-path .
+(gdb) set solib-search-path 
+(gdb) directory .
+Source directories searched: /home/guillaume/Workspace/memtrace:$cdir:$cwd
+(gdb) file /home/guillaume/Workspace/memtrace/target/memtrace
+Reading symbols from /home/guillaume/Workspace/memtrace/target/memtrace...
+(gdb) core-file /tmp/memtrace-target.core
+warning: core file may not match specified executable file.
+[New LWP 28190]
+Core was generated by `./target/memtrace --selftest --action loop'.
+#0  __libc_calloc (n=n@entry=1, elem_size=elem_size@entry=4) at malloc.c:3586
+3586	malloc.c: Aucun fichier ou dossier de ce type.
+(gdb) backtrace
+#0  __libc_calloc (n=n@entry=1, elem_size=elem_size@entry=4) at malloc.c:3586
+#1  0x000055d5771bf044 in action_do_alloc_2 (size=4) at ../src/selftest.c:248
+#2  action_loop () at ../src/selftest.c:340
+#3  0x000055d5771c0049 in run_action (action=<optimized out>) at ../src/selftest.c:370
+#4  selftest_main (argc=argc@entry=4, argv=argv@entry=0x7fff17acd5a8) at ../src/selftest.c:510
+#5  0x000055d5771b6a87 in main (argc=4, argv=0x7fff17acd5a8) at ../src/memtrace.c:1280
+(gdb) 
+(gdb) quit
+
+Memtrace resuming execution
+> 
+
+```
+
+### 4.7 Memtrace can also be run until program termination
+```
+
 # Example with selftest program
 guillaume@ubuntu: ~/workspace/memtrace$ ./target/memtrace ./target/memtrace --selftest --action multimalloc
 Running memtrace in local mode
@@ -261,11 +371,9 @@ Detaching from pid 24102
 ```
 
 
-## TODO
-- Improve search performance of FDE by auto-generating .eh_frame_hdr if missing
-- Improve compliance with DWARF standard (.eh_frame)
+## 5. TODO
 - Add MIPS support
 - Improve this README
-- Cleanup old references to libunwind and others
 - Improve console support (move cursor)
-
+- Improve search performance of FDE by auto-generating .eh_frame_hdr if missing
+- Improve compliance with DWARF standard (.eh_frame)

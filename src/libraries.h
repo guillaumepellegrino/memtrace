@@ -22,6 +22,20 @@
 #include <stdio.h>
 #include "types.h"
 
+typedef struct {
+    int pid;
+    fs_t *fs;
+
+    /** Load elf sections .debug_frame/.eh_frame
+     *  and .debug_frame_hdr/.eh_frame_hdr if set to true */
+    size_t debug_frame_section : 1;
+
+    /** Load elf sections .debug_abbrev, .debug_info,
+     * .debug_str and .debug_line if set to true*/
+    size_t debug_info_section : 1;
+} libraries_cfg_t;
+
+
 struct _library {
     /** A reference on the corresponding ELF file */
     elf_t *elf;
@@ -48,7 +62,7 @@ struct _library {
 };
 
 /** Create/Destroy/Update the library list by reading /proc/self/maps */
-libraries_t *libraries_create(int pid, fs_t *fs);
+libraries_t *libraries_create(const libraries_cfg_t *cfg);
 void libraries_destroy(libraries_t *libraries);
 void libraries_update(libraries_t *libraries);
 
