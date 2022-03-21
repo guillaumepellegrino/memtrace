@@ -475,8 +475,8 @@ static bool fs_serve_gdb_request(fs_t *server, char *request) {
     const char cmd[] = GDB_REQUEST " gdb=";
     char filename[] = "/tmp/memtrace-target.core";
     gdb_cfg_t cfg = {
-        .solib_search_path = &server->cfg.directories,
-        .sysroot = server->sysroot,
+        .sysroot = strlist_iterator_value(strlist_first(&server->cfg.directories)),
+        .solib_search_path = server->sysroot,
         .coredump = filename,
         .userin = server->socket,
         .userout = server->socket,

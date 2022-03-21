@@ -8,7 +8,7 @@
 typedef struct {
     const char *gdb_binary;
     const char *sysroot;
-    strlist_t *solib_search_path;
+    const char *solib_search_path;
     const char *tgt_binary;
     const char *coredump;
     FILE *userin;

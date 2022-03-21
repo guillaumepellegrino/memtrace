@@ -1404,6 +1404,7 @@ int main(int argc, char* argv[]) {
 
     char name[32];
     snprintf(name, sizeof(name), "/proc/%d/exe", app.pid);
+    memset(g_buff, 0, sizeof(g_buff));
     if (readlink(name, g_buff, sizeof(g_buff)) < 0) {
         TRACE_ERROR("Failed to read program name: %m");
         return 1;

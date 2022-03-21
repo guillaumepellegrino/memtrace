@@ -86,14 +86,10 @@ bool gdb_initialize(gdb_t *gdb, const gdb_cfg_t *cfg) {
     }
 
     gdb_expect(gdb, "(gdb) ");
-    gdb_cmd(gdb, "set sysroot %s\n", cfg->sysroot);
-    strlist_iterator_t *it = NULL;
-    strlist_for_each(it, cfg->solib_search_path) {
-        const char *str = strlist_iterator_value(it);
-        gdb_cmd(gdb, "set solib-search-path %s\n", str);
-    }
     gdb_cmd(gdb, "directory .\n");
-    gdb_cmd(gdb, "file %s\n", cfg->tgt_binary);
+    gdb_cmd(gdb, "set sysroot %s\n", cfg->sysroot);
+    gdb_cmd(gdb, "set solib-search-path %s/lib\n", cfg->solib_search_path);
+    gdb_cmd(gdb, "file %s%s\n", cfg->sysroot, cfg->tgt_binary);
     gdb_cmd(gdb, "core-file %s\n", cfg->coredump);
 
     return true;
