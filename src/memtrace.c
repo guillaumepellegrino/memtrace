@@ -245,7 +245,10 @@ static bool memtrace_gdb(app_t *app) {
             }
             if ((end = strstr(g_buff, GDB_REPLY_END))) {
                 *end = 0;
-                write(1, g_buff, (end-g_buff));
+                if (write(1, g_buff, (end-g_buff)) < 0) {
+                    TRACE_ERROR("write error: %m");
+                    return false;
+                }
                 return true;
             }
             if (write(1, g_buff, len) < 0) {
