@@ -445,8 +445,11 @@ void elf_program_note_add_prpsinfo(elf_program_note_t *note, int pid) {
     if (readlink(name, g_buff, sizeof(g_buff)) > 0) {
         const char *sep = strrchr(g_buff, '/');
         const char *name = sep ? sep + 1 : g_buff;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-truncation"
         snprintf(info.pr_fname, sizeof(info.pr_fname), "%s", name);
     }
+#pragma GCC diagnostic pop
 
     // Fill pr_psargs from /proc/%d/cmdline
     snprintf(g_buff, sizeof(g_buff), "/proc/%d/cmdline", pid);
