@@ -65,6 +65,7 @@ struct _fs {
  */
 bool fs_initialize(fs_t *fs, const fs_cfg_t *cfg);
 void fs_cleanup(fs_t *fs);
+fs_t *fs_local();
 
 /**
  * Open a file from provided File System

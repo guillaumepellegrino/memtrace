@@ -113,7 +113,7 @@ static inline uint32_t elf_file_read_u32(elf_file_t *file) {
         le32toh(value.u32) : be32toh(value.u32);
 }
 
-static inline uint32_t elf_file_read_u64(elf_file_t *file) {
+static inline uint64_t elf_file_read_u64(elf_file_t *file) {
     union {
         uint8_t b[8];
         uint64_t u64;

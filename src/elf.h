@@ -169,6 +169,7 @@ struct _section_header {
 };
 
 /** Open/Close ELF file */
+elf_t *elf_open_local(const char *name);
 elf_t *elf_open(const char *name, fs_t *fs);
 elf_t *elf_parse_header(const char *name, fs_t *fs);
 void elf_close(elf_t *elf);
@@ -190,5 +191,7 @@ const program_header_t *elf_program_header_executable(elf_t *elf);
 
 /** Get ELF Section Header by name */
 const section_header_t *elf_section_header_get(elf_t *elf, const char *name);
+const section_header_t *elf_section_header_getbyidx(elf_t *elf, uint16_t idx);
+
 
 #endif

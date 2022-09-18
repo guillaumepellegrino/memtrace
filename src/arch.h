@@ -42,9 +42,6 @@ struct _arch {
     const cpu_mode_t *cpu_modes;
     int cpu_mode;
 
-    bool ptrace_step_support;
-
-    bool (*step)(int pid);
     bool (*breakpoint_enable)(breakpoint_t *bp);
     bool (*breakpoint_disable)(breakpoint_t *bp);
     bool (*breakpoint_stopped)(breakpoint_t *bp, const ftrace_fcall_t *fcall);

@@ -1,25 +1,18 @@
+SUBDIR=host target
 
-all: host-all target-all
+all: $(addsuffix -all, $(SUBDIR))
 
-intstall: host-install
+install: $(addsuffix -install, $(SUBDIR))
 
-clean: host-clean target-clean
-	$(MAKE) -C host $(@)
-	$(MAKE) -C target $(@)
+clean: $(addsuffix -clean, $(SUBDIR))
 
-host-all:
-	$(MAKE) -C host all
+%-all:
+	$(MAKE) -C ${@:-all=} all
 
-host-install:
-	$(MAKE) -C host install
+%-install:
+	$(MAKE) -C ${@:-install=} install
 
-host-clean:
-	$(MAKE) -C host clean
+%-clean:
+	$(MAKE) -C ${@:-clean=} clean
 
-target-all:
-	$(MAKE) -C target all
-
-target-clean:
-	$(MAKE) -C target clean
-
-.PHONY: all install clean host-all host-install host-clean target-all target-clean
+.PHONY: all install clean

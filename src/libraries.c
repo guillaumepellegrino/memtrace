@@ -32,6 +32,7 @@
 #include "elf_sym.h"
 #include "debug_info.h"
 #include "debug_line.h"
+#include "fs.h"
 #include "log.h"
 
 struct _libraries {
@@ -92,7 +93,8 @@ static bool libraries_contains(libraries_t *libraries, const void *begin, const 
 }
 
 static void libraries_entry_add(libraries_t *libraries, library_t *library, void *begin, void *end, const char *name) {
-    elf_t *elf = elf_open(name, libraries->cfg.fs);
+    fs_t *fs = libraries->cfg.fs ? libraries->cfg.fs : fs_local();
+    elf_t *elf = elf_open(name, fs);
     const program_header_t *program = elf_program_header_executable(elf);
 
     memset(library, 0, sizeof(*library));
@@ -103,59 +105,6 @@ static void libraries_entry_add(libraries_t *libraries, library_t *library, void
     library->offset = program ? program->p_vaddr : 0;
 
     CONSOLE("Opening %s begin=%p offset=%zx", name, library->begin, library->offset);
-
-    if (libraries->cfg.debug_frame_section) {
-        if (!(library->frame_hdr_file = elf_section_open_from_name(elf, ".debug_frame_hdr"))) {
-            if (!(library->frame_hdr_file = elf_section_open_from_name(elf, ".eh_frame_hdr"))) {
-                TRACE_LOG("%s: .debug_frame_hdr/.eh_frame_hdr section not found", library->name);
-            }
-        }
-        if (!(library->frame_file = elf_section_open_from_name(elf, ".debug_frame"))) {
-            if (!(library->frame_file = elf_section_open_from_name(elf, ".eh_frame"))) {
-                TRACE_ERROR("%s: .debug_frame/.eh_frame section not found", library->name);
-            }
-        }
-    }
-
-    if (libraries->cfg.debug_info_section) {
-        if (!(library->abbrev_file = elf_section_open_from_name(elf, ".debug_abbrev"))) {
-            TRACE_LOG("%s: .debug_abbrev section not found", library->name);
-        }
-        if (!(library->info_file = elf_section_open_from_name(elf, ".debug_info"))) {
-            TRACE_LOG("%s: .debug_info section not found", library->name);
-        }
-        if (!(library->str_file = elf_section_open_from_name(elf, ".debug_str"))) {
-            TRACE_LOG("%s: .debug_str section not found", library->name);
-        }
-        if (!(library->line_file = elf_section_open_from_name(elf, ".debug_line"))) {
-            TRACE_LOG("%s: .debug_line section not found", library->name);
-        }
-    }
-
-    if (!(library->dynsym_file = elf_section_open_from_name(elf, ".dynsym"))) {
-        TRACE_ERROR("%s: .dynsym section not found", library->name);
-    }
-    if (!(library->dynstr_file = elf_section_open_from_name(elf, ".dynstr"))) {
-        TRACE_ERROR("%s: .dynstr section not found", library->name);
-    }
-    if (!library->abbrev_file || !library->info_file || !library->str_file || !library->line_file) {
-        if (library->line_file) {
-            elf_file_close(library->line_file);
-            library->line_file = NULL;
-        }
-        if (library->info_file) {
-            elf_file_close(library->info_file);
-            library->info_file = NULL;
-        }
-        if (library->abbrev_file) {
-            elf_file_close(library->abbrev_file);
-            library->abbrev_file = NULL;
-        }
-        if (library->str_file) {
-            elf_file_close(library->str_file);
-            library->str_file = NULL;
-        }
-    }
 }
 
 libraries_t *libraries_create(const libraries_cfg_t *cfg) {
@@ -227,25 +176,42 @@ void libraries_update(libraries_t *libraries) {
 
 void libraries_destroy(libraries_t *libraries) {
     size_t i = 0;
+    size_t j = 0;
 
     assert(libraries);
 
     for (i = 0; i < libraries->count; i++) {
         library_t *library = &libraries->list[i];
-        elf_file_close(library->frame_hdr_file);
-        elf_file_close(library->frame_file);
-        elf_file_close(library->abbrev_file);
-        elf_file_close(library->info_file);
-        elf_file_close(library->str_file);
-        elf_file_close(library->line_file);
-        elf_file_close(library->dynsym_file);
-        elf_file_close(library->dynstr_file);
+        for (j = 0; j < library_section_end; j++) {
+            elf_file_close(library->files[j]);
+        }
         elf_close(library->elf);
         free(library->name);
 
     }
     free(libraries->list);
     free(libraries);
+}
+
+elf_file_t *library_get_elf_section(library_t *library, library_section_t section) {
+    static const char *names[] = {
+        [library_section_dynsym] = ".dynsym",
+        [library_section_dynstr] = ".dynstr",
+        [library_section_symtab] = ".symtab",
+        [library_section_strtab] = ".strtab",
+        [library_section_rela_dyn] = ".rela.dyn",
+        [library_section_rela_plt] = ".rela.plt",
+    };
+
+    if (section >= library_section_end) {
+        return NULL;
+    }
+
+    if (!library->files[section]) {
+        library->files[section] = elf_section_open_from_name(library->elf, names[section]);
+    }
+
+    return library->files[section];
 }
 
 void libraries_print(const libraries_t *libraries, FILE *fp) {
@@ -262,50 +228,13 @@ void libraries_print(const libraries_t *libraries, FILE *fp) {
     fprintf(fp, "\n");
     fflush(fp);
 }
-/*
-void library_print_symbol(const library_t *library, size_t ra, FILE *fp) {
-    debug_line_info_t *line = NULL;
-    debug_info_t *info = NULL;
-    elf_sym_t sym = {0};
 
-    if (library->elf && library->line_file) {
-        line = debug_line_ex(library->elf, library->line_file, ra);
-    }
-    if (library->elf && library->abbrev_file && library->info_file && library->str_file) {
-        info = debug_info_function_ex(library->elf, library->abbrev_file, library->info_file, library->str_file, ra);
-    }
-    if (library->dynsym_file && library->dynstr_file) {
-        sym = elf_sym(library->dynsym_file, library->dynstr_file, ra);
-    }
-
-    if (info && line) {
-        fprintf(fp, "    %s() in %s:%d\n", info->function, line->file, line->line);
-    }
-    else if (info) {
-        fprintf(fp, "    %s()+0x%"PRIx64" in %s\n", info->function, info->offset, library->name);
-    }
-    else if (sym.name) {
-        fprintf(fp, "    %s()+0x%"PRIx64" in %s\n", sym.name, sym.offset, library->name);
-    }
-    else {
-        fprintf(fp, "    %s:0x%zx\n", library->name, ra);
-    }
-
-    if (info) {
-        debug_info_free(info);
-    }
-    if (line) {
-        debug_line_info_free(line);
-    }
-}
-*/
-
-const library_t *libraries_find(const libraries_t *libraries, size_t address) {
+library_t *libraries_find(libraries_t *libraries, size_t address) {
     assert(libraries);
     return bsearch((void *) address, libraries->list, libraries->count, sizeof(library_t), so_bsearch_compar);
 }
 
-const library_t *libraries_find_by_name(const libraries_t *libraries, const char *regex) {
+library_t *libraries_find_by_name(libraries_t *libraries, const char *regex) {
     assert(libraries);
     regex_t preg;
     size_t i = 0;
@@ -327,7 +256,7 @@ const library_t *libraries_find_by_name(const libraries_t *libraries, const char
     return NULL;
 }
 
-library_t *libraries_first(const libraries_t *libraries) {
+library_t *libraries_first(libraries_t *libraries) {
     assert(libraries);
     return libraries->list;
 }

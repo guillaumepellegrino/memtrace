@@ -138,4 +138,5 @@ bool ftrace_backtrace(const ftrace_t *ftrace, size_t callstack[], size_t size);
 /** How deep ftrace_poll() is nested */
 int ftrace_depth(ftrace_t *ftrace);
 
+bool ftrace_inject_code(ftrace_t *ftrace, libraries_t *libraries);
 #endif

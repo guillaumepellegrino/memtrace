@@ -160,6 +160,10 @@ error:
     return NULL;
 }
 
+elf_t *elf_open_local(const char *name) {
+    return elf_open(name, fs_local());
+}
+
 elf_t *elf_open(const char *name, fs_t *fs) {
     static const unsigned char elf_magic[] = {0x7F, 'E', 'L', 'F'};
     elf_t *elf = NULL;
@@ -423,3 +427,10 @@ const section_header_t *elf_section_header_get(elf_t *elf, const char *name) {
     return NULL;
 }
 
+const section_header_t *elf_section_header_getbyidx(elf_t *elf, uint16_t idx) {
+    if (!elf || idx >= elf->header.e_shnum) {
+        return NULL;
+    }
+
+    return &elf->sections[idx];
+}

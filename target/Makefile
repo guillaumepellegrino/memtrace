@@ -1,25 +1,36 @@
 MACHINE=$(shell $(CC) -dumpmachine)
-CFLAGS+=-Wall -Wextra -Wno-unused-parameter -Werror -g -O2 \
+LD?=$(CC:cc=ld)
+OBJCOPY?=$(CC:cc=objcopy)
+CFLAGS+=-Wall -Wextra -Wno-unused-parameter -Werror -g -O2 -fPIC -pthread \
 	-DVERSION=\"$(shell git describe --all)\" \
 	-DSYSROOT=\"$(shell $(CC) -print-sysroot)\" \
 	-DCOMPILER=\"$(CC)\"
-OBJECTS=ftrace.o breakpoint.o syscall.o ptrace.o hashmap.o libraries.o net.o fs.o log.o selftest.o process.o elf.o elf_file.o elf_sym.o debug_frame.o dwarf_expr.o dwarf_unwind.o strlist.o strmap.o console.o addr2line.o coredump.o gdb.o
+LDFLAGS+=-pthread
+OBJECTS=syscall_hijack.o ptrace.o hashmap.o libraries.o net.o fs.o log.o selftest.o process.o elf.o elf_file.o elf_sym.o elf_relocate.o strlist.o strmap.o console.o addr2line.o coredump.o gdb.o
+
 #OBJECTS+=backtrace.o
-TARGETS=memtrace
+TARGETS=inject memtrace-agent.so dummy
 
 ifneq (,$(findstring x86_64,$(MACHINE)))
 #LDFLAGS+=-lunwind-x86_64
-OBJECTS+=x86_64.o
+ARCH_OBJECT=x86_64.o
 endif
 
 ifneq (,$(findstring arm,$(MACHINE)))
 CFLAGS+=
-OBJECTS+=arm.o
+ARCH_OBJECT=arm.o
 endif
 
-all: memtrace
+all: $(TARGETS)
 
-memtrace: memtrace.o $(OBJECTS)
+# TODO: cleanup dependencies
+inject: inject_test.o inject.o syscall_hijack.o ptrace.o hashmap.o libraries.o net.o fs.o log.o selftest.o process.o elf.o elf_file.o elf_sym.o elf_relocate.o strlist.o strmap.o console.o addr2line.o coredump.o gdb.o $(ARCH_OBJECT)
+	$(CC) -o $(@) $(^) $(LDFLAGS)
+
+memtrace-agent.so: agent.o agent_hooks.o hashmap.o log.o
+	$(CC) --shared -fPIC -o $(@) $(^) $(LDFLAGS)
+
+dummy: dummy.o
 	$(CC) -o $(@) $(^) $(LDFLAGS)
 
 -include $(OBJECTS:.o=.d)
@@ -28,6 +39,6 @@ memtrace: memtrace.o $(OBJECTS)
 	$(CC) -c -MD $(CFLAGS) $(<) -o $(@)
 
 clean:
-	rm -f memtrace *.o *.d arch/*.o arch/*.d
+	rm -f memtrace memtrace.tmp memtrace.agent *.o *.d arch/*.o arch/*.d
 
 .PHONY: all clean

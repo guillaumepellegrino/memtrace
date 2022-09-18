@@ -22,6 +22,16 @@
 #include <stdio.h>
 #include "types.h"
 
+typedef enum {
+    library_section_dynsym,
+    library_section_dynstr,
+    library_section_symtab,
+    library_section_strtab,
+    library_section_rela_dyn,
+    library_section_rela_plt,
+    library_section_end,
+} library_section_t;
+
 typedef struct {
     int pid;
     fs_t *fs;
@@ -41,15 +51,8 @@ struct _library {
     elf_t *elf;
     char *name;
 
-    /** Debug sections of the ELF File */
-    elf_file_t *frame_hdr_file;
-    elf_file_t *frame_file;
-    elf_file_t *abbrev_file;
-    elf_file_t *info_file;
-    elf_file_t *str_file;
-    elf_file_t *line_file;
-    elf_file_t *dynsym_file;
-    elf_file_t *dynstr_file;
+    /** ELF section files */
+    elf_file_t *files[library_section_end];
 
     /** Address where the library mapping begin */
     void *begin;
@@ -73,16 +76,23 @@ void libraries_print(const libraries_t *libraries, FILE *fp);
 void library_print_symbol(const library_t *library, size_t ra, FILE *fp);
 
 /** Return the library to which belongs this address */
-const library_t *libraries_find(const libraries_t *libraries, size_t address);
+library_t *libraries_find(libraries_t *libraries, size_t address);
 
 /** Return the library corresponding to this name */
-const library_t *libraries_find_by_name(const libraries_t *libraries, const char *regex);
+library_t *libraries_find_by_name(libraries_t *libraries, const char *regex);
 
 /** Return the first library from array */
-library_t *libraries_first(const libraries_t *libraries);
+library_t *libraries_first(libraries_t *libraries);
 
 /** Return the count of libraries */
 size_t libraries_count(const libraries_t *libraries);
+
+elf_t *library_elf(const library_t *library);
+const char *library_name(const library_t *library);
+void *library_begin(const library_t *library);
+void *library_end(const library_t *library);
+size_t library_offset(const library_t *library);
+elf_file_t *library_get_elf_section(library_t *library, library_section_t section);
 
 /** Return the address value relatively to the library */
 size_t library_relative_address(const library_t *library, size_t address);

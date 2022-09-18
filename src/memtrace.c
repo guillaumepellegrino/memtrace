@@ -31,6 +31,7 @@
 #include <time.h>
 #include <getopt.h>
 #include <poll.h>
+#include <elf.h>
 #include "ftrace.h"
 #include "hashmap.h"
 #include "libraries.h"
@@ -41,10 +42,10 @@
 #include "debug_line.h"
 #include "debug_info.h"
 #include "debug_frame.h"
-#include "dwarf_unwind.h"
 #include "elf.h"
 #include "elf_file.h"
 #include "elf_sym.h"
+#include "elf_relocate.h"
 #include "fs.h"
 #include "console.h"
 #include "addr2line.h"
@@ -87,11 +88,9 @@ struct _app {
     breakpoint_t *realloc_bp;
     breakpoint_t *reallocarray_bp;
     breakpoint_t *free_bp;
-    console_t console;
     bool monitor;
     int monitor_timerfd;
     int worker_timerfd;
-    epoll_handler_t stdin_handler;
     epoll_handler_t monitor_handler;
     epoll_handler_t worker_handler;
     bool (*unwind)(libraries_t *libraries, const ftrace_fcall_t *fcall, size_t *callstack, size_t size);
@@ -373,38 +372,6 @@ static bool raw_unwind(libraries_t *libraries, const ftrace_fcall_t *fcall, size
     return true;
 }
 
-static void memtrace_console_quit(console_t *console, int argc, char *argv[]) {
-    // gently ask the event loop to exit
-    kill(getpid(), SIGINT);
-}
-
-static void memtrace_console_status(console_t *console, int argc, char *argv[]) {
-    app_t *app = container_of(console, app_t, console);
-    memtrace_status(app);
-}
-
-static void memtrace_console_monitor(console_t *console, int argc, char *argv[]) {
-    app_t *app = container_of(console, app_t, console);
-    int interval = 2;
-    if (argc > 1) {
-        interval = atoi(argv[1]);
-        app->monitor = interval;
-    }
-    else {
-        app->monitor ^= true;
-    }
-
-    struct itimerspec itimer = {0};
-
-    if (app->monitor) {
-        CONSOLE("Start monitoring");
-        itimer.it_interval.tv_sec = interval;
-        itimer.it_value.tv_sec = interval;
-    }
-    timerfd_settime(app->monitor_timerfd, 0, &itimer, NULL);
-    memtrace_status(app);
-}
-
 static void memtrace_monitor_handler(epoll_handler_t *self, int events) {
     uint64_t value = 0;
     app_t *app = container_of(self, app_t, monitor_handler);
@@ -430,93 +397,6 @@ static void memtrace_worker_handler(epoll_handler_t *self, int events) {
         }
     }
 }
-
-static void memtrace_console_report(console_t *console, int argc, char *argv[]) {
-    app_t *app = container_of(console, app_t, console);
-    size_t max = argc > 1 ? atoi(argv[1]) : 0;
-    memtrace_report(app, max);
-}
-
-static void memtrace_console_clear(console_t *console, int argc, char *argv[]) {
-    app_t *app = container_of(console, app_t, console);
-    memtrace_clear(app);
-}
-
-static void memtrace_console_coredump(console_t *console, int argc, char *argv[]) {
-    app_t *app = container_of(console, app_t, console);
-
-    if (argc <= 1) {
-        CONSOLE("Usage: coredump [NUMBER]\n"
-                "Mark the memory allocation context [NUMBER] for coredump generation\n");
-        return;
-    }
-
-    int number = 0;
-    int lookup = atoi(argv[1]);
-    hashmap_iterator_t *it = NULL;
-    hashmap_for_each(it, &app->blocks) {
-        block_t *block = container_of(it, block_t, it);
-
-        if (number == lookup) {
-            block->number = number;
-            block->do_coredump = true;
-            CONSOLE("Marking context number %d for coredump generation", lookup);
-            return;
-        }
-        number++;
-    }
-
-    CONSOLE("Memory allocation context number %d not found", lookup);
-}
-
-static void memtrace_console_gdb(console_t *console, int argc, char *argv[]) {
-    app_t *app = container_of(console, app_t, console);
-
-    if (argc <= 1) {
-        CONSOLE("Usage: gdb [NUMBER]\n"
-                "Mark the memory allocation context [NUMBER] for gdb inspection\n");
-        return;
-    }
-
-    int number = 0;
-    int lookup = atoi(argv[1]);
-    hashmap_iterator_t *it = NULL;
-    hashmap_for_each(it, &app->blocks) {
-        block_t *block = container_of(it, block_t, it);
-
-        if (number == lookup) {
-            block->number = number;
-            block->do_gdb = true;
-            CONSOLE("Marking context number %d for gdb inspection", lookup);
-            return;
-        }
-        number++;
-    }
-
-    CONSOLE("Memory allocation context number %d not found", lookup);
-}
-
-// TODO: remove function ?
-/*
-void dwarf_print_callstack(app_t *app, size_t *callstack) {
-    size_t i;
-    for (i = 0; i < app->callstack_size; i++) {
-        size_t address = callstack[i];
-        if (!address || !app->libraries) {
-            break;
-        }
-
-        const library_t *library = libraries_find(app->libraries, address);
-        if (library) {
-            size_t ra = library_relative_address(library, address);
-            library_print_symbol(library, ra, stderr);
-        }
-        else {
-            CONSOLE("    0x%zx", address);
-        }
-    }
-}
-*/
 
 static void raw_print_callstack(app_t *app, size_t *callstack, size_t size) {
     size_t i;
@@ -978,19 +858,21 @@ static bool mmap_handler(const ftrace_fcall_t *fcall, void *userdata) {
     //int prot = fcall->arg3;
     //int fd = fcall->arg5;
 
+    TRACE_WARNING("mmap(0x%zx, %zd, %zd, %zd, %d, %zd) in",
+        fcall->arg1, fcall->arg2, fcall->arg3, fcall->arg4, (int)fcall->arg5, fcall->arg6);
+
     if (!ftrace_fcall_get_rv(fcall, &rtfcall)) {
         TRACE_ERROR("failed to get fcall return value");
         return false;
     }
 
-    TRACE_LOG("mmap(0x%zx, %zd, %zd, %zd, %d, %zd) -> 0x%zx",
+    TRACE_WARNING("mmap(0x%zx, %zd, %zd, %zd, %d, %zd) -> 0x%zx",
         fcall->arg1, fcall->arg2, fcall->arg3, fcall->arg4, (int)fcall->arg5, fcall->arg6, rtfcall.retval);
 
     if (!app->libraries) {
         const libraries_cfg_t cfg = {
             .pid = app->pid,
             .fs = &app->fs,
-            .debug_frame_section = (app->unwind == dwarf_unwind),
         };
         app->libraries = libraries_create(&cfg);
     }
@@ -1054,6 +936,7 @@ static void help() {
     CONSOLE("   --func2addr=ADDR            Convert function to address");
     CONSOLE("   --debugframe                Dump debug frame");
     CONSOLE("   --elfdump                   Dump ELF file");
+    CONSOLE("   --reladump                  Dump ELF relocation addresses");
     CONSOLE("   --coredump                  Generate coredump from target process");
     CONSOLE("   --gdb                       Inspect target process with gdb");
     CONSOLE("   -v, --verbose               Increase logging verbosity");
@@ -1079,6 +962,38 @@ static int elfdump(const char *name, fs_t *fs) {
     elf_close(elf);
     return 0;
 }
+
+static int reladump(const char *name, fs_t *fs) {
+    elf_t *elf = NULL;
+    if (!(elf = elf_open(name, fs))) {
+        CONSOLE("failed to open %s", name);
+        return 1;
+    }
+
+    CONSOLE("Dump ELF relocation addresses");
+
+    elf_file_t *rela_dyn = elf_section_open_from_name(elf, ".rela.dyn");
+    elf_file_t *rela_plt = elf_section_open_from_name(elf, ".rela.plt");
+    elf_file_t *symtab = elf_section_open_from_name(elf, ".dynsym");
+    elf_file_t *strtab = elf_section_open_from_name(elf, ".dynstr");
+
+    if (rela_dyn && symtab && strtab) {
+        CONSOLE("Dump .rela.dyn");
+        elf_relocate_dump(elf, rela_dyn, symtab, strtab);
+    }
+    if (rela_plt && symtab && strtab) {
+        CONSOLE("Dump .rela.plt");
+        elf_relocate_dump(elf, rela_plt, symtab, strtab);
+    }
+
+    elf_file_close(rela_dyn);
+    elf_file_close(rela_plt);
+    elf_file_close(symtab);
+    elf_file_close(strtab);
+    elf_close(elf);
+    return 0;
+}
+
 /*
 static int elfaddr2line(const char *name, uint64_t addr, fs_t *fs) {
     elf_t *elf = NULL;
@@ -1170,22 +1085,529 @@ static int elffunc2addr(const char *name, const char *func, fs_t *fs) {
     return 0;
 }
 
-static void memtrace_stdin_handler(epoll_handler_t *self, int events) {
-    app_t *app = container_of(self, app_t, stdin_handler);
-    console_poll(&app->console);
+
+#include <sys/ptrace.h>
+#include <sys/wait.h>
+#include <sys/user.h>
+#include "ptrace.h"
+
+size_t ftrace_get_symaddr(ftrace_t *ftrace, libraries_t *libraries, const char *fname) {
+    const char *libname = "/libc(\\.|-)";
+
+    const library_t *library = libraries_find_by_name(libraries, libname);
+    if (!library) {
+        TRACE_ERROR("%s not found", libname);
+        return 0;
+    }
+
+    elf_file_t *symtab = library->dynsym_file;
+    elf_file_t *strtab = library->dynstr_file;
+    if (!symtab || !strtab) {
+        TRACE_ERROR("symtab(%p) or strtab(%p) not found", symtab, strtab);
+        return 0;
+    }
+
+    elf_sym_t sym = elf_sym_from_name(symtab, strtab, fname);
+    if (!sym.name) {
+        TRACE_ERROR("%s not found in %s", fname, library->name);
+        return 0;
+    }
+
+    size_t fnaddr = library_absolute_address(library, sym.offset);
+
+    CONSOLE("%s function address is 0x%zx (libc+0x%zx)", fname, fnaddr, sym.offset);
+
+    return fnaddr;
 }
 
-static const console_cmd_t memtrace_console_commands[] = {
-    {.name = "help",        .help = "Display this help", .handler = console_cmd_help},
-    {.name = "quit",        .help = "Quit memtrace and show report", .handler = memtrace_console_quit},
-    {.name = "status",      .help = "Show memtrace status", .handler = memtrace_console_status},
-    {.name = "monitor",     .help = "Monitor memory allocations", .handler = memtrace_console_monitor},
-    {.name = "report",      .help = "Show memtrace report", .handler = memtrace_console_report},
-    {.name = "clear",       .help = "Clear memory statistics", .handler = memtrace_console_clear},
-    {.name = "coredump",    .help = "Inspect memory alllocation with a coredump", .handler = memtrace_console_coredump},
-    {.name = "gdb",         .help = "Inspect memory allocation with gdb", .handler = memtrace_console_gdb},
-    {0},
-};
+bool ftrace_call_function(ftrace_t *ftrace, libraries_t *libraries, const char *fname) {
+    CONSOLE("Call function %s", fname);
+
+    struct user_regs_struct regs = {0};
+    struct user_regs_struct save_regs = {0};
+    int i = 0;
+    int pid = 0;
+    int status = 0;
+    size_t fnaddr = 0;
+
+    pid = ftrace_pid(ftrace);
+
+    if (!(fnaddr = ftrace_get_symaddr(ftrace, libraries, fname))) {
+        return false;
+    }
+
+    // Save registers
+    if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0) {
+        TRACE_ERROR("Failed to getregs for process %d", pid);
+        return false;
+    }
+    save_regs = regs;
+
+
+    TRACE_WARNING("Current PC: 0x%llx", regs.rip);
+    TRACE_WARNING("Set PC: 0x%zx", fnaddr);
+
+    // Set registers
+    //regs.rip = fnaddr;
+    if (ptrace(PTRACE_SETREGS, pid, NULL, &regs) != 0) {
+        TRACE_ERROR("Failed to setregs for process %d (%m)", pid);
+        return false;
+    }
+
+    for (i = 0; i < 2; i++) {
+        if (ptrace(PTRACE_SYSCALL, pid, NULL, NULL) != 0) {
+            TRACE_ERROR("ptrace(SYSCALL, %d) failed: %m", pid);
+            return false;
+        }
+        if (waitpid(pid, &status, 0) < 0) {
+            TRACE_ERROR("waitpid(%d) failed: %m", pid);
+            return false;
+        }
+        if (!ptrace_stopped_by_syscall(status)) {
+            TRACE_ERROR("process(%d) was not stopped by syscall (stautus: %d)", pid, status);
+            return false;
+        }
+    }
+
+
+    // Restore saved registers
+    if (ptrace(PTRACE_SETREGS, pid, NULL, &save_regs) != 0) {
+        TRACE_ERROR("Failed to setregs for process %d (%m)", pid);
+        return false;
+    }
+
+
+    return true;
+}
+
+// Note: This seems to work well !
+bool ftrace_hijack_syscall(ftrace_t *ftrace, libraries_t *libraries, size_t syscall, size_t arg1, size_t arg2, size_t arg3, size_t arg4, size_t arg5, size_t arg6, size_t *ret) {
+    struct user_regs_struct regs = {0};
+    struct user_regs_struct save_regs = {0};
+    ftrace_fcall_t fcall = {0};
+    int pid = 0;
+    int status = 0;
+
+    pid = ftrace_pid(ftrace);
+
+    // Wait for next syscall
+    if (ptrace(PTRACE_SYSCALL, pid, NULL, NULL) != 0) {
+        TRACE_ERROR("ptrace(SYSCALL, %d) failed: %m", pid);
+        return false;
+    }
+    if (waitpid(pid, &status, 0) < 0) {
+        TRACE_ERROR("waitpid(%d) failed: %m", pid);
+        return false;
+    }
+    if (!ptrace_stopped_by_syscall(status)) {
+        TRACE_ERROR("process(%d) was not stopped by syscall (stautus: %d)", pid, status);
+        return false;
+    }
+
+    // Save registers
+    if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0) {
+        TRACE_ERROR("Failed to getregs for process %d", pid);
+        return false;
+    }
+    save_regs = regs;
+
+    // Set registers
+    regs.orig_rax = syscall;
+    regs.rdi = arg1;
+    regs.rsi = arg2;
+    regs.rdx = arg3;
+    regs.r10 = arg4;
+    regs.r8  = arg5;
+    regs.r9  = arg6;
+
+    if (ptrace(PTRACE_SETREGS, pid, NULL, &regs) != 0) {
+        TRACE_ERROR("Failed to setregs for process %d (%m)", pid);
+        return false;
+    }
+
+    // Wait for syscall done
+    if (ptrace(PTRACE_SYSCALL, pid, NULL, NULL) != 0) {
+        TRACE_ERROR("ptrace(SYSCALL, %d) failed: %m", pid);
+        return false;
+    }
+    if (waitpid(pid, &status, 0) < 0) {
+        TRACE_ERROR("waitpid(%d) failed: %m", pid);
+        return false;
+    }
+    if (!ptrace_stopped_by_syscall(status)) {
+        TRACE_ERROR("process(%d) was not stopped by syscall (stautus: %d)", pid, status);
+        return false;
+    }
+    if (!arch.ftrace_fcall_fill(&fcall, pid)) {
+        TRACE_ERROR("Failed to get registers");
+        return false;
+    }
+    if (ret) {
+        *ret = fcall.retval;
+    }
+
+    // Restore saved registers
+    if (ptrace(PTRACE_SETREGS, pid, NULL, &save_regs) != 0) {
+        TRACE_ERROR("Failed to setregs for process %d (%m)", pid);
+        return false;
+    }
+
+    return true;
+}
+
+size_t ftrace_syscall_open(ftrace_t *ftrace, libraries_t *libraries, void *path, int flags, mode_t mode) {
+    size_t ret = 0;
+
+    ftrace_hijack_syscall(ftrace, libraries,
+        SYS_open, (size_t) path, flags, mode, 0, 0, 0, &ret);
+
+    return ret;
+}
+
+void *ftrace_syscall_mmap(ftrace_t *ftrace, libraries_t *libraries, void *addr, size_t length, int prot, int flags, int fd, off_t offset) {
+    size_t ret = 0;
+
+    ftrace_hijack_syscall(ftrace, libraries,
+        SYS_mmap, (size_t) addr, length, prot, flags, fd, offset, &ret);
+
+    return (void *) ret;
+}
+
+
+size_t ftrace_get_rela_offset(ftrace_t *ftrace, const library_t *target, const char *fname) {
+    elf_relocate_t rela;
+    elf_file_t *rela_plt = elf_section_open_from_name(target->elf, ".rela.plt");
+    elf_file_t *dynsym = elf_section_open_from_name(target->elf, ".dynsym");
+    elf_file_t *dynstr = elf_section_open_from_name(target->elf, ".dynstr");
+
+    if (!rela_plt || !dynsym || !dynstr) {
+        TRACE_ERROR("Failed to open .rela.plt section");
+        return false;
+    }
+
+    if (!elf_relocate_find_by_name(target->elf, rela_plt, dynsym, dynstr, fname, &rela)) {
+        TRACE_ERROR("Failed to find relocation address for %s", fname);
+        return false;
+    }
+
+    elf_file_close(rela_plt);
+    elf_file_close(dynsym);
+    elf_file_close(dynstr);
+
+    // FIXME: We are assuming rela type is R_X86_64_JUMP_SLO
+    return rela.offset;
+}
+
+bool ftrace_replace_function(ftrace_t *ftrace, const library_t *target, const library_t *inject, size_t inject_baseaddr, const char *fname, const char *inject_fname) {
+    CONSOLE("Replace %s() function by %s() function", fname, inject_fname);
+
+    size_t startcode = library_absolute_address(target, 0);
+    CONSOLE("startcode = 0x%zx", startcode);
+
+    //size_t rela_fn_offset = 0x000000004010;
+    size_t rela_fn_offset = ftrace_get_rela_offset(ftrace, target, fname);
+    size_t rela_fn_addr = startcode + rela_fn_offset;
+    CONSOLE("Relocation function address: 0x%zx (offset: 0x%zx)", rela_fn_addr, rela_fn_offset);
+
+    // Compute inject function offset
+    elf_file_t *symtab = inject->symtab_file;
+    elf_file_t *strtab = inject->strtab_file;
+    if (!symtab || !strtab) {
+        TRACE_ERROR(".symtab or .strtab not found");
+        return NULL;
+    }
+    elf_sym_t sym = elf_sym_from_name(symtab, strtab, inject_fname);
+    if (!sym.name) {
+        TRACE_ERROR("%s not found", inject_fname);
+        return NULL;
+    }
+    CONSOLE("Inject function offset: 0x%zx (section: %u)", sym.offset, sym.section_index);
+    size_t fn_addr = inject_baseaddr + sym.offset;
+    CONSOLE("function address: 0x%zx", fn_addr);
+
+    CONSOLE("Replace function (*0x%zx = 0x%zx)", rela_fn_addr, fn_addr);
+    if (ptrace(PTRACE_POKETEXT, ftrace_pid(ftrace), rela_fn_addr, fn_addr) != 0) {
+        TRACE_ERROR("Failed to replace function");
+        return false;
+    }
+/*
+    CONSOLE("Dump memory at 0x%zx:", fn_addr);
+    char memfile[64];
+    snprintf(memfile, sizeof(memfile), "/proc/%d/mem", ftrace_pid(ftrace));
+    FILE *mem = fopen(memfile, "r");
+    assert(mem);
+    fseek(mem, fn_addr, SEEK_SET);
+    uint8_t buff[0x100];
+    fread(buff, sizeof(buff), 1, mem);
+    fclose(mem);
+    size_t i = 0;
+    for (i = 0; i < sizeof(buff); i++) {
+        fprintf(stderr, "%02X", buff[i]);
+    }
+    CONSOLE("");
+    CONSOLE("");
+*/
+    return true;
+}
+
+typedef struct {
+    ftrace_t *ftrace;
+    const library_t *program;
+    const library_t *inject;
+    const library_t *libc;
+} ftrace_resolve_function_ctx_t;
+
+size_t ftrace_relocate_address(const library_t *program, const library_t *lib, elf_relocate_t *rela) {
+    switch (rela->type) {
+        case R_X86_64_64:
+        case R_X86_64_GLOB_DAT:
+        case R_X86_64_JUMP_SLOT:
+            return library_absolute_address(lib, rela->offset);
+        case R_X86_64_RELATIVE:
+            return library_absolute_address(program, rela->offset);
+        case R_X86_64_NONE:
+        case R_X86_64_PC32:
+        case R_X86_64_GOT32:
+        case R_X86_64_PLT32:
+        case R_X86_64_COPY:
+        case R_X86_64_GOTPCREL:
+        case R_X86_64_32:
+        case R_X86_64_32S:
+        case R_X86_64_16:
+        case R_X86_64_PC16:
+        case R_X86_64_8:
+        case R_X86_64_PC8:
+        case R_X86_64_DTPMOD64:
+        case R_X86_64_DTPOFF64:
+        case R_X86_64_TPOFF64:
+        case R_X86_64_TLSGD:
+        case R_X86_64_TLSLD:
+        case R_X86_64_DTPOFF32:
+        case R_X86_64_GOTTPOFF:
+        case R_X86_64_TPOFF32:
+        case R_X86_64_PC64:
+        case R_X86_64_GOTOFF64:
+        case R_X86_64_GOTPC32:
+        case R_X86_64_GOT64:
+        case R_X86_64_GOTPCREL64:
+        case R_X86_64_GOTPC64:
+        case R_X86_64_GOTPLT64:
+        case R_X86_64_PLTOFF64:
+        case R_X86_64_SIZE32:
+        case R_X86_64_SIZE64:
+        case R_X86_64_GOTPC32_TLSDESC:
+        case R_X86_64_TLSDESC_CALL:
+        case R_X86_64_TLSDESC:
+        case R_X86_64_IRELATIVE:
+        case R_X86_64_RELATIVE64:
+        case R_X86_64_GOTPCRELX:
+        case R_X86_64_REX_GOTPCRELX:
+        default:
+            CONSOLE("%x is not handled", rela->type);
+            return 0;
+    }
+}
+
+size_t ftrace_resolve_function_fromlib(elf_relocate_t *rela, ftrace_resolve_function_ctx_t *ctx, const library_t *lib) {
+    // Compute lib function offset
+    elf_file_t *symtab = lib->dynsym_file;
+    elf_file_t *strtab = lib->dynstr_file;
+    if (!symtab || !strtab) {
+        TRACE_ERROR(".dynsym or .dynstr not found");
+        return 0;
+    }
+    elf_sym_t sym = elf_sym_from_name(symtab, strtab, rela->sym.name);
+    if (!sym.name) {
+        //TRACE_ERROR("%s not found (section idx: %d)", rela->sym.name, rela->sym.section_index);
+        return 0;
+    }
+
+    return library_absolute_address(lib, sym.offset);
+}
+
+bool ftrace_resolve_function(elf_relocate_t *rela, void *userdata) {
+    ftrace_resolve_function_ctx_t *ctx = userdata;
+    size_t rela_addr = 0;
+    size_t sym_addr = 0;
+
+    if (!(rela_addr = ftrace_relocate_address(ctx->program, ctx->inject, rela))) {
+        TRACE_ERROR("Failed to get %s() relocation adress", rela->sym.name);
+        return true;
+    }
+
+    if (!(sym_addr = ftrace_resolve_function_fromlib(rela, ctx, ctx->libc))) {
+        if (!(sym_addr = ftrace_resolve_function_fromlib(rela, ctx, ctx->inject))) {
+            if (!(sym_addr = ftrace_resolve_function_fromlib(rela, ctx, ctx->program))) {
+                TRACE_ERROR("Failed to resolve function %s()", rela->sym.name);
+                return true;
+            }
+        }
+    }
+
+    /*
+    if (!(sym_addr = ftrace_resolve_function_fromlib(rela, ctx, ctx->libc))) {
+        TRACE_ERROR("Failed to resolve function %s()", rela->sym.name);
+        return true;
+    }
+    */
+
+    CONSOLE("Resolve %s() (*0x%zx = 0x%zx)", rela->sym.name, rela_addr, sym_addr);
+    if (ptrace(PTRACE_POKETEXT, ftrace_pid(ctx->ftrace), rela_addr, sym_addr) != 0) {
+        TRACE_ERROR("Failed to replace function");
+        return true;
+    }
+
+    return true;
+}
+
+bool ftrace_resolve_functions(ftrace_t *ftrace, const library_t *program, const library_t *inject, const library_t *libc) {
+    ftrace_resolve_function_ctx_t ctx = {
+        .ftrace = ftrace,
+        .program = program,
+        .inject = inject,
+        .libc = libc,
+    };
+    if (!inject->rela_plt_file || !inject->rela_dyn_file || !inject->dynsym_file || !inject->dynstr_file) {
+        TRACE_ERROR("Failed to open .rela.plt section");
+        return false;
+    }
+
+    if (!elf_relocate_read(inject->elf, inject->rela_plt_file, inject->dynsym_file, inject->dynstr_file, ftrace_resolve_function, &ctx)) {
+        TRACE_ERROR("Failed to process .rela.plt section");
+        return false;
+    }
+
+    if (!elf_relocate_read(inject->elf, inject->rela_dyn_file, inject->dynsym_file, inject->dynstr_file, ftrace_resolve_function, &ctx)) {
+        TRACE_ERROR("Failed to process .rela.dyn section");
+        return false;
+    }
+
+    return true;
+}
+
+bool memtrace_code_injection(app_t *app) {
+    CONSOLE("memtrace_code_injection()");
+
+    const char *libname = "/home/guillaume/Workspace/code_injection/code_injection.so";
+
+    elf_t *elf = NULL;
+    const program_header_t *ph = NULL;
+    FILE *fp = fopen(libname, "r");
+
+    if (!fp) {
+        TRACE_ERROR("fopen %s failed: %m", libname);
+        return false;
+    }
+    if (!(elf = elf_open(libname, &app->fs))) {
+        TRACE_ERROR("Failed to open %s", libname);
+        return false;
+    }
+
+    // Allocate memory for writing string
+    void *straddr = ftrace_syscall_mmap(&app->ftrace, app->libraries,
+        0, 4096, PROT_READ, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+
+    // Pre-allocate the memory
+    void *baseaddr = ftrace_syscall_mmap(&app->ftrace, app->libraries,
+        0, 1000*1000, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+
+    if (!straddr || !baseaddr) {
+        TRACE_ERROR("mmap failed");
+        return false;
+    }
+
+    char memfile[64];
+    snprintf(memfile, sizeof(memfile), "/proc/%d/mem", ftrace_pid(&app->ftrace));
+    FILE *mem = fopen(memfile, "w");
+    assert(mem);
+
+
+    // Write library name in target memory
+    fseek(mem, (size_t)straddr, SEEK_SET);
+    fprintf(mem, "%s", libname);
+    fflush(mem);
+    size_t fd = ftrace_syscall_open(&app->ftrace, app->libraries, straddr, O_RDONLY, 0);
+    CONSOLE("%s opened in target process with fd:%zu", libname, fd);
+
+
+    TRACE_WARNING("Memory mapped at %p", baseaddr);
+
+    for (ph = elf_program_header_first(elf); ph; ph = elf_program_header_next(elf, ph)) {
+        if (ph->p_type != p_type_load) {
+            continue;
+        }
+
+        void *ptr = (void *) (((size_t) baseaddr) + ph->p_vaddr);
+
+        int prot = PROT_NONE;
+        if (ph->p_flags & p_flags_r) {
+            prot |= PROT_READ;
+        }
+        if (ph->p_flags & p_flags_w) {
+            prot |= PROT_WRITE;
+        }
+        if (ph->p_flags & p_flags_x) {
+            prot |= PROT_EXEC;
+        }
+
+        CONSOLE("Load program: ptr: %p, offset: %"PRIx64 ", size: %"PRIx64, ptr, ph->p_offset, ph->p_memsz);
+
+        // Map memory on target process
+        // Map address must be aligned according ph->p_align
+        size_t mapaddr = (((size_t) ptr) / ph->p_align) * ph->p_align;
+        size_t mapsize = (((size_t) ptr) % ph->p_align) + ph->p_memsz;
+        size_t offset = (ph->p_offset / ph->p_align) * ph->p_align;
+        if (ftrace_syscall_mmap(&app->ftrace, app->libraries,
+            (void *) mapaddr, mapsize, prot, MAP_PRIVATE|MAP_FIXED, fd, offset) != (void *) mapaddr)
+        {
+            TRACE_ERROR("Failed to map memory");
+            return false;
+        }
+        CONSOLE("Program mapped at 0x%zx (size=0x%zx)", mapaddr, mapsize);
+    }
+
+    libraries_update(app->libraries);
+    libraries_print(app->libraries, stdout);
+
+    const library_t *program_lib = libraries_first(app->libraries);
+    const library_t *c_lib = libraries_find_by_name(app->libraries, "/libc(\\.|-)");
+    const library_t *inject_lib = libraries_find_by_name(app->libraries, libname);
+    if (!program_lib) {
+        TRACE_ERROR("Failed to find target lib");
+        return false;
+    }
+    if (!c_lib) {
+        TRACE_ERROR("Failed to find C lib");
+        return false;
+    }
+    if (!inject_lib) {
+        TRACE_ERROR("Failed to find inject lib");
+        return false;
+    }
+
+    ftrace_replace_function(&app->ftrace, program_lib, inject_lib, (size_t)baseaddr, "getmagicnumber", "mygetmagicnumber");
+    ftrace_replace_function(&app->ftrace, program_lib, inject_lib, (size_t)baseaddr, "calloc", "mycalloc");
+    ftrace_resolve_functions(&app->ftrace, program_lib, inject_lib, c_lib);
+
+
+    // Initialize .bss section to zero
+    const section_header_t *bss = elf_section_header_get(inject_lib->elf, ".bss");
+    if (bss) {
+        size_t bss_addr = library_absolute_address(inject_lib, bss->sh_addr);
+        CONSOLE("Initalizing BSS section (addr = 0x%zx, size = 0x%zx)", bss_addr, bss->sh_size);
+        fseek(mem, bss_addr, SEEK_SET);
+        for (size_t i = 0; i < bss->sh_size; i++) {
+            fputc(0, mem);
+        }
+        fflush(mem);
+    }
+
+
+    elf_close(elf);
+    fclose(fp);
+    fclose(mem);
+    return true;
+}
 
 int main(int argc, char* argv[]) {
     const char *short_options = "+p:ac:l:m:u:s:tvz:hV";
@@ -1204,6 +1626,7 @@ int main(int argc, char* argv[]) {
         {"func2addr",   required_argument,  0, 'f'},
         {"debugframe",  required_argument,  0, 'D'},
         {"elfdump",     no_argument,        0, 'E'},
+        {"reladump",    no_argument,        0, 'R'},
         {"coredump",    no_argument,        0, 'C'},
         {"gdb",         no_argument,        0, 'G'},
         {"help",        no_argument,        0, 'h'},
@@ -1219,14 +1642,13 @@ int main(int argc, char* argv[]) {
     const char *addr2frame = NULL;
     const char *func2addr = NULL;
     bool do_elfdump = false;
+    bool do_reladump = false;
     bool do_coredump = false;
     bool do_gdb = false;
-    int s = -1;
     app_t app = {
         .libc_fd = -1,
         .callstack_size = 10,
         .big_callstack_size = 200,
-        .stdin_handler = {memtrace_stdin_handler},
         .monitor_handler = {memtrace_monitor_handler},
         .worker_handler = {memtrace_worker_handler},
         .unwind = raw_unwind,
@@ -1264,18 +1686,6 @@ int main(int argc, char* argv[]) {
             case 's':
                 app.callstack_size = atoi(optarg);
                 break;
-            case 'u':
-                if (!strcmp(optarg, "raw")) {
-                    app.unwind = raw_unwind;
-                }
-                else if (!strcmp(optarg, "dwarf")) {
-                    app.unwind = dwarf_unwind;
-                }
-                else {
-                    CONSOLE("Unknown unwind mode");
-                    return 1;
-                }
-                break;
             case 't':
                 return selftest_main(argc, argv);
             //case 'L':
@@ -1292,6 +1702,9 @@ int main(int argc, char* argv[]) {
                 break;
             case 'E':
                 do_elfdump = true;
+                break;
+            case 'R':
+                do_reladump = true;
                 break;
             case 'C':
                 do_coredump = true;
@@ -1331,6 +1744,13 @@ int main(int argc, char* argv[]) {
             return 1;
         }
         return elfdump(argv[0], &app.fs);
+    }
+    if (do_reladump) {
+        if (argc != 1) {
+            help();
+            return 1;
+        }
+        return reladump(argv[0], &app.fs);
     }
     /*
     if (addr2line) {
@@ -1447,76 +1867,21 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 #endif
-    if (app.attachpid) {
-        // Process is already running:
-        // Try to set breakpoints now and create process maps
-        const libraries_cfg_t cfg = {
-            .pid = app.pid,
-            .fs = &app.fs,
-            .debug_frame_section = (app.unwind == dwarf_unwind),
-        };
-        app.libraries = libraries_create(&cfg);
-
-        if (!app_set_breakpoints(&app)) {
-            return 1;
-        }
+    if (!app.attachpid) {
+        return 1;
     }
 
-    //backtrace_context_initialize(&app.bt, app.pid);
-    addr2line_initialize(app.addr2line);
-    console_initiliaze(&app.console, memtrace_console_commands);
-    ftrace_set_fd_handler(&app.ftrace, &app.stdin_handler, 0, EPOLLIN);
+    const libraries_cfg_t cfg = {
+        .pid = app.pid,
+        .fs = &app.fs,
+    };
+    app.libraries = libraries_create(&cfg);
 
-    app.monitor_timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
-    ftrace_set_fd_handler(&app.ftrace, &app.monitor_handler, app.monitor_timerfd, EPOLLIN);
-
-    app.worker_timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
-    ftrace_set_fd_handler(&app.ftrace, &app.worker_handler, app.worker_timerfd, EPOLLIN);
-    struct itimerspec itimer = {0};
-    itimer.it_interval.tv_sec = 3;
-    itimer.it_value.tv_sec = itimer.it_interval.tv_sec;
-    timerfd_settime(app.worker_timerfd, 0, &itimer, NULL);
-
-
-    while (ftrace_poll(&app.ftrace)) {
-        if (exit_evlp) {
-            break;
-        }
+    if (!app.libraries) {
+        TRACE_ERROR("Failed to open libraries");
+        return 1;
     }
 
-    console_cleanup(&app.console);
-
-    if (!exit_evlp) {
-        memtrace_report(&app, 0);
-    }
-
-    hashmap_cleanup(&app.allocations);
-    hashmap_cleanup(&app.blocks);
-
-    if (app.pid > 0) {
-        CONSOLE("Detaching from pid %d", app.pid);
-        ftrace_detach(&app.ftrace);
-
-        if (!app.attachpid) {
-            kill(app.pid, SIGTERM);
-            if (waitpid(app.pid, NULL, 0) != 0) {
-                kill(app.pid, SIGKILL);
-            }
-        }
-    }
-
-    addr2line_cleanup();
-    if (app.libraries) {
-        libraries_destroy(app.libraries);
-    }
-    free(app.addr2line);
-    free(app.gdb);
-    free(app.program_name);
-    fs_cleanup(&app.fs);
-    if (s >= 0) {
-        close(s);
-    }
-
-    return 0;
+    return memtrace_code_injection(&app) ? 0 : 1;
 }
 

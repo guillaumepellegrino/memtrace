@@ -9,5 +9,7 @@ ptraceopen
 test
 memtrace
 memtrace-fs
+inject
+dummy
 cloudathome.sh
 qemu

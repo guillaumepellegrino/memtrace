@@ -76,11 +76,6 @@ static long make_mask(long size) {
     return mask;
 }
 
-static bool arm_step(int pid) {
-
-    return false;
-}
-
 arm_cpu_mode_t arm_get_cpu_mode(long addr, long instr) {
     if (!(addr & 0x01)) {
         return arm_cpu_mode_arm;
@@ -253,7 +248,6 @@ static const cpu_mode_t arm_cpu_modes[] = {
 arch_t arch = {
     .cpu_modes = arm_cpu_modes,
     .ptrace_step_support = false,
-    .step = arm_step,
     .breakpoint_enable = arm_breakpoint_enable,
     .breakpoint_disable = arm_breakpoint_disable,
     .breakpoint_stopped = arm_breakpoint_stopped,

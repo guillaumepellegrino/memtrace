@@ -718,7 +718,6 @@ bool fs_initialize(fs_t *fs, const fs_cfg_t *cfg) {
 
     switch (cfg->type) {
         case fs_type_local: {
-            CONSOLE("Running %s in local mode", cfg->me);
             break;
         }
         case fs_type_tcp_server: {
@@ -775,6 +774,22 @@ void fs_cleanup(fs_t *fs) {
         fclose(fs->socket);
     }
     free(fs->sysroot);
+}
+
+fs_t *fs_local() {
+    static const fs_cfg_t cfg = {
+        .type = fs_type_local,
+        .me = "memtrace",
+    };
+    static bool is_init;
+    static fs_t fs;
+
+    if (!is_init) {
+        fs_initialize(&fs, &cfg);
+        is_init = true;
+    }
+
+    return &fs;
 }
 
 /** Serve the File System to connected client */

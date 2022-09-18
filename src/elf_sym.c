@@ -75,6 +75,19 @@ elf_sym_t elf_sym(elf_file_t *symtab, elf_file_t *strtab, uint64_t address) {
     return result;
 }
 
+elf_sym_t elf_sym_from_idx(elf_file_t *symtab, elf_file_t *strtab, uint32_t idx) {
+    elf_sym_entry_t sym;
+    elf_sym_t result = {0};
+
+    size_t entry_size = elf_file_64bit(symtab) ? 24 : 16;
+    elf_file_seek(symtab, entry_size * idx);
+    elf_sym_entry_read(symtab, &sym);
+    elf_file_seek(strtab, sym.st_name);
+    result.name = elf_file_read_strp(strtab);
+    result.offset = sym.st_value;
+    return result;
+}
+
 elf_sym_t elf_sym_from_name(elf_file_t *symtab, elf_file_t *strtab, const char *name) {
     elf_sym_entry_t sym;
     elf_sym_t result = {0};
@@ -91,6 +104,7 @@ elf_sym_t elf_sym_from_name(elf_file_t *symtab, elf_file_t *strtab, const char *
             if (symname && !strcmp(symname, name)) {
                 result.name = symname;
                 result.offset = sym.st_value;
+                result.section_index = sym.st_shndx;
                 return result;
             }
         }

@@ -16,11 +16,21 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#ifndef DWARF_UNWIND_H
-#define DWARF_UNWIND_H
+#ifndef AGENT_H
+#define AGENT_H
 
-#include "types.h"
+typedef struct {
+    int ipc;
+    pthread_t thread;
 
-bool dwarf_unwind(libraries_t *libraries, const ftrace_fcall_t *fcall, size_t *callstack, size_t size);
+} agent_t;
+
+bool agent_initialize(agent_t *agent);
+void agent_cleanup(agent_t *agent);
+void agent_malloc(agent_t *agent, size_t size, void *newptr);
+void agent_calloc(agent_t *agent, size_t nmemb, size_t size, void *newptr);
+void agent_realloc(agent_t *agent, void *ptr, size_t size, void *newptr);
+void agent_reallocarray(agent_t *agent, void *ptr, size_t nmemb, size_t size, void *newptr);
+void agent_free(agent_t *agent, void *ptr);
 
 #endif

@@ -347,6 +347,8 @@ static bool action_loop() {
     return true;
 }
 
+
+
 static test_scenario_t test_scenarios[] = {
     {"calloc", action_calloc, test_calloc},
     {"malloc", action_malloc, test_malloc},

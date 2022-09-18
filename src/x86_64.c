@@ -31,21 +31,6 @@ typedef enum {
     x86_cpu_mode_32bits,
 } x86_cpu_mode_t;
 
-static bool x86_step(int pid) {
-    int status = -1;
-    if (ptrace(PTRACE_SINGLESTEP, pid, NULL, NULL) != 0) {
-        TRACE_ERROR("singlestep failed for process %d: %m", pid);
-        return false;
-    }
-    if (!ptrace_wait(pid, &status)) {
-        return false;
-    }
-    if (ptrace_terminated(status)) {
-        return false;
-    }
-    return true;
-}
-
 static bool x86_breakpoint_enable(breakpoint_t *bp) {
     long addr = bp->addr;
 
@@ -56,7 +41,7 @@ static bool x86_breakpoint_enable(breakpoint_t *bp) {
     // Read original instruction
     errno = 0;
     if ((bp->orig_instr = ptrace(PTRACE_PEEKTEXT, bp->pid, addr, 0)) == -1 && errno != 0) {
-        TRACE_ERROR("[%s] ptrace(PEEKTEXT, %d, 0x%lx) failed: %m", breakpoint_name(bp), bp->pid, bp->addr);
+        TRACE_ERROR("ptrace(PEEKTEXT, %d, 0x%lx) failed: %m", bp->pid, bp->addr);
         return false;
     }
 
@@ -177,11 +162,49 @@ static const cpu_mode_t x86_cpu_modes[] = {
 
 arch_t arch = {
     .cpu_modes = x86_cpu_modes,
-    .ptrace_step_support = true,
-    .step = x86_step,
+    //.step = x86_step,
     .breakpoint_enable = x86_breakpoint_enable,
     .breakpoint_disable = x86_breakpoint_disable,
     .breakpoint_stopped = x86_breakpoint_stopped,
     .breakpoint_handle_interrupt = x86_breakpoint_handle_interrupt,
     .ftrace_fcall_fill = x86_ftrace_fcall_fill,
 };
+
+
+// TODO: replace ftrace_fcall_t by gen_cpu_registers_t implementation
+typedef enum {
+    register_pc,
+    register_sp,
+    register_ra,
+    register_syscall,
+    register_arg1,
+    register_arg2,
+    register_arg3,
+    register_arg4,
+    register_arg5,
+    register_arg6,
+    register_arg7,
+    register_retval,
+} register_number_t;
+
+typedef struct {
+    struct user_regs_struct raw;
+    size_t extra[1];
+} gen_cpu_registers_t;
+
+size_t *register_get_reference(gen_cpu_registers_t *registers, register_number_t number) {
+    switch (number) {
+        case register_pc:       return (size_t *) &registers->raw.rip;
+        case register_sp:       return (size_t *) &registers->raw.rsp;
+        case register_ra:       return (size_t *) &registers->extra[0];
+        case register_syscall:  return (size_t *) &registers->raw.orig_rax;
+        case register_arg1:     return (size_t *) &registers->raw.rdi;
+        case register_arg2:     return (size_t *) &registers->raw.rsi;
+        case register_arg3:     return (size_t *) &registers->raw.rdx;
+        case register_arg4:     return (size_t *) &registers->raw.r10;
+        case register_arg5:     return (size_t *) &registers->raw.r8;
+        case register_arg6:     return (size_t *) &registers->raw.r9;
+        case register_retval:   return (size_t *) &registers->raw.rax;
+        default: return NULL;
+    }
+}
