@@ -27,10 +27,10 @@ typedef struct {
 
 bool agent_initialize(agent_t *agent);
 void agent_cleanup(agent_t *agent);
-void agent_malloc(agent_t *agent, size_t size, void *newptr);
-void agent_calloc(agent_t *agent, size_t nmemb, size_t size, void *newptr);
-void agent_realloc(agent_t *agent, void *ptr, size_t size, void *newptr);
-void agent_reallocarray(agent_t *agent, void *ptr, size_t nmemb, size_t size, void *newptr);
-void agent_free(agent_t *agent, void *ptr);
+void agent_malloc(agent_t *agent, void *sp, void *lr, size_t size, void *newptr);
+void agent_calloc(agent_t *agent, void *sp, void *lr, size_t nmemb, size_t size, void *newptr);
+void agent_realloc(agent_t *agent, void *sp, void *lr, void *ptr, size_t size, void *newptr);
+void agent_reallocarray(agent_t *agent, void *sp, void *lr, void *ptr, size_t nmemb, size_t size, void *newptr);
+void agent_free(agent_t *agent, void *sp, void *lr, void *ptr);
 
 #endif

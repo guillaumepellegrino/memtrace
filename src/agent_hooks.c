@@ -10,7 +10,11 @@
 #include <pthread.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include "agent_hooks.h"
 #include "agent.h"
+
+#define stack_pointer_address() __builtin_frame_address(0)
+#define return_address()        __builtin_return_address(0)
 
 static pthread_mutex_t init_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t global_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -23,6 +27,7 @@ static void cleanup() {
 }
 
 static void try_initialize() {
+    bool locked = false;
     pthread_mutexattr_t attr;
 
     pthread_mutex_lock(&init_lock);
@@ -31,20 +36,22 @@ static void try_initialize() {
         return;
     }
 
-    // initialize global lock
+    // initialize global lock and lock it
     pthread_mutexattr_init(&attr);
     pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_ERRORCHECK);
     pthread_mutex_init(&global_lock, &attr);
+    locked = hooks_lock();
     global_lock_init = true;
     pthread_mutex_unlock(&init_lock);
 
-
+    // initialize agent
     if (agent_initialize(&g_agent)) {
         atexit(cleanup);
     }
     else {
         printf("Failed to initialize memtrace agent\n");
     }
+    hooks_unlock(locked);
 }
 
 bool hooks_lock() {
@@ -58,6 +65,8 @@ void hooks_unlock(bool locked) {
 }
 
 void *malloc_hook(size_t size) {
+    void *sp = stack_pointer_address();
+    void *lr = return_address();
     bool locked = false;
     void *newptr = NULL;
 
@@ -65,7 +74,7 @@ void *malloc_hook(size_t size) {
     locked = hooks_lock();
     newptr = malloc(size);
     if (locked) {
-        agent_malloc(&g_agent, size, newptr);
+        agent_malloc(&g_agent, sp, lr, size, newptr);
     }
     hooks_unlock(locked);
 
@@ -73,6 +82,8 @@ void *malloc_hook(size_t size) {
 }
 
 void *calloc_hook(size_t nmemb, size_t size) {
+    void *sp = stack_pointer_address();
+    void *lr = return_address();
     bool locked = false;
     void *newptr = NULL;
 
@@ -80,7 +91,7 @@ void *calloc_hook(size_t nmemb, size_t size) {
     locked = hooks_lock();
     newptr = calloc(nmemb, size);
     if (locked) {
-        agent_calloc(&g_agent, nmemb, size, newptr);
+        agent_calloc(&g_agent, sp, lr, nmemb, size, newptr);
     }
     hooks_unlock(locked);
 
@@ -88,6 +99,8 @@ void *calloc_hook(size_t nmemb, size_t size) {
 }
 
 void *realloc_hook(void *ptr, size_t size) {
+    void *sp = stack_pointer_address();
+    void *lr = return_address();
     bool locked = false;
     void *newptr = NULL;
 
@@ -95,7 +108,7 @@ void *realloc_hook(void *ptr, size_t size) {
     locked = hooks_lock();
     newptr = realloc(ptr, size);
     if (locked) {
-        agent_realloc(&g_agent, ptr, size, newptr);
+        agent_realloc(&g_agent, sp, lr, ptr, size, newptr);
     }
     hooks_unlock(locked);
 
@@ -103,6 +116,8 @@ void *realloc_hook(void *ptr, size_t size) {
 }
 
 void *reallocarray_hook(void *ptr, size_t nmemb, size_t size) {
+    void *sp = stack_pointer_address();
+    void *lr = return_address();
     bool locked = false;
     void *newptr = NULL;
 
@@ -110,7 +125,7 @@ void *reallocarray_hook(void *ptr, size_t nmemb, size_t size) {
     locked = hooks_lock();
     newptr = reallocarray(ptr, nmemb, size);
     if (locked) {
-        agent_reallocarray(&g_agent, ptr, nmemb, size, newptr);
+        agent_reallocarray(&g_agent, sp, lr, ptr, nmemb, size, newptr);
     }
     hooks_unlock(locked);
 
@@ -118,12 +133,14 @@ void *reallocarray_hook(void *ptr, size_t nmemb, size_t size) {
 }
 
 void free_hook(void *ptr) {
+    void *sp = stack_pointer_address();
+    void *lr = return_address();
     bool locked = false;
 
     try_initialize();
     locked = hooks_lock();
     if (locked) {
-        agent_free(&g_agent, ptr);
+        agent_free(&g_agent, sp, lr, ptr);
     }
     free(ptr);
     hooks_unlock(locked);

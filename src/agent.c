@@ -178,23 +178,23 @@ void agent_cleanup(agent_t *agent) {
     ipc_socket_close(agent->ipc);
 }
 
-void agent_malloc(agent_t *agent, size_t size, void *newptr) {
+void agent_malloc(agent_t *agent, void *sp, void *lr, size_t size, void *newptr) {
     printf("malloc(%zu) -> %p\n", size, newptr);
 }
 
-void agent_calloc(agent_t *agent, size_t nmemb, size_t size, void *newptr) {
+void agent_calloc(agent_t *agent, void *sp, void *lr, size_t nmemb, size_t size, void *newptr) {
     printf("calloc(%zu, %zu) -> %p\n", nmemb, size, newptr);
 }
 
-void agent_realloc(agent_t *agent, void *ptr, size_t size, void *newptr) {
+void agent_realloc(agent_t *agent, void *sp, void *lr, void *ptr, size_t size, void *newptr) {
     printf("realloc(%p, %zu) -> %p\n", ptr, size, newptr);
 }
 
-void agent_reallocarray(agent_t *agent, void *ptr, size_t nmemb, size_t size, void *newptr) {
+void agent_reallocarray(agent_t *agent, void *sp, void *lr, void *ptr, size_t nmemb, size_t size, void *newptr) {
     printf("reallocarray(%p, %zu, %zu) -> %p\n", ptr, nmemb, size, newptr);
 }
 
-void agent_free(agent_t *agent, void *ptr) {
+void agent_free(agent_t *agent, void *sp, void *lr, void *ptr) {
     printf("free(%p)\n", ptr);
 }
 

@@ -11,7 +11,7 @@ static volatile int exit_loop = 0;
 void *thread_loop(void *arg) {
     (void) arg;
 
-    printf("thread_loop(): pid: %d, tid: %d\n", getpid(), gettid());
+    printf("thread_loop(): pid: %d\n", getpid());
 
     while (!exit_loop) {
         char *toto = strdup("thread");
@@ -35,7 +35,7 @@ int main(int argc, char *argv[]) {
     int loop = 1;
     pthread_t thread;
 
-    printf("main(): pid: %d, tid: %d\n", getpid(), gettid());
+    printf("main(): pid: %d\n", getpid());
 
     if (argc <= 1) {
         if (pthread_create(&thread, NULL, thread_loop, NULL) != 0) {
