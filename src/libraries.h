@@ -29,43 +29,12 @@ typedef enum {
     library_section_strtab,
     library_section_rela_dyn,
     library_section_rela_plt,
+    library_section_bss,
     library_section_end,
 } library_section_t;
 
-typedef struct {
-    int pid;
-    fs_t *fs;
-
-    /** Load elf sections .debug_frame/.eh_frame
-     *  and .debug_frame_hdr/.eh_frame_hdr if set to true */
-    size_t debug_frame_section : 1;
-
-    /** Load elf sections .debug_abbrev, .debug_info,
-     * .debug_str and .debug_line if set to true*/
-    size_t debug_info_section : 1;
-} libraries_cfg_t;
-
-
-struct _library {
-    /** A reference on the corresponding ELF file */
-    elf_t *elf;
-    char *name;
-
-    /** ELF section files */
-    elf_file_t *files[library_section_end];
-
-    /** Address where the library mapping begin */
-    void *begin;
-
-    /** Address where the library mapping end */
-    void *end;
-
-    /** Offset of the ELF executable program */
-    size_t offset;
-};
-
 /** Create/Destroy/Update the library list by reading /proc/self/maps */
-libraries_t *libraries_create(const libraries_cfg_t *cfg);
+libraries_t *libraries_create(int pid);
 void libraries_destroy(libraries_t *libraries);
 void libraries_update(libraries_t *libraries);
 
@@ -87,11 +56,22 @@ library_t *libraries_first(libraries_t *libraries);
 /** Return the count of libraries */
 size_t libraries_count(const libraries_t *libraries);
 
+/** ELF header from the library */
 elf_t *library_elf(const library_t *library);
+
+/** Name of the library */
 const char *library_name(const library_t *library);
+
+/** Address where the library mapping begin */
 void *library_begin(const library_t *library);
+
+/** Address where the library mapping end */
 void *library_end(const library_t *library);
+
+/** Offset of the ELF executable program */
 size_t library_offset(const library_t *library);
+
+/** Return the required elf section from library */
 elf_file_t *library_get_elf_section(library_t *library, library_section_t section);
 
 /** Return the address value relatively to the library */

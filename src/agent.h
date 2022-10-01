@@ -19,10 +19,12 @@
 #ifndef AGENT_H
 #define AGENT_H
 
+#include "types.h"
+
 typedef struct {
     int ipc;
     pthread_t thread;
-
+    libraries_t *libraries;
 } agent_t;
 
 bool agent_initialize(agent_t *agent);

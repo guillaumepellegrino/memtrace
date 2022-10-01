@@ -28,7 +28,7 @@ static void cleanup() {
 
 static void try_initialize() {
     bool locked = false;
-    pthread_mutexattr_t attr;
+    pthread_mutexattr_t attr = {0};
 
     pthread_mutex_lock(&init_lock);
     if (global_lock_init) {

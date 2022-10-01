@@ -51,25 +51,25 @@ static int64_t library_get_rela_offset(library_t *target, const char *fname) {
     elf_file_t *dynstr = library_get_elf_section(target, library_section_dynstr);
 
     if (!dynsym || !dynstr) {
-        TRACE_ERROR("Failed to open .dynsym and .dynstr sections for %s", elf_name(target->elf));
+        TRACE_ERROR("Failed to open .dynsym and .dynstr sections for %s", library_name(target));
         return -1;
     }
 
-    if (rela_plt && elf_relocate_find_by_name(target->elf, rela_plt, dynsym, dynstr, fname, &rela)) {
+    if (rela_plt && elf_relocate_find_by_name(library_elf(target), rela_plt, dynsym, dynstr, fname, &rela)) {
         return rela.offset;
     }
-    if (rela_dyn && elf_relocate_find_by_name(target->elf, rela_dyn, dynsym, dynstr, fname, &rela)) {
+    if (rela_dyn && elf_relocate_find_by_name(library_elf(target), rela_dyn, dynsym, dynstr, fname, &rela)) {
         return rela.offset;
     }
 
-    TRACE_WARNING("Relocation address not found for %s():%s", fname, elf_name(target->elf));
+    TRACE_WARNING("Relocation address not found for %s():%s", fname, library_name(target));
 
     // FIXME: We are assuming rela type is R_X86_64_JUMP_SLO
     return -1;
 }
 
 static bool library_replace_function(int pid, library_t *target, library_t *inject, size_t inject_baseaddr, const char *fname, const char *inject_fname) {
-    CONSOLE("Replace %s():%s by %s():%s", fname, target->name, inject_fname, inject->name);
+    CONSOLE("Replace %s():%s by %s():%s", fname, library_name(target), inject_fname, library_name(inject));
 
     size_t startcode = library_absolute_address(target, 0);
     //CONSOLE("startcode = 0x%zx", startcode);
@@ -219,13 +219,13 @@ static bool injecter_resolve_functions(injecter_t *injecter) {
         return false;
     }
 
-    CONSOLE("[Resolve functions for %s]", elf_name(inject->elf));
-    if (!elf_relocate_read(inject->elf, rela_plt_file, dynsym_file, dynstr_file, resolve_function, injecter)) {
+    CONSOLE("[Resolve functions for %s]", library_name(inject));
+    if (!elf_relocate_read(library_elf(inject), rela_plt_file, dynsym_file, dynstr_file, resolve_function, injecter)) {
         TRACE_ERROR("Failed to process .rela.plt section");
         return false;
     }
 
-    if (!elf_relocate_read(inject->elf, rela_dyn_file, dynsym_file, dynstr_file, resolve_function, injecter)) {
+    if (!elf_relocate_read(library_elf(inject), rela_dyn_file, dynsym_file, dynstr_file, resolve_function, injecter)) {
         TRACE_ERROR("Failed to process .rela.dyn section");
         return false;
     }
@@ -434,10 +434,7 @@ bool injecter_load_library(injecter_t *injecter, const char *libname) {
         CONSOLE("Program mapped at 0x%zx (size=0x%zx)", mapaddr, mapsize);
     }
 
-    const libraries_cfg_t cfg = {
-        .pid = injecter->pid,
-    };
-    if (!(injecter->libraries = libraries_create(&cfg))) {
+    if (!(injecter->libraries = libraries_create(injecter->pid))) {
         TRACE_ERROR("Failed to open libraries");
         return false;
     }
@@ -465,7 +462,7 @@ bool injecter_load_library(injecter_t *injecter, const char *libname) {
 
     // Initialize .bss section to zero
     // FIXME: We should zeroing (p_memsz-p_filesz) for each elf section
-    const section_header_t *bss = elf_section_header_get(injecter->inject_lib->elf, ".bss");
+    const section_header_t *bss = elf_section_header_get(library_elf(injecter->inject_lib), ".bss");
     if (bss) {
         size_t bss_addr = library_absolute_address(injecter->inject_lib, bss->sh_addr);
         CONSOLE("Initializing BSS Section (addr = 0x%zx, size = 0x%zx)", bss_addr, bss->sh_size);

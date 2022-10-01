@@ -15,7 +15,6 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -36,9 +35,18 @@
 #include "log.h"
 
 struct _libraries {
-    libraries_cfg_t cfg;
+    int pid;
     size_t count;
     library_t *list;
+};
+
+struct _library {
+    elf_t *elf;
+    char *name;
+    elf_file_t *files[library_section_end];
+    void *begin;
+    void *end;
+    size_t offset;
 };
 
 static int so_qsort_compar(const void *lval, const void *rval) {
@@ -93,8 +101,7 @@ static bool libraries_contains(libraries_t *libraries, const void *begin, const 
 }
 
 static void libraries_entry_add(libraries_t *libraries, library_t *library, void *begin, void *end, const char *name) {
-    fs_t *fs = libraries->cfg.fs ? libraries->cfg.fs : fs_local();
-    elf_t *elf = elf_open(name, fs);
+    elf_t *elf = elf_open(name, fs_local());
     const program_header_t *program = elf_program_header_executable(elf);
 
     memset(library, 0, sizeof(*library));
@@ -107,11 +114,11 @@ static void libraries_entry_add(libraries_t *libraries, library_t *library, void
     CONSOLE("Opening %s begin=%p offset=%zx", name, library->begin, library->offset);
 }
 
-libraries_t *libraries_create(const libraries_cfg_t *cfg) {
+libraries_t *libraries_create(int pid) {
     libraries_t *libraries = calloc(1, sizeof(libraries_t));
     assert(libraries);
 
-    libraries->cfg = *cfg;
+    libraries->pid = pid;
 
     libraries_update(libraries);
     return libraries;
@@ -120,7 +127,7 @@ libraries_t *libraries_create(const libraries_cfg_t *cfg) {
 void libraries_update(libraries_t *libraries) {
     assert(libraries);
 
-    snprintf(g_buff, sizeof(g_buff), "/proc/%d/maps", libraries->cfg.pid);
+    snprintf(g_buff, sizeof(g_buff), "/proc/%d/maps", libraries->pid);
 
     //copy file in buffer
     FILE *fp = fopen(g_buff, "r");
@@ -149,11 +156,6 @@ void libraries_update(libraries_t *libraries) {
         // We are looking for files mapped in memory with READ/EXECUTE attributes
         if (perm[0] == 'r' && perm[2] == 'x' && (name = strchr(g_buff, '/'))) {
             library_t *library = NULL;
-
-            // skip ld library
-            //if (strstr(name, "/ld-") || strstr(name, "/ld.")) {
-            //    continue;
-            //}
 
             // library is already in the list
             if (libraries_contains(libraries, begin, end, name)) {
@@ -191,27 +193,6 @@ void libraries_destroy(libraries_t *libraries) {
     }
     free(libraries->list);
     free(libraries);
-}
-
-elf_file_t *library_get_elf_section(library_t *library, library_section_t section) {
-    static const char *names[] = {
-        [library_section_dynsym] = ".dynsym",
-        [library_section_dynstr] = ".dynstr",
-        [library_section_symtab] = ".symtab",
-        [library_section_strtab] = ".strtab",
-        [library_section_rela_dyn] = ".rela.dyn",
-        [library_section_rela_plt] = ".rela.plt",
-    };
-
-    if (section >= library_section_end) {
-        return NULL;
-    }
-
-    if (!library->files[section]) {
-        library->files[section] = elf_section_open_from_name(library->elf, names[section]);
-    }
-
-    return library->files[section];
 }
 
 void libraries_print(const libraries_t *libraries, FILE *fp) {
@@ -265,6 +246,53 @@ library_t *libraries_first(libraries_t *libraries) {
 size_t libraries_count(const libraries_t *libraries) {
     assert(libraries);
     return libraries->count;
+}
+
+elf_t *library_elf(const library_t *library) {
+    assert(library);
+    return library->elf;
+}
+
+const char *library_name(const library_t *library) {
+    assert(library);
+    return library->name;
+}
+
+void *library_begin(const library_t *library) {
+    assert(library);
+    return library->begin;
+}
+
+void *library_end(const library_t *library) {
+    assert(library);
+    return library->end;
+}
+
+size_t library_offset(const library_t *library) {
+    assert(library);
+    return library->offset;
+}
+
+elf_file_t *library_get_elf_section(library_t *library, library_section_t section) {
+    static const char *names[] = {
+        [library_section_dynsym] = ".dynsym",
+        [library_section_dynstr] = ".dynstr",
+        [library_section_symtab] = ".symtab",
+        [library_section_strtab] = ".strtab",
+        [library_section_rela_dyn] = ".rela.dyn",
+        [library_section_rela_plt] = ".rela.plt",
+        [library_section_bss] = ".bss",
+    };
+
+    if (section >= library_section_end) {
+        return NULL;
+    }
+
+    if (!library->files[section]) {
+        library->files[section] = elf_section_open_from_name(library->elf, names[section]);
+    }
+
+    return library->files[section];
 }
 
 size_t library_relative_address(const library_t *library, size_t address) {
