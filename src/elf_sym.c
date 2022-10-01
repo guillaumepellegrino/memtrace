@@ -96,17 +96,13 @@ elf_sym_t elf_sym_from_name(elf_file_t *symtab, elf_file_t *strtab, const char *
 
     do {
         elf_sym_entry_read(symtab, &sym);
-
-        if ((sym.st_info & 0x0f) == STT_FUNC) {
-            elf_file_seek(strtab, sym.st_name);
-            const char *symname = elf_file_read_strp(strtab);
-
-            if (symname && !strcmp(symname, name)) {
-                result.name = symname;
-                result.offset = sym.st_value;
-                result.section_index = sym.st_shndx;
-                return result;
-            }
+        elf_file_seek(strtab, sym.st_name);
+        const char *symname = elf_file_read_strp(strtab);
+        if (symname && !strcmp(symname, name)) {
+            result.name = symname;
+            result.offset = sym.st_value;
+            result.section_index = sym.st_shndx;
+            return result;
         }
     } while (!elf_file_eof(symtab));
 

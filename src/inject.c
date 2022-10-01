@@ -32,13 +32,15 @@ struct _injecter {
     library_t *program_lib; /** Program library from target process */
     library_t *inject_lib; /** Injected library */
     library_t *c_lib; /** libc library from target process */
+    library_t *pthread_lib; /** optional pthread library from target process */
 };
 
 typedef struct {
     int pid;
     library_t *program;
     library_t *inject;
-    library_t *libc;
+    library_t *c_lib;
+    library_t *pthread_lib;
 } injecter_resolve_function_ctx_t;
 
 static int64_t library_get_rela_offset(library_t *target, const char *fname) {
@@ -155,7 +157,7 @@ static size_t relocate_address(const library_t *program, const library_t *lib, e
     }
 }
 
-size_t resolve_function_fromlib(elf_relocate_t *rela, injecter_resolve_function_ctx_t *ctx, library_t *lib) {
+size_t resolve_function_fromlib(elf_relocate_t *rela, library_t *lib) {
     // Compute lib function offset
     elf_file_t *symtab = library_get_elf_section(lib, library_section_dynsym);
     elf_file_t *strtab = library_get_elf_section(lib, library_section_dynstr);
@@ -168,31 +170,37 @@ size_t resolve_function_fromlib(elf_relocate_t *rela, injecter_resolve_function_
         //TRACE_ERROR("%s not found (section idx: %d)", rela->sym.name, rela->sym.section_index);
         return 0;
     }
+    if (sym.section_index == 0) {
+        // Symbol is undefined.
+        return 0;
+    }
 
     return library_absolute_address(lib, sym.offset);
 }
 
 bool resolve_function(elf_relocate_t *rela, void *userdata) {
-    injecter_resolve_function_ctx_t *ctx = userdata;
+    injecter_t *injecter = userdata;
     size_t rela_addr = 0;
     size_t sym_addr = 0;
 
-    if (!(rela_addr = relocate_address(ctx->program, ctx->inject, rela))) {
+    if (!(rela_addr = relocate_address(injecter->program_lib, injecter->inject_lib, rela))) {
         TRACE_ERROR("Failed to get %s() relocation adress", rela->sym.name);
         return true;
     }
 
-    if (!(sym_addr = resolve_function_fromlib(rela, ctx, ctx->libc))) {
-        if (!(sym_addr = resolve_function_fromlib(rela, ctx, ctx->inject))) {
-            if (!(sym_addr = resolve_function_fromlib(rela, ctx, ctx->program))) {
-                TRACE_WARNING("Function %s() was not resolved", rela->sym.name);
-                return true;
+    if (!(sym_addr = resolve_function_fromlib(rela, injecter->c_lib))) {
+        if (!injecter->pthread_lib || !(sym_addr = resolve_function_fromlib(rela, injecter->pthread_lib))) {
+            if (!(sym_addr = resolve_function_fromlib(rela, injecter->inject_lib))) {
+                if (!(sym_addr = resolve_function_fromlib(rela, injecter->program_lib))) {
+                    TRACE_WARNING("Function %s() was not resolved", rela->sym.name);
+                    return true;
+                }
             }
         }
     }
 
     CONSOLE("Resolve %s() (*0x%zx = 0x%zx)", rela->sym.name, rela_addr, sym_addr);
-    if (ptrace(PTRACE_POKETEXT, ctx->pid, rela_addr, sym_addr) != 0) {
+    if (ptrace(PTRACE_POKETEXT, injecter->pid, rela_addr, sym_addr) != 0) {
         TRACE_ERROR("Failed to replace function");
         return true;
     }
@@ -200,13 +208,8 @@ bool resolve_function(elf_relocate_t *rela, void *userdata) {
     return true;
 }
 
-static bool injecter_resolve_functions(int pid, library_t *program, library_t *inject, library_t *libc) {
-    injecter_resolve_function_ctx_t ctx = {
-        .pid = pid,
-        .program = program,
-        .inject = inject,
-        .libc = libc,
-    };
+static bool injecter_resolve_functions(injecter_t *injecter) {
+    library_t *inject = injecter->inject_lib;
     elf_file_t *rela_plt_file = library_get_elf_section(inject, library_section_rela_plt);
     elf_file_t *rela_dyn_file = library_get_elf_section(inject, library_section_rela_dyn);
     elf_file_t *dynsym_file = library_get_elf_section(inject, library_section_dynsym);
@@ -217,12 +220,12 @@ static bool injecter_resolve_functions(int pid, library_t *program, library_t *i
     }
 
     CONSOLE("[Resolve functions for %s]", elf_name(inject->elf));
-    if (!elf_relocate_read(inject->elf, rela_plt_file, dynsym_file, dynstr_file, resolve_function, &ctx)) {
+    if (!elf_relocate_read(inject->elf, rela_plt_file, dynsym_file, dynstr_file, resolve_function, injecter)) {
         TRACE_ERROR("Failed to process .rela.plt section");
         return false;
     }
 
-    if (!elf_relocate_read(inject->elf, rela_dyn_file, dynsym_file, dynstr_file, resolve_function, &ctx)) {
+    if (!elf_relocate_read(inject->elf, rela_dyn_file, dynsym_file, dynstr_file, resolve_function, injecter)) {
         TRACE_ERROR("Failed to process .rela.dyn section");
         return false;
     }
@@ -310,7 +313,6 @@ size_t procmaps_find_available_memory(int pid) {
 
         begin = (size_t) begin_p;
         end = (size_t) end_p;
-        CONSOLE("begin: %zx, end %zx", begin, end);
         if (stack) {
             // do not map anything after the stack
             break;
@@ -419,7 +421,7 @@ bool injecter_load_library(injecter_t *injecter, const char *libname) {
 
         // Map memory on target process
         size_t mapaddr = elf_pagestart(base_addr + ph->p_vaddr);
-        size_t mapsize = ph->p_filesz + elf_pageoffset(base_addr + ph->p_vaddr);
+        size_t mapsize = ph->p_memsz + elf_pageoffset(base_addr + ph->p_vaddr);
         size_t mapoffset = ph->p_offset - elf_pageoffset(base_addr + ph->p_vaddr);
 
         CONSOLE("Load program at 0x%zx, offset: %"PRIx64 ", size: %"PRIx64, mapaddr, mapoffset, mapsize);
@@ -443,6 +445,7 @@ bool injecter_load_library(injecter_t *injecter, const char *libname) {
 
     injecter->program_lib = libraries_first(injecter->libraries);
     injecter->c_lib = libraries_find_by_name(injecter->libraries, "/libc(\\.|-)");
+    injecter->pthread_lib = libraries_find_by_name(injecter->libraries, "/libpthread(\\.|-)");
     injecter->inject_lib = libraries_find_by_name(injecter->libraries, injecter->inject_libname);
     if (!injecter->program_lib) {
         TRACE_ERROR("Failed to find target lib");
@@ -458,7 +461,7 @@ bool injecter_load_library(injecter_t *injecter, const char *libname) {
     }
 
     // Resolve functions from injected library
-    injecter_resolve_functions(injecter->pid, injecter->program_lib, injecter->inject_lib, injecter->c_lib);
+    injecter_resolve_functions(injecter);
 
     // Initialize .bss section to zero
     // FIXME: We should zeroing (p_memsz-p_filesz) for each elf section
