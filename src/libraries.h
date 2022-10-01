@@ -50,8 +50,8 @@ library_t *libraries_find(libraries_t *libraries, size_t address);
 /** Return the library corresponding to this name */
 library_t *libraries_find_by_name(libraries_t *libraries, const char *regex);
 
-/** Return the first library from array */
-library_t *libraries_first(libraries_t *libraries);
+/** Return the library by index */
+library_t *libraries_get(libraries_t *libraries, size_t idx);
 
 /** Return the count of libraries */
 size_t libraries_count(const libraries_t *libraries);

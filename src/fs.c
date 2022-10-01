@@ -418,16 +418,9 @@ static bool fs_transfer_coredump(fs_t *server, const char *filename) {
     bool rt = false;
     ssize_t elf_header_len = 0x40;
     FILE *fp = NULL;
-    fs_cfg_t fs_cfg = {
-        .type = fs_type_local,
-        .me = server->cfg.me,
-    };
-    fs_t localfs = {0};
     elf_t *elf = NULL;
     const elf_header_t *hdr = NULL;
     size_t xbytes = 0;
-
-    assert(fs_initialize(&localfs, &fs_cfg));
 
     if (fread(g_buff, elf_header_len, 1, server->socket) != 1) {
         TRACE_ERROR("Failed to read socket: %m");
@@ -443,7 +436,7 @@ static bool fs_transfer_coredump(fs_t *server, const char *filename) {
     }
     fflush(fp);
 
-    if (!(elf = elf_parse_header(filename, &localfs))) {
+    if (!(elf = elf_parse_header(filename))) {
         TRACE_ERROR("Failed to parse coredump header");
         goto error;
     }
@@ -464,7 +457,6 @@ error:
     if (fp) {
         fclose(fp);
     }
-    fs_cleanup(&localfs);
     return rt;
 }
 

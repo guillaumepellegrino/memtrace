@@ -35,7 +35,6 @@
 #include <fcntl.h>
 #include "elf_file.h"
 #include "elf.h"
-#include "fs.h"
 #include "log.h"
 
 #define FS_DEFAULT_BINDADDR "::0"
@@ -184,8 +183,8 @@ const char *elf_file_read_strp(elf_file_t *file) {
 
 elf_file_t *elf_file_open(elf_t *elf, uint64_t size, uint64_t offset) {
     elf_file_t *file = NULL;
-    fs_t *fs = elf_fs(elf);
     const char *name = NULL;
+    FILE *fp = NULL;
 
     if (!elf || !size) {
         errno = EINVAL;
@@ -195,69 +194,24 @@ elf_file_t *elf_file_open(elf_t *elf, uint64_t size, uint64_t offset) {
         errno = EINVAL;
         return NULL;
     }
-
-    if (!fs || fs->cfg.type == fs_type_local) {
-        FILE *fp = fopen(name, "r");
-        if (!fp) {
-            return NULL;
-        }
-        if (offset && fseek(fp, offset, SEEK_SET) != 0) {
-            fclose(fp);
-            return NULL;
-        }
-        if (!(file = calloc(1, sizeof(elf_file_t) + size))) {
-            fclose(fp);
-            return NULL;
-        }
-        file->size = size;
-        if (fread(file->buffer, file->size, 1, fp) != 1) {
-            fclose(fp);
-            free(file);
-            return NULL;
-        }
+    if (!(fp = fopen(name, "r"))) {
+        return NULL;
+    }
+    if (offset && fseek(fp, offset, SEEK_SET) != 0) {
         fclose(fp);
+        return NULL;
     }
-    else {
-        uint64_t retsize = 0;
-        TRACE_LOG(GET_REQUEST "size=%"PRIu64"/offset=%"PRIu64":%s", size, offset, name);
-        if (fprintf(fs->socket, GET_REQUEST "size=%"PRIu64"/offset=%"PRIu64":%s\n", size, offset, name) <= 0) {
-            TRACE_ERROR("fprintf(socket) failed: %m");
-            return NULL;
-        }
-        if (fflush(fs->socket) != 0) {
-            TRACE_ERROR("fflush(socket) failed: %m");
-            return NULL;
-        }
-
-        TRACE_LOG("WAIT FOR GET/REPLY");
-        char line[64];
-        if (!fgets(line, sizeof(line), fs->socket)) {
-            TRACE_ERROR("fgets(socket) failed: %m");
-            return NULL;
-        }
-        if (sscanf(line, GET_REPLY "size=%"PRIu64, &retsize) != 1) {
-            TRACE_ERROR("Failed to parse reply from server");
-            return NULL;
-        }
-        if (retsize == 0) {
-            TRACE_ERROR("Failed to get %s", name);
-            return NULL;
-        }
-        if (!(file = calloc(1, sizeof(elf_file_t) + retsize))) {
-            TRACE_ERROR("calloc(%"PRIu64") failed: %m", retsize);
-            return NULL;
-        }
-
-        file->size = retsize;
-
-        TRACE_LOG("READ %"PRIu64, file->size);
-        if (fread(file->buffer, file->size, 1, fs->socket) != 1) {
-            TRACE_ERROR("Failed to read reply from server");
-            free(file);
-            return NULL;
-        }
-        TRACE_LOG("READ %"PRIu64" DONE", file->size);
+    if (!(file = calloc(1, sizeof(elf_file_t) + size))) {
+        fclose(fp);
+        return NULL;
     }
+    file->size = size;
+    if (fread(file->buffer, file->size, 1, fp) != 1) {
+        fclose(fp);
+        free(file);
+        return NULL;
+    }
+    fclose(fp);
 
     elf_file_set64bit(file, elf_header(elf)->ei_class == ei_class_64bit);
     elf_file_setlowendian(file, elf_header(elf)->ei_data == ei_data_le);

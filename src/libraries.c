@@ -101,7 +101,7 @@ static bool libraries_contains(libraries_t *libraries, const void *begin, const 
 }
 
 static void libraries_entry_add(libraries_t *libraries, library_t *library, void *begin, void *end, const char *name) {
-    elf_t *elf = elf_open(name, fs_local());
+    elf_t *elf = elf_open(name);
     const program_header_t *program = elf_program_header_executable(elf);
 
     memset(library, 0, sizeof(*library));
@@ -125,18 +125,19 @@ libraries_t *libraries_create(int pid) {
 }
 
 void libraries_update(libraries_t *libraries) {
-    assert(libraries);
+    char buff[4096];
 
-    snprintf(g_buff, sizeof(g_buff), "/proc/%d/maps", libraries->pid);
+    assert(libraries);
+    snprintf(buff, sizeof(buff), "/proc/%d/maps", libraries->pid);
 
     //copy file in buffer
-    FILE *fp = fopen(g_buff, "r");
+    FILE *fp = fopen(buff, "r");
     if (!fp) {
-        TRACE_ERROR("Failed to open %s", g_buff);
+        TRACE_ERROR("Failed to open %s", buff);
         return;
     }
 
-    while (fgets(g_buff, sizeof(g_buff), fp)) {
+    while (fgets(buff, sizeof(buff), fp)) {
         char *sep = NULL;
         void *begin = NULL;
         void *end = NULL;
@@ -144,17 +145,17 @@ void libraries_update(libraries_t *libraries) {
         char *name = NULL;
 
         // Strip new line character
-        if ((sep = strchr(g_buff, '\n'))) {
+        if ((sep = strchr(buff, '\n'))) {
             *sep = 0;
         }
 
         // Scan line
-        if ((sscanf(g_buff, "%p-%p %3s", &begin, &end, perm) != 3)) {
+        if ((sscanf(buff, "%p-%p %3s", &begin, &end, perm) != 3)) {
             continue;
         }
 
         // We are looking for files mapped in memory with READ/EXECUTE attributes
-        if (perm[0] == 'r' && perm[2] == 'x' && (name = strchr(g_buff, '/'))) {
+        if (perm[0] == 'r' && perm[2] == 'x' && (name = strchr(buff, '/'))) {
             library_t *library = NULL;
 
             // library is already in the list
@@ -237,9 +238,10 @@ library_t *libraries_find_by_name(libraries_t *libraries, const char *regex) {
     return NULL;
 }
 
-library_t *libraries_first(libraries_t *libraries) {
+library_t *libraries_get(libraries_t *libraries, size_t idx) {
     assert(libraries);
-    return libraries->list;
+    return (idx < libraries->count) ?
+        &libraries->list[idx] : NULL;
 }
 
 /** Return the count of libraries */

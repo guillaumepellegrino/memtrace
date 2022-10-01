@@ -440,7 +440,7 @@ bool injecter_load_library(injecter_t *injecter, const char *libname) {
     }
     libraries_print(injecter->libraries, stdout);
 
-    injecter->program_lib = libraries_first(injecter->libraries);
+    injecter->program_lib = libraries_get(injecter->libraries, 0);
     injecter->c_lib = libraries_find_by_name(injecter->libraries, "/libc(\\.|-)");
     injecter->pthread_lib = libraries_find_by_name(injecter->libraries, "/libpthread(\\.|-)");
     injecter->inject_lib = libraries_find_by_name(injecter->libraries, injecter->inject_libname);
@@ -483,7 +483,7 @@ bool injecter_replace_function(injecter_t *injecter, const char *program_fname, 
     bool ret = false;
     size_t i = 0;
     for (i = 0; i < libraries_count(injecter->libraries); i++) {
-        library_t *lib = libraries_first(injecter->libraries) + i;
+        library_t *lib = libraries_get(injecter->libraries, i);
         if (lib != injecter->inject_lib) {
             ret |= library_replace_function(injecter->pid, lib, injecter->inject_lib, (size_t)injecter->inject_baseaddr, program_fname, inject_fname);
         }

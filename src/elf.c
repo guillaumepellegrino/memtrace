@@ -26,12 +26,10 @@
 #include "elf.h"
 #include "elf_file.h"
 #include "types.h"
-#include "fs.h"
 #include "log.h"
 
 struct _elf {
     char *name;
-    fs_t *fs;
     elf_header_t header;
     program_header_t *programs;
     section_header_t *sections;
@@ -109,7 +107,7 @@ static bool elf_section_parse(elf_t *elf, elf_file_t *fp, size_t i) {
     return true;
 }
 
-elf_t *elf_parse_header(const char *name, fs_t *fs) {
+elf_t *elf_parse_header(const char *name) {
     static const unsigned char elf_magic[] = {0x7F, 'E', 'L', 'F'};
     elf_t *elf = NULL;
     elf_file_t *fp = NULL;
@@ -121,7 +119,6 @@ elf_t *elf_parse_header(const char *name, fs_t *fs) {
         goto error;
     }
     assert((elf->name = strdup(name)));
-    elf->fs = fs;
 
     if (!(fp = elf_file_open(elf, 0x40, 0))) {
         TRACE_ERROR("Failed to open %s: %m", name);
@@ -161,10 +158,10 @@ error:
 }
 
 elf_t *elf_open_local(const char *name) {
-    return elf_open(name, fs_local());
+    return elf_open(name);
 }
 
-elf_t *elf_open(const char *name, fs_t *fs) {
+elf_t *elf_open(const char *name) {
     static const unsigned char elf_magic[] = {0x7F, 'E', 'L', 'F'};
     elf_t *elf = NULL;
     elf_file_t *fp = NULL;
@@ -177,7 +174,6 @@ elf_t *elf_open(const char *name, fs_t *fs) {
         goto error;
     }
     assert((elf->name = strdup(name)));
-    elf->fs = fs;
 
     if (!(fp = elf_file_open(elf, 0x40, 0))) {
         TRACE_ERROR("Failed to open %s: %m", name);
@@ -274,10 +270,6 @@ error:
 
 const char *elf_name(elf_t *elf) {
     return elf ? elf->name : NULL;
-}
-
-fs_t *elf_fs(elf_t *elf) {
-    return elf ? elf->fs : NULL;
 }
 
 void elf_print(elf_t *elf) {
