@@ -254,6 +254,101 @@ void injecter_destroy(injecter_t *injecter) {
     free(injecter);
 }
 
+size_t alignup(size_t value, size_t align) {
+    if (value % align == 0) {
+        return value;
+    }
+    else {
+        value /= align;
+        value += 1;
+        value *= align;
+        return value;
+    }
+}
+
+static inline size_t elf_pagestart(size_t value) {
+    return value & ~(getpagesize()- 1);
+}
+
+static inline size_t elf_pageoffset(size_t value) {
+    return value & (getpagesize()- 1);
+}
+
+/** Find available memory in /proc/pid/maps */
+size_t procmaps_find_available_memory(int pid) {
+    size_t bestavailable = 0;
+    size_t bestavailable_size = 0;
+    size_t available_size = 0;
+    size_t prev_end = 0;
+    snprintf(g_buff, sizeof(g_buff), "/proc/%d/maps", pid);
+
+    //copy file in buffer
+    FILE *fp = fopen(g_buff, "r");
+    if (!fp) {
+        TRACE_ERROR("Failed to open %s", g_buff);
+        return 0;
+    }
+
+    while (fgets(g_buff, sizeof(g_buff), fp)) {
+        char *sep = NULL;
+        void *begin_p = NULL;
+        void *end_p = NULL;
+        size_t begin = 0;
+        size_t end = 0;
+        bool stack = false;
+
+        // Strip new line character
+        if ((sep = strchr(g_buff, '\n'))) {
+            *sep = 0;
+        }
+
+        // Scan line
+        if ((sscanf(g_buff, "%p-%p", &begin_p, &end_p) != 2)) {
+            continue;
+        }
+        stack = strstr(g_buff, "[stack]");
+
+        begin = (size_t) begin_p;
+        end = (size_t) end_p;
+        CONSOLE("begin: %zx, end %zx", begin, end);
+        if (stack) {
+            // do not map anything after the stack
+            break;
+        }
+        available_size = begin - prev_end;
+        if (available_size > bestavailable_size && prev_end != 0) {
+            bestavailable_size = available_size;
+            bestavailable = prev_end + 1;
+        }
+        prev_end = end;
+    }
+    CONSOLE("Memory available at 0x%zx (size: 0x%zx)", bestavailable, bestavailable_size);
+
+    return bestavailable;
+}
+
+size_t elf_find_available_memory(int pid, elf_t *elf) {
+    size_t base_unaligned_addr = 0;
+    size_t align = 0;
+    const program_header_t *ph = NULL;
+
+    // lookup for available memory in /proc/$pid/maps
+    if (!(base_unaligned_addr = procmaps_find_available_memory(pid))) {
+        return 0;
+    }
+
+    // lookup for the alignement size of the first elf program to be loaded
+    for (ph = elf_program_header_first(elf); ph; ph = elf_program_header_next(elf, ph)) {
+        if (ph->p_type != p_type_load) {
+            continue;
+        }
+        align = max(ph->p_align, 0x1000);
+        break;
+    }
+
+    return alignup(base_unaligned_addr, align);
+}
+
 bool injecter_load_library(injecter_t *injecter, const char *libname) {
     elf_t *elf = NULL;
     const program_header_t *ph = NULL;
@@ -276,12 +371,7 @@ bool injecter_load_library(injecter_t *injecter, const char *libname) {
     injecter->straddr = syscall_mmap(injecter->pid,
         0, 4096, PROT_READ, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
 
-    // Pre-allocate the memory
-    // FIXME: What is the size to allocate ?
-    injecter->inject_baseaddr = syscall_mmap(injecter->pid,
-        0, 10*1000*1000, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
-
-    if (!injecter->straddr || !injecter->inject_baseaddr) {
+    if (!injecter->straddr) {
         TRACE_ERROR("mmap failed");
         return false;
     }
@@ -300,15 +390,21 @@ bool injecter_load_library(injecter_t *injecter, const char *libname) {
         TRACE_ERROR("Failed to open %s inside pid %d", injecter->inject_libname, injecter->pid);
         return false;
     }
+
     CONSOLE("%s opened in target process with fd:%d", injecter->inject_libname, fd);
-    CONSOLE("%s mapped in target process at %p", injecter->inject_libname, injecter->inject_baseaddr);
+
+    size_t base_addr = 0;
+    if (!(base_addr = elf_find_available_memory(injecter->pid, elf))) {
+        CONSOLE("Failed to find available memory to map library");
+        return false;
+    }
+    injecter->inject_baseaddr = (void *) base_addr;
+    CONSOLE("Base Addr: 0x%zx", base_addr);
 
     for (ph = elf_program_header_first(elf); ph; ph = elf_program_header_next(elf, ph)) {
         if (ph->p_type != p_type_load) {
             continue;
         }
-
-        void *ptr = (void *) (((size_t) injecter->inject_baseaddr) + ph->p_vaddr);
 
         int prot = PROT_NONE;
         if (ph->p_flags & p_flags_r) {
@@ -321,22 +417,20 @@ bool injecter_load_library(injecter_t *injecter, const char *libname) {
             prot |= PROT_EXEC;
         }
 
-        CONSOLE("Load program: ptr: %p, offset: %"PRIx64 ", size: %"PRIx64, ptr, ph->p_offset, ph->p_memsz);
-
         // Map memory on target process
-        // Map address must be aligned according ph->p_align
-        size_t mapaddr = (((size_t) ptr) / ph->p_align) * ph->p_align;
-        size_t mapsize = (((size_t) ptr) % ph->p_align) + ph->p_memsz;
-        size_t offset = (ph->p_offset / ph->p_align) * ph->p_align;
+        size_t mapaddr = elf_pagestart(base_addr + ph->p_vaddr);
+        size_t mapsize = ph->p_filesz + elf_pageoffset(base_addr + ph->p_vaddr);
+        size_t mapoffset = ph->p_offset - elf_pageoffset(base_addr + ph->p_vaddr);
+
+        CONSOLE("Load program at 0x%zx, offset: %"PRIx64 ", size: %"PRIx64, mapaddr, mapoffset, mapsize);
         if (syscall_mmap(injecter->pid,
-            (void *) mapaddr, mapsize, prot, MAP_PRIVATE|MAP_FIXED, fd, offset) != (void *) mapaddr)
+            (void *) mapaddr, mapsize, prot, MAP_PRIVATE|MAP_FIXED, fd, mapoffset) != (void *) mapaddr)
         {
             TRACE_ERROR("Failed to map memory");
             return false;
         }
         CONSOLE("Program mapped at 0x%zx (size=0x%zx)", mapaddr, mapsize);
     }
-
 
     const libraries_cfg_t cfg = {
         .pid = injecter->pid,
@@ -367,6 +461,7 @@ bool injecter_load_library(injecter_t *injecter, const char *libname) {
     injecter_resolve_functions(injecter->pid, injecter->program_lib, injecter->inject_lib, injecter->c_lib);
 
     // Initialize .bss section to zero
+    // FIXME: We should zeroing (p_memsz-p_filesz) for each elf section
     const section_header_t *bss = elf_section_header_get(injecter->inject_lib->elf, ".bss");
     if (bss) {
         size_t bss_addr = library_absolute_address(injecter->inject_lib, bss->sh_addr);

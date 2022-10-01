@@ -141,7 +141,7 @@ int main(int argc, char *argv[]) {
     int pid = -1;
     int tid = -1;
     DIR *threads = NULL;
-    const char *libname = "/home/sahphilog2/workspace/memtrace/target/memtrace-agent.so";
+    const char *libname = "/home/sahphilog2/workspace/memtrace/target/libmemtrace-agent.so";
     injecter_t *injecter = NULL;
 
     while ((opt = getopt_long(argc, argv, short_options, long_options, NULL)) != -1) {
