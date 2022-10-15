@@ -31,6 +31,10 @@ void sigint_handler(int s) {
     exit_loop = 1;
 }
 
+char *alloc_toto() {
+    return strdup("toto");
+}
+
 int main(int argc, char *argv[]) {
     int loop = 1;
     pthread_t thread;
@@ -52,7 +56,7 @@ int main(int argc, char *argv[]) {
         int *num = calloc(1, sizeof(num));
         if (num) {
             *num = getmagicnumber(loop);
-            printf("magic number = %d (%p)\n", *num, num);
+            //printf("magic number = %d (%p)\n", *num, num);
             free(num);
         }
         else {
@@ -60,9 +64,8 @@ int main(int argc, char *argv[]) {
         }
         fflush(stdout);
 
-        char *toto = strdup("toto");
-        printf("strdup() -> %s (%p)\n", toto, toto);
-        free(toto);
+        //char *toto = alloc_toto();
+        //printf("strdup() -> %s (%p)\n", toto, toto);
         sleep(1);
         loop++;
     }

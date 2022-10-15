@@ -32,6 +32,7 @@
 #include "log.h"
 #include "list.h"
 #include "coredump.h"
+#include "arch.h"
 #include "elf.h"
 
 #define section_name_empty 0
@@ -439,12 +440,13 @@ void elf_program_note_add_prpsinfo(elf_program_note_t *note, int pid) {
 
 
     // Fill pr_fname from /proc/%d/exe
-    char name[32];
-    snprintf(name, sizeof(name), "/proc/%d/exe", pid);
-    if (readlink(name, g_buff, sizeof(g_buff)) > 0) {
+    char exe[32];
+    snprintf(exe, sizeof(exe), "/proc/%d/exe", pid);
+    if (readlink(exe, g_buff, sizeof(g_buff)) > 0) {
         const char *sep = strrchr(g_buff, '/');
         const char *name = sep ? sep + 1 : g_buff;
 #pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpragmas"
 #pragma GCC diagnostic ignored "-Wformat-truncation"
         snprintf(info.pr_fname, sizeof(info.pr_fname), "%s", name);
 #pragma GCC diagnostic pop
@@ -499,7 +501,7 @@ void elf_program_note_add_prpsinfo(elf_program_note_t *note, int pid) {
     elf_program_note_add(note, NT_PRPSINFO, "CORE", &info, sizeof(info));
 }
 
-void elf_program_note_add_prstatus(elf_program_note_t *note, int pid) {
+void elf_program_note_add_prstatus(elf_program_note_t *note, int pid, cpu_registers_t *override) {
     prstatus_t prstatus = {
         .pr_pid = pid,
     };
@@ -510,6 +512,28 @@ void elf_program_note_add_prstatus(elf_program_note_t *note, int pid) {
     if (ptrace(PTRACE_GETREGSET, pid, NT_PRSTATUS, &iovec) != 0) {
         TRACE_LOG("Failed to get NT_PRSTATUS registers: %m");
         return;
+    }
+
+    // Override registers from coredump with the one passed in function parameters
+    if (override) {
+        // for x64 only
+        cpu_registers_t *regs = (cpu_registers_t *) prstatus.pr_reg;
+
+        cpu_register_name_t copy[] = {
+            cpu_register_pc,
+            cpu_register_sp,
+            cpu_register_fp,
+            cpu_register_syscall,
+            cpu_register_arg1,
+            cpu_register_arg2,
+            cpu_register_arg3,
+            cpu_register_arg4,
+            cpu_register_arg5,
+        };
+        for (size_t i = 0; i < countof(copy); i++) {
+            cpu_register_set(regs, copy[i],
+                cpu_register_get(override, copy[i]));
+        }
     }
     elf_program_note_add(note, NT_PRSTATUS, "CORE", &prstatus, sizeof(prstatus));
 }
@@ -700,7 +724,7 @@ static void elf_coredump_map_files(elf_coredump_t *coredump, elf_note_files_t *n
         void *end = NULL;
         char perm[5] = {0};
         size_t offset = 0;
-        size_t flags = p_flags_r;
+        size_t flags = 0;
         const char *name = NULL;
         const char *topic = NULL;
 
@@ -716,6 +740,10 @@ static void elf_coredump_map_files(elf_coredump_t *coredump, elf_note_files_t *n
         flags |= (perm[0] == 'r') ? p_flags_r : 0;
         flags |= (perm[1] == 'w') ? p_flags_w : 0;
         flags |= (perm[2] == 'x') ? p_flags_x : 0;
+        if (flags == 0) {
+            continue;
+        }
+        flags |= p_flags_r;
 
         // Get file name
         if ((name = strchr(g_buff, '/'))) {
@@ -732,7 +760,7 @@ static void elf_coredump_map_files(elf_coredump_t *coredump, elf_note_files_t *n
     fclose(fp);
 }
 
-void coredump_write(int pid, int memfd, FILE *fp) {
+void coredump_write(int pid, int memfd, FILE *fp, cpu_registers_t *regs) {
     elf_coredump_t coredump = {0};
     elf_program_note_t note = {0};
     elf_note_files_t note_files = {0};
@@ -742,7 +770,7 @@ void coredump_write(int pid, int memfd, FILE *fp) {
 
     elf_program_note_initialize(&note, &coredump);
     elf_program_note_add_prpsinfo(&note, pid);
-    elf_program_note_add_prstatus(&note, pid);
+    elf_program_note_add_prstatus(&note, pid, regs);
     elf_program_note_add_prfpreg(&note, pid);
     elf_program_note_add_xstate(&note, pid);
     elf_program_note_add_siginfo(&note, pid);

@@ -30,5 +30,6 @@ typedef struct {
 elf_sym_t elf_sym(elf_file_t *symtab, elf_file_t *strtab, uint64_t address);
 elf_sym_t elf_sym_from_idx(elf_file_t *symtab, elf_file_t *strtab, uint32_t idx);
 elf_sym_t elf_sym_from_name(elf_file_t *symtab, elf_file_t *strtab, const char *name);
+elf_sym_t elf_sym_from_addr(elf_file_t *symtab, elf_file_t *strtab, size_t addr);
 
 #endif

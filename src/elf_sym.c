@@ -59,6 +59,7 @@ elf_sym_t elf_sym(elf_file_t *symtab, elf_file_t *strtab, uint64_t address) {
             elf_file_seek(strtab, sym.st_name);
             result.name = elf_file_read_strp(strtab);
             result.offset = address - sym.st_value;
+            result.section_index = sym.st_shndx;
             return result;
 /*
             CONSOLE("[0x%"PRIx64"] Symbol:", offset);
@@ -85,6 +86,7 @@ elf_sym_t elf_sym_from_idx(elf_file_t *symtab, elf_file_t *strtab, uint32_t idx)
     elf_file_seek(strtab, sym.st_name);
     result.name = elf_file_read_strp(strtab);
     result.offset = sym.st_value;
+    result.section_index = sym.st_shndx;
     return result;
 }
 
@@ -95,9 +97,20 @@ elf_sym_t elf_sym_from_name(elf_file_t *symtab, elf_file_t *strtab, const char *
     elf_file_seek(symtab, 0);
 
     do {
+        const char *symname = NULL;
+
         elf_sym_entry_read(symtab, &sym);
         elf_file_seek(strtab, sym.st_name);
-        const char *symname = elf_file_read_strp(strtab);
+
+        switch (sym.st_info & 0x0f) {
+            case STT_FUNC:
+            case STT_OBJECT:
+                symname = elf_file_read_strp(strtab);
+                break;
+            default:
+                break;
+        }
+
         if (symname && !strcmp(symname, name)) {
             result.name = symname;
             result.offset = sym.st_value;
@@ -108,3 +121,32 @@ elf_sym_t elf_sym_from_name(elf_file_t *symtab, elf_file_t *strtab, const char *
 
     return result;
 }
+
+elf_sym_t elf_sym_from_addr(elf_file_t *symtab, elf_file_t *strtab, size_t addr) {
+    elf_sym_entry_t sym;
+    elf_sym_t result = {0};
+
+    elf_file_seek(symtab, 0);
+
+    do {
+        elf_sym_entry_read(symtab, &sym);
+        elf_file_seek(strtab, sym.st_name);
+
+        switch (sym.st_info & 0x0f) {
+            case STT_FUNC:
+            case STT_OBJECT:
+                if (addr >= sym.st_value && addr < (sym.st_value + sym.st_size)) {
+                    result.name = elf_file_read_strp(strtab);
+                    result.offset = sym.st_value;
+                    result.section_index = sym.st_shndx;
+                    return result;
+                }
+                break;
+            default:
+                break;
+        }
+    } while (!elf_file_eof(symtab));
+
+    return result;
+}
+

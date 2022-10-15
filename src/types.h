@@ -47,9 +47,6 @@ typedef union _variant_value variant_value_t;
 typedef struct _ftrace ftrace_t;
 typedef struct _ftrace_fcall ftrace_fcall_t;
 typedef struct _epoll_handler epoll_handler_t;
-typedef struct _cpu_registers cpu_registers_t;
-typedef struct _breakpoint breakpoint_t;
-typedef struct _syscall syscall_t;
 typedef struct _backtrace backtrace_t;
 typedef struct _libraries libraries_t;
 typedef struct _library library_t;
@@ -63,9 +60,8 @@ typedef struct _fs_cfg fs_cfg_t;
 typedef struct _fs fs_t;
 typedef struct _console_cmd console_cmd_t;
 typedef struct _console console_t;
+typedef struct _cpu_registers cpu_registers_t;
 
-
-typedef bool (*ftrace_handler_t)(const ftrace_fcall_t *fcall, void *userdata);
 
 union _variant_value {
     uint8_t  u8;

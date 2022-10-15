@@ -20,19 +20,30 @@
 #define AGENT_H
 
 #include "types.h"
+#include "hashmap.h"
 
 typedef struct {
+    size_t alloc_count;
+    size_t alloc_size;
+    size_t free_count;
+    size_t free_size;
+    size_t byte_inuse;
+    size_t block_inuse;
+} stats_t;
+
+typedef struct {
+    libraries_t *libraries;
+    size_t callstack_size;
+    hashmap_t allocations;
+    hashmap_t blocks;
+    stats_t stats;
     int ipc;
     pthread_t thread;
-    libraries_t *libraries;
 } agent_t;
 
 bool agent_initialize(agent_t *agent);
 void agent_cleanup(agent_t *agent);
-void agent_malloc(agent_t *agent, void *sp, void *lr, size_t size, void *newptr);
-void agent_calloc(agent_t *agent, void *sp, void *lr, size_t nmemb, size_t size, void *newptr);
-void agent_realloc(agent_t *agent, void *sp, void *lr, void *ptr, size_t size, void *newptr);
-void agent_reallocarray(agent_t *agent, void *sp, void *lr, void *ptr, size_t nmemb, size_t size, void *newptr);
-void agent_free(agent_t *agent, void *sp, void *lr, void *ptr);
+void agent_alloc(agent_t *agent, cpu_registers_t *regs, size_t size, void *newptr);
+void agent_dealloc(agent_t *agent, void *ptr);
 
 #endif

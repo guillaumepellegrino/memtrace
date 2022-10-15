@@ -10,11 +10,13 @@
 #include <pthread.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <ucontext.h>
 #include "agent_hooks.h"
 #include "agent.h"
+#include "arch.h"
 
-#define stack_pointer_address() __builtin_frame_address(0)
-#define return_address()        __builtin_return_address(0)
+#define stack_pointer_address() (size_t) __builtin_frame_address(0)
+#define return_address()        (size_t) __builtin_return_address(0)
 
 static pthread_mutex_t init_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t global_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -64,9 +66,19 @@ void hooks_unlock(bool locked) {
     }
 }
 
-void *malloc_hook(size_t size) {
-    void *sp = stack_pointer_address();
-    void *lr = return_address();
+void *malloc_hook(size_t size, size_t arg2, size_t arg3) {
+    //ucontext_t ucp = {0};
+    //getcontext(&ucp);
+    size_t sp = stack_pointer_address();
+    size_t ra = return_address();
+    cpu_registers_t regs = {0};
+    cpu_register_set(&regs, cpu_register_pc, (size_t) malloc);
+    cpu_register_set(&regs, cpu_register_sp, sp);
+    //cpu_register_set(&regs, cpu_register_fp, ucp.uc_mcontext.gregs[REG_RBP]);
+    cpu_register_set(&regs, cpu_register_ra, ra);
+    cpu_register_set(&regs, cpu_register_arg1, size);
+    cpu_register_set(&regs, cpu_register_arg2, arg2);
+    cpu_register_set(&regs, cpu_register_arg3, arg3);
     bool locked = false;
     void *newptr = NULL;
 
@@ -74,16 +86,30 @@ void *malloc_hook(size_t size) {
     locked = hooks_lock();
     newptr = malloc(size);
     if (locked) {
-        agent_malloc(&g_agent, sp, lr, size, newptr);
+        /*
+        printf("RSP=0x%llx, RBP=0x%llx (sp=0x%p, fp=0x%zx),\n",
+            ucp.uc_mcontext.gregs[REG_RSP],
+            ucp.uc_mcontext.gregs[REG_RBP],
+            &ucp,
+            sp);
+            */
+        agent_alloc(&g_agent, &regs, size, newptr);
     }
     hooks_unlock(locked);
 
     return newptr;
 }
 
-void *calloc_hook(size_t nmemb, size_t size) {
-    void *sp = stack_pointer_address();
-    void *lr = return_address();
+void *calloc_hook(size_t nmemb, size_t size, size_t arg3) {
+    size_t sp = stack_pointer_address();
+    size_t ra = return_address();
+    cpu_registers_t regs = {0};
+    cpu_register_set(&regs, cpu_register_pc, (size_t) calloc);
+    cpu_register_set(&regs, cpu_register_sp, sp);
+    cpu_register_set(&regs, cpu_register_ra, ra);
+    cpu_register_set(&regs, cpu_register_arg1, nmemb);
+    cpu_register_set(&regs, cpu_register_arg2, size);
+    cpu_register_set(&regs, cpu_register_arg3, arg3);
     bool locked = false;
     void *newptr = NULL;
 
@@ -91,7 +117,7 @@ void *calloc_hook(size_t nmemb, size_t size) {
     locked = hooks_lock();
     newptr = calloc(nmemb, size);
     if (locked) {
-        agent_calloc(&g_agent, sp, lr, nmemb, size, newptr);
+        agent_alloc(&g_agent, &regs, (nmemb*size), newptr);
     }
     hooks_unlock(locked);
 
@@ -99,8 +125,14 @@ void *calloc_hook(size_t nmemb, size_t size) {
 }
 
 void *realloc_hook(void *ptr, size_t size) {
-    void *sp = stack_pointer_address();
-    void *lr = return_address();
+    size_t sp = stack_pointer_address();
+    size_t ra = return_address();
+    cpu_registers_t regs = {0};
+    cpu_register_set(&regs, cpu_register_pc, (size_t) realloc);
+    cpu_register_set(&regs, cpu_register_sp, sp);
+    cpu_register_set(&regs, cpu_register_ra, ra);
+    cpu_register_set(&regs, cpu_register_arg1, (size_t) ptr);
+    cpu_register_set(&regs, cpu_register_arg2, size);
     bool locked = false;
     void *newptr = NULL;
 
@@ -108,7 +140,12 @@ void *realloc_hook(void *ptr, size_t size) {
     locked = hooks_lock();
     newptr = realloc(ptr, size);
     if (locked) {
-        agent_realloc(&g_agent, sp, lr, ptr, size, newptr);
+        if (ptr) {
+            agent_dealloc(&g_agent, ptr);
+        }
+        if (newptr) {
+            agent_alloc(&g_agent, &regs, size, newptr);
+        }
     }
     hooks_unlock(locked);
 
@@ -116,8 +153,15 @@ void *realloc_hook(void *ptr, size_t size) {
 }
 
 void *reallocarray_hook(void *ptr, size_t nmemb, size_t size) {
-    void *sp = stack_pointer_address();
-    void *lr = return_address();
+    size_t sp = stack_pointer_address();
+    size_t ra = return_address();
+    cpu_registers_t regs = {0};
+    cpu_register_set(&regs, cpu_register_pc, (size_t) reallocarray);
+    cpu_register_set(&regs, cpu_register_sp, sp);
+    cpu_register_set(&regs, cpu_register_ra, ra);
+    cpu_register_set(&regs, cpu_register_arg1, (size_t) ptr);
+    cpu_register_set(&regs, cpu_register_arg2, nmemb);
+    cpu_register_set(&regs, cpu_register_arg3, size);
     bool locked = false;
     void *newptr = NULL;
 
@@ -125,7 +169,12 @@ void *reallocarray_hook(void *ptr, size_t nmemb, size_t size) {
     locked = hooks_lock();
     newptr = reallocarray(ptr, nmemb, size);
     if (locked) {
-        agent_reallocarray(&g_agent, sp, lr, ptr, nmemb, size, newptr);
+        if (ptr) {
+            agent_dealloc(&g_agent, ptr);
+        }
+        if (newptr) {
+            agent_alloc(&g_agent, &regs, (nmemb*size), newptr);
+        }
     }
     hooks_unlock(locked);
 
@@ -133,15 +182,62 @@ void *reallocarray_hook(void *ptr, size_t nmemb, size_t size) {
 }
 
 void free_hook(void *ptr) {
-    void *sp = stack_pointer_address();
-    void *lr = return_address();
     bool locked = false;
 
     try_initialize();
     locked = hooks_lock();
     if (locked) {
-        agent_free(&g_agent, sp, lr, ptr);
+        agent_dealloc(&g_agent, ptr);
     }
     free(ptr);
     hooks_unlock(locked);
+}
+
+char *strchr(const char *s, int c) {
+    for (size_t i = 0; s[i]; i++) {
+        if (s[i] == c) {
+            return (char *) &s[i];
+        }
+    }
+    return NULL;
+}
+
+char *strrchr(const char *s, int c) {
+    char *last = NULL;
+    for (size_t i = 0; s[i]; i++) {
+        if (s[i] == c) {
+            last = (char *) &s[i];
+        }
+    }
+    return last;
+}
+
+int strcmp(const char *s1, const char *s2) {
+    size_t i = 0;
+
+    for (i = 0; s1[i] && s2[i]; i++) {
+        if (s1[i] != s2[i]) {
+            return s1[i] - s2[i];
+        }
+    }
+
+    return s1[i] - s2[i];
+}
+
+size_t strlen(const char *s) {
+    size_t i = 0;
+
+    for (i = 0; s[i]; i++);
+
+    return i;
+}
+
+void *memset(void *s, int c, size_t n) {
+    size_t i = 0;
+
+    for (i = 0; i < n; i++) {
+        ((unsigned char *) s)[i] = c;
+    }
+
+    return s;
 }

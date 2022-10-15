@@ -56,6 +56,9 @@ library_t *libraries_get(libraries_t *libraries, size_t idx);
 /** Return the count of libraries */
 size_t libraries_count(const libraries_t *libraries);
 
+void libraries_backtrace(libraries_t *libraries, cpu_registers_t *regs, void **callstack, size_t size);
+void libraries_backtrace_print(libraries_t *libraries, void **callstack, size_t size, void *fp);
+
 /** ELF header from the library */
 elf_t *library_elf(const library_t *library);
 

@@ -21,34 +21,63 @@
 
 #include <stddef.h>
 #include <stdbool.h>
+#include <sys/syscall.h>
+#include <sys/user.h>
+#include <sys/ptrace.h>
 #include "types.h"
-#include "ftrace.h"
 
-typedef struct _cpu_mode cpu_mode_t;
 typedef struct _arch arch_t;
-typedef struct _breakpoint_instr breakpoint_instr_t;
 
-struct _cpu_mode {
-    const char *str;
-    int value;
+typedef enum {
+    cpu_register_pc,
+    cpu_register_sp,
+    cpu_register_fp,
+    cpu_register_ra,
+    cpu_register_syscall,
+    cpu_register_arg1,
+    cpu_register_arg2,
+    cpu_register_arg3,
+    cpu_register_arg4,
+    cpu_register_arg5,
+    cpu_register_arg6,
+    cpu_register_arg7,
+    cpu_register_retval,
+} cpu_register_name_t;
+
+struct _cpu_registers {
+#ifdef __x86_64__
+    struct user_regs_struct raw;
+#else
+    struct user_regs raw;
+#endif
+    size_t extra[1];
 };
 
-struct _breakpoint_instr {
-    long opcode;
-    long size;
-};
-
+/** CPU Architecture specific functions */
 struct _arch {
-    const cpu_mode_t *cpu_modes;
-    int cpu_mode;
-
-    bool (*breakpoint_enable)(breakpoint_t *bp);
-    bool (*breakpoint_disable)(breakpoint_t *bp);
-    bool (*breakpoint_stopped)(breakpoint_t *bp, const ftrace_fcall_t *fcall);
-    bool (*breakpoint_handle_interrupt)(breakpoint_t *bp);
-    bool (*ftrace_fcall_fill)(ftrace_fcall_t *fcall, int pid);
+    bool (*cpu_registers_get)(cpu_registers_t *regs, int pid);
+    size_t *(*cpu_register_reference)(cpu_registers_t *regs, cpu_register_name_t name);
 };
-
 extern arch_t arch;
+
+/** Get all CPU registers from process with specified pid */
+static inline bool cpu_registers_get(cpu_registers_t *regs, int pid) {
+    return arch.cpu_registers_get(regs, pid);
+}
+
+/** Set all CPU registers to process with specified pid */
+static inline bool cpu_registers_set(cpu_registers_t *regs, int pid) {
+    return ptrace(PTRACE_SETREGS, pid, NULL, &regs->raw) == 0;
+}
+
+/** Get the specified CPU register by name */
+static inline size_t cpu_register_get(cpu_registers_t *regs, cpu_register_name_t name) {
+    return *arch.cpu_register_reference(regs, name);
+}
+
+/** Set the specified CPU register by name */
+static inline void cpu_register_set(cpu_registers_t *regs, cpu_register_name_t name, size_t value) {
+    *arch.cpu_register_reference(regs, name) = value;
+}
 
 #endif

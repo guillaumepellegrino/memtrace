@@ -6,6 +6,12 @@
 #include <string.h>
 #include <elf.h>
 
+typedef struct {
+    const char *name;
+    elf_relocate_t *result;
+    bool found;
+} find_by_name_ctx_t;
+
 static uint32_t get_reloc_type(elf_t *elf, uint64_t reloc_info) {
     const elf_header_t *hdr = elf_header(elf);
     if (hdr->ei_class == ei_class_64bit) {
@@ -64,12 +70,6 @@ static bool dump_handler(elf_relocate_t *rela, void *userdata) {
 bool elf_relocate_dump(elf_t *elf, elf_file_t *file, elf_file_t *symtab, elf_file_t *strtab) {
     return elf_relocate_read(elf, file, symtab, strtab, dump_handler, NULL);
 }
-
-typedef struct {
-    const char *name;
-    elf_relocate_t *result;
-    bool found;
-} find_by_name_ctx_t;
 
 static bool find_by_name_handler(elf_relocate_t *rela, void *userdata) {
     find_by_name_ctx_t *ctx = userdata;

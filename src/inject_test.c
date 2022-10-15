@@ -31,9 +31,20 @@
 #include <sys/ptrace.h>
 #include <sys/wait.h>
 #include <sys/user.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include "inject.h"
 #include "libraries.h"
+#include "console.h"
+#include "coredump.h"
+#include "arch.h"
 #include "log.h"
+
+typedef struct {
+    console_t console;
+    FILE *ipc;
+    int pid;
+} console_ctx_t;
 
 __attribute__((aligned)) char g_buff[G_BUFF_SIZE];
 
@@ -113,12 +124,215 @@ static bool thread_attach(int tid) {
     return true;
 }
 
-static void help() {
-    CONSOLE("./target/inject -p $(pidof dummy)");
+static FILE *connect_to_memtrace_agent(int pid) {
+    struct sockaddr_un connaddr = {
+        .sun_family = AF_UNIX,
+    };
+    struct stat buf = {0};
+    int s = -1;
+    FILE *fp = NULL;
+
+    snprintf(connaddr.sun_path, sizeof(connaddr.sun_path),
+        "/tmp/memtrace-agent-%d", pid);
+
+    // Wait for agent to be ready
+    while (true) {
+        if (stat(connaddr.sun_path, &buf) == 0) {
+            break;
+        }
+        usleep(200*1000);
+    }
+
+    if ((s = socket(AF_UNIX, SOCK_STREAM|SOCK_CLOEXEC, 0)) < 0) {
+        printf("Failed to create ipc socket: %m\n");
+        goto error;
+    }
+    if (connect(s, (struct sockaddr *) &connaddr, sizeof(connaddr)) != 0) {
+        printf("Failed to bind ipc socket to %s: %m\n", connaddr.sun_path);
+        goto error;
+    }
+    if (!(fp = fdopen(s, "w+"))) {
+        TRACE_ERROR("fdopen() error: %m");
+        goto error;
+    }
+
+    return fp;
+error:
+    if (s >= 0) {
+        close(s);
+    }
+    return NULL;
 }
 
-int main(int argc, char *argv[]) {
-    static struct {
+static void memtrace_console_quit(console_t *console, int argc, char *argv[]) {
+    // gently ask the event loop to exit
+    kill(getpid(), SIGINT);
+}
+
+static void memtrace_console_forward(console_t *console, int argc, char *argv[]) {
+    char line[4096];
+
+    console_ctx_t *ctx = container_of(console, console_ctx_t, console);
+    for (int i = 0; i < argc; i++) {
+        fprintf(ctx->ipc, "%s ", argv[i]);
+    }
+    fprintf(ctx->ipc, "\n");
+    fflush(ctx->ipc);
+
+
+    while (fgets(line, sizeof(line), ctx->ipc)) {
+        if (!strcmp(line, "[cmd_done]\n")) {
+            break;
+        }
+        else if (!strcmp(line, "[cmd_unknown]\n")) {
+            CONSOLE("Unknown command: %s", argv[0]);
+            break;
+        }
+        else {
+            CONSOLE_RAW("%s", line);
+        }
+    }
+}
+
+void memtrace_coredump(int pid, cpu_registers_t *regs) {
+    char memfile[64];
+    DIR *threads = NULL;
+    int tid = -1;
+    int memfd = -1;
+    FILE *core = NULL;
+
+    if (!(threads = process_threads(pid))) {
+        CONSOLE("Failed to get thread list from pid %d", pid);
+        goto error;
+    }
+    process_for_each_thread(tid, threads) {
+        if (!thread_attach(tid)) {
+            TRACE_ERROR("Failed to attach to thread %d", tid);
+            goto error;
+        }
+        CONSOLE("memtrace attached to pid:%d/tid:%d", pid, tid);
+    }
+
+    if (!(core = fopen("memtrace.core", "w"))) {
+        TRACE_ERROR("Failed to open %s: %m", "memtrace.core");
+        goto error;
+    }
+
+    snprintf(memfile, sizeof(memfile), "/proc/%d/mem", pid);
+    if ((memfd = open(memfile, O_RDONLY)) < 0) {
+        TRACE_ERROR("Failed to open %s: %m", "/proc/self/mem");
+        goto error;
+    }
+
+    fprintf(stderr, "Writing coredump\n");
+    coredump_write(pid, memfd, core, regs);
+    fprintf(stderr, "Writing coredump done\n");
+
+error:
+    if (memfd >= 0) {
+        close(memfd);
+    }
+    if (core) {
+        fclose(core);
+    }
+    if (threads) {
+        process_for_each_thread(tid, threads) {
+            if (ptrace(PTRACE_DETACH, tid, NULL, NULL) != 0) {
+                TRACE_ERROR("ptrace(DETACH, %d) failed: %m", tid);
+            }
+        }
+        closedir(threads);
+    }
+
+}
+
+void memtrace_console_coredump(console_t *console, int argc, char *argv[]) {
+    char line[4096];
+    console_ctx_t *ctx = container_of(console, console_ctx_t, console);
+    cpu_registers_t regs = {0};
+    int tid = 0;
+    size_t pc = 0;
+    size_t sp = 0;
+    size_t fp = 0;
+    size_t ra = 0;
+    size_t arg1 = 0;
+    size_t arg2 = 0;
+    size_t arg3 = 0;
+
+    // Forward command
+    for (int i = 0; i < argc; i++) {
+        fprintf(ctx->ipc, "%s ", argv[i]);
+    }
+    fprintf(ctx->ipc, "\n");
+    fflush(ctx->ipc);
+
+    // Read reply
+    while (fgets(line, sizeof(line), ctx->ipc)) {
+        if (!strcmp(line, "[cmd_done]\n")) {
+            break;
+        }
+        else {
+            CONSOLE_RAW("%s", line);
+        }
+    }
+
+    // Wait for notification do_coredump
+    while (fgets(line, sizeof(line), ctx->ipc)) {
+        if (sscanf(line, "notify do_coredump %d 0x%zx 0x%zx 0x%zx 0x%zx 0x%zx 0x%zx 0x%zx",
+            &tid, &pc, &sp, &fp, &ra, &arg1, &arg2, &arg3) == 8) {
+            cpu_register_set(&regs, cpu_register_pc, pc);
+            cpu_register_set(&regs, cpu_register_sp, sp);
+            cpu_register_set(&regs, cpu_register_fp, fp);
+            cpu_register_set(&regs, cpu_register_ra, ra);
+            cpu_register_set(&regs, cpu_register_arg1, arg1);
+            cpu_register_set(&regs, cpu_register_arg2, arg2);
+            cpu_register_set(&regs, cpu_register_arg3, arg3);
+            sp -= 4;
+            break;
+        }
+        else {
+            CONSOLE_RAW("%s", line);
+        }
+    }
+
+    CONSOLE("Do coredump for process %d", tid);
+    memtrace_coredump(tid, &regs);
+    CONSOLE("Do coredump done");
+
+    fclose(ctx->ipc);
+    ctx->ipc = connect_to_memtrace_agent(ctx->pid);
+}
+
+static const console_cmd_t memtrace_console_commands[] = {
+    {.name = "help",        .help = "Display this help", .handler = console_cmd_help},
+    {.name = "quit",        .help = "Quit memtrace and show report", .handler = memtrace_console_quit},
+    {.name = "status",      .help = "Show memtrace status", .handler = memtrace_console_forward},
+    {.name = "monitor",     .help = "Monitor memory allocations", .handler = NULL},
+    {.name = "report",      .help = "Show memtrace report", .handler = memtrace_console_forward},
+    {.name = "coredump",    .help = "Generate a coredump", .handler = memtrace_console_coredump},
+    {.name = "clear",       .help = "Clear memory statistics", .handler = memtrace_console_forward},
+    {0},
+};
+
+static bool library_is_loaded(int pid, const char *libname) {
+    libraries_t *libraries = NULL;
+    bool rt = false;
+
+    if (!(libraries = libraries_create(pid))) {
+        goto error;
+    }
+
+    rt = libraries_find_by_name(libraries, libname);
+
+error:
+    if (libraries) {
+        libraries_destroy(libraries);
+    }
+    return rt;
+}
+
+static bool inject_memtrace_agent(int pid, const char *libname) {
+    static const struct {
         const char *name;
         const char *inject;
     } replace_functions[] = {
@@ -129,20 +343,84 @@ int main(int argc, char *argv[]) {
         {"reallocarray",    "reallocarray_hook"},
         {"free",            "free_hook"},
     };
-    const char *short_options = "+p:l:hV";
+    bool rt = false;
+    DIR *threads = NULL;
+    int tid = -1;
+    injecter_t *injecter = NULL;
+
+    if (!(threads = process_threads(pid))) {
+        CONSOLE("Failed to get thread list from pid %d", pid);
+        goto error;
+    }
+    process_for_each_thread(tid, threads) {
+        if (!thread_attach(tid)) {
+            TRACE_ERROR("Failed to attach to thread %d", tid);
+            goto error;
+        }
+        CONSOLE("memtrace attached to pid:%d/tid:%d", pid, tid);
+    }
+
+    if (!(injecter = injecter_create(pid))) {
+        TRACE_ERROR("Failed to create code injecter");
+        goto error;
+    }
+    if (!injecter_load_library(injecter, libname)) {
+        TRACE_ERROR("Failed to load %s inside pid %d", libname, pid);
+        goto error;
+    }
+
+    CONSOLE("[Replacing functions]");
+    for (size_t i = 0; i < sizeof(replace_functions)/sizeof(*replace_functions); i++) {
+        injecter_replace_function(injecter, replace_functions[i].name, replace_functions[i].inject);
+    }
+
+    rt = true;
+
+error:
+    if (injecter) {
+        injecter_destroy(injecter);
+    }
+    if (threads) {
+        process_for_each_thread(tid, threads) {
+            if (ptrace(PTRACE_DETACH, tid, NULL, NULL) != 0) {
+                TRACE_ERROR("ptrace(DETACH, %d) failed: %m", tid);
+            }
+        }
+        closedir(threads);
+    }
+    return rt;
+}
+
+static void memtrace_console(FILE *ipc, int pid) {
+    console_ctx_t ctx = {
+        .ipc = ipc,
+        .pid = pid,
+    };
+
+    console_initiliaze(&ctx.console, memtrace_console_commands);
+    while (true) {
+        console_poll(&ctx.console);
+    }
+    console_cleanup(&ctx.console);
+}
+
+static void help() {
+    CONSOLE("./target/inject -p $(pidof dummy)");
+}
+
+int main(int argc, char *argv[]) {
+    const char *short_options = "+p:l:chV";
     const struct option long_options[] = {
         {"pid",         required_argument,  0, 'p'},
         {"library",     required_argument,  0, 'l'},
         {0},
     };
-    const char *me = argv[0];
     int rt = 1;
     int opt = -1;
     int pid = -1;
-    int tid = -1;
-    DIR *threads = NULL;
+    bool do_coredump = false;
+    FILE *ipc = NULL;
     const char *libname = "/home/sahphilog2/workspace/memtrace/target/libmemtrace-agent.so";
-    injecter_t *injecter = NULL;
 
     while ((opt = getopt_long(argc, argv, short_options, long_options, NULL)) != -1) {
         switch (opt) {
@@ -151,6 +429,9 @@ int main(int argc, char *argv[]) {
                 break;
             case 'l':
                 libname = optarg;
+                break;
+            case 'c':
+                do_coredump = true;
                 break;
             case 'h':
                 help();
@@ -171,44 +452,39 @@ int main(int argc, char *argv[]) {
         help();
         goto error;
     }
-    if (!(threads = process_threads(pid))) {
-        CONSOLE("Failed to get thread list from pid %d", pid);
+
+    if (do_coredump) {
+        memtrace_coredump(pid, NULL);
+        rt = 0;
         goto error;
     }
-    process_for_each_thread(tid, threads) {
-        if (!thread_attach(tid)) {
-            TRACE_ERROR("Failed to attach to thread %d", tid);
-            return false;
+
+    if (!library_is_loaded(pid, libname)) {
+        if (!inject_memtrace_agent(pid, libname)) {
+            CONSOLE("Failed to inject memtrace agent in target process");
+            goto error;
         }
-        CONSOLE("%s attached to pid:%d/tid:%d", me, pid, tid);
+        CONSOLE("");
+    }
+    else {
+        CONSOLE("Memtrace agent is already injected in target process");
     }
 
-    if (!(injecter = injecter_create(pid))) {
-        TRACE_ERROR("Failed to create code injecter");
-        goto error;
-    }
-    if (!injecter_load_library(injecter, libname)) {
-        TRACE_ERROR("Failed to load %s inside pid %d", libname, pid);
+    if (!(ipc = connect_to_memtrace_agent(pid))) {
+        CONSOLE("Failed to connect to memtrace-agent");
         goto error;
     }
 
-    CONSOLE("[Replacing functions]");
-    for (size_t i = 0; i < sizeof(replace_functions)/sizeof(*replace_functions); i++) {
-        injecter_replace_function(injecter, replace_functions[i].name, replace_functions[i].inject);
-    }
+    CONSOLE("Memtrace is connected to target process %d", pid);
+    CONSOLE("Enter 'help' for listing possible commands");
+    memtrace_console(ipc, pid);
+
     rt = 0;
 
 error:
-    if (injecter) {
-        injecter_destroy(injecter);
+    if (ipc) {
+        fclose(ipc);
     }
-    if (threads) {
-        process_for_each_thread(tid, threads) {
-            if (ptrace(PTRACE_DETACH, tid, NULL, NULL) != 0) {
-                TRACE_ERROR("ptrace(DETACH, %d) failed: %m", tid);
-            }
-        }
-        closedir(threads);
-    }
+
     return rt;
 }

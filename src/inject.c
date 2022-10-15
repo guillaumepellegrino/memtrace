@@ -74,7 +74,7 @@ static bool library_replace_function(int pid, library_t *target, library_t *inje
     size_t startcode = library_absolute_address(target, 0);
     //CONSOLE("startcode = 0x%zx", startcode);
 
-    int64_t rela_fn_offset = library_get_rela_offset(target, fname);
+    ssize_t rela_fn_offset = library_get_rela_offset(target, fname);
     if (rela_fn_offset < 0) {
         return false;
     }
@@ -94,7 +94,7 @@ static bool library_replace_function(int pid, library_t *target, library_t *inje
         TRACE_ERROR("%s not found", inject_fname);
         return false;
     }
-    CONSOLE("Inject function offset: 0x%zx (section: %u)", sym.offset, sym.section_index);
+    CONSOLE("Inject function offset: 0x%"PRIx64" (section: %u)", sym.offset, sym.section_index);
     size_t fn_addr = inject_baseaddr + sym.offset;
     CONSOLE("function address: 0x%zx", fn_addr);
 
@@ -106,14 +106,47 @@ static bool library_replace_function(int pid, library_t *target, library_t *inje
     return true;
 }
 
-static size_t relocate_address(const library_t *program, const library_t *lib, elf_relocate_t *rela) {
+size_t resolve_function_fromlib(elf_relocate_t *rela, library_t *lib) {
+    // Compute lib function offset
+    elf_file_t *symtab = library_get_elf_section(lib, library_section_dynsym);
+    elf_file_t *strtab = library_get_elf_section(lib, library_section_dynstr);
+    if (!symtab || !strtab) {
+        TRACE_ERROR(".dynsym or .dynstr not found");
+        return 0;
+    }
+    elf_sym_t sym = elf_sym_from_name(symtab, strtab, rela->sym.name);
+    if (!sym.name) {
+        //TRACE_ERROR("%s not found (section idx: %d)", rela->sym.name, rela->sym.section_index);
+        return 0;
+    }
+    if (sym.section_index == 0) {
+        // Symbol is undefined.
+        return 0;
+    }
+
+    return library_absolute_address(lib, sym.offset);
+}
+
+int injecter_get_machine(injecter_t *injecter) {
+    elf_t *elf = NULL;
+    const elf_header_t *hdr = NULL;
+
+    if (!(elf = library_elf(injecter->inject_lib))) {
+        return EM_NONE;
+    }
+    if (!(hdr = elf_header(elf))) {
+        return EM_NONE;
+    }
+    return hdr->e_machine;
+}
+
+static size_t x86_64_relocate_address(injecter_t *injecter, elf_relocate_t *rela) {
     switch (rela->type) {
         case R_X86_64_64:
         case R_X86_64_GLOB_DAT:
         case R_X86_64_JUMP_SLOT:
-            return library_absolute_address(lib, rela->offset);
         case R_X86_64_RELATIVE:
-            return library_absolute_address(program, rela->offset);
+            return library_absolute_address(injecter->inject_lib, rela->offset);
         case R_X86_64_NONE:
         case R_X86_64_PC32:
         case R_X86_64_GOT32:
@@ -157,50 +190,416 @@ static size_t relocate_address(const library_t *program, const library_t *lib, e
     }
 }
 
-size_t resolve_function_fromlib(elf_relocate_t *rela, library_t *lib) {
-    // Compute lib function offset
-    elf_file_t *symtab = library_get_elf_section(lib, library_section_dynsym);
-    elf_file_t *strtab = library_get_elf_section(lib, library_section_dynstr);
-    if (!symtab || !strtab) {
-        TRACE_ERROR(".dynsym or .dynstr not found");
-        return 0;
-    }
-    elf_sym_t sym = elf_sym_from_name(symtab, strtab, rela->sym.name);
-    if (!sym.name) {
-        //TRACE_ERROR("%s not found (section idx: %d)", rela->sym.name, rela->sym.section_index);
-        return 0;
-    }
-    if (sym.section_index == 0) {
-        // Symbol is undefined.
-        return 0;
+static size_t arm_relocate_address(injecter_t *injecter, elf_relocate_t *rela) {
+    switch (rela->type) {
+        case R_ARM_ABS32:
+        case R_ARM_GLOB_DAT:
+        case R_ARM_JUMP_SLOT:
+        case R_ARM_RELATIVE:
+            return library_absolute_address(injecter->inject_lib, rela->offset);
+        case R_ARM_NONE: break;
+        case R_ARM_PC24: break;
+        case R_ARM_REL32: break;
+        case R_ARM_PC13: break;
+        case R_ARM_ABS16: break;
+        case R_ARM_ABS12: break;
+        case R_ARM_THM_ABS5: break;
+        case R_ARM_ABS8: break;
+        case R_ARM_SBREL32: break;
+        case R_ARM_THM_PC22: break;
+        case R_ARM_THM_PC8: break;
+        case R_ARM_AMP_VCALL9: break;
+        case R_ARM_TLS_DESC: break;
+        case R_ARM_THM_SWI8: break;
+        case R_ARM_XPC25: break;
+        case R_ARM_THM_XPC22: break;
+        case R_ARM_TLS_DTPMOD32: break;
+        case R_ARM_TLS_DTPOFF32: break;
+        case R_ARM_TLS_TPOFF32: break;
+        case R_ARM_COPY: break;
+        case R_ARM_GOTOFF: break;
+        case R_ARM_GOTPC: break;
+        case R_ARM_GOT32: break;
+        case R_ARM_PLT32: break;
+        case R_ARM_CALL: break;
+        case R_ARM_JUMP24: break;
+        case R_ARM_THM_JUMP24: break;
+        case R_ARM_BASE_ABS: break;
+        case R_ARM_ALU_PCREL_7_0: break;
+        case R_ARM_ALU_PCREL_15_8: break;
+        case R_ARM_ALU_PCREL_23_15: break;
+        case R_ARM_LDR_SBREL_11_0: break;
+        case R_ARM_ALU_SBREL_19_12: break;
+        case R_ARM_ALU_SBREL_27_20: break;
+        case R_ARM_TARGET1: break;
+        case R_ARM_SBREL31: break;
+        case R_ARM_V4BX: break;
+        case R_ARM_TARGET2: break;
+        case R_ARM_PREL31: break;
+        case R_ARM_MOVW_ABS_NC: break;
+        case R_ARM_MOVT_ABS: break;
+        case R_ARM_MOVW_PREL_NC: break;
+        case R_ARM_MOVT_PREL: break;
+        case R_ARM_THM_MOVW_ABS_NC: break;
+        case R_ARM_THM_MOVT_ABS: break;
+        case R_ARM_THM_MOVW_PREL_NC: break;
+        case R_ARM_THM_MOVT_PREL: break;
+        case R_ARM_THM_JUMP19: break;
+        case R_ARM_THM_JUMP6: break;
+        case R_ARM_THM_ALU_PREL_11_0: break;
+        case R_ARM_THM_PC12: break;
+        case R_ARM_ABS32_NOI: break;
+        case R_ARM_REL32_NOI: break;
+        case R_ARM_ALU_PC_G0_NC: break;
+        case R_ARM_ALU_PC_G0: break;
+        case R_ARM_ALU_PC_G1_NC: break;
+        case R_ARM_ALU_PC_G1: break;
+        case R_ARM_ALU_PC_G2: break;
+        case R_ARM_LDR_PC_G1: break;
+        case R_ARM_LDR_PC_G2: break;
+        case R_ARM_LDRS_PC_G0: break;
+        case R_ARM_LDRS_PC_G1: break;
+        case R_ARM_LDRS_PC_G2: break;
+        case R_ARM_LDC_PC_G0: break;
+        case R_ARM_LDC_PC_G1: break;
+        case R_ARM_LDC_PC_G2: break;
+        case R_ARM_ALU_SB_G0_NC: break;
+        case R_ARM_ALU_SB_G0: break;
+        case R_ARM_ALU_SB_G1_NC: break;
+        case R_ARM_ALU_SB_G1: break;
+        case R_ARM_ALU_SB_G2: break;
+        case R_ARM_LDR_SB_G0: break;
+        case R_ARM_LDR_SB_G1: break;
+        case R_ARM_LDR_SB_G2: break;
+        case R_ARM_LDRS_SB_G0: break;
+        case R_ARM_LDRS_SB_G1: break;
+        case R_ARM_LDRS_SB_G2: break;
+        case R_ARM_LDC_SB_G0: break;
+        case R_ARM_LDC_SB_G1: break;
+        case R_ARM_LDC_SB_G2: break;
+        case R_ARM_MOVW_BREL_NC: break;
+        case R_ARM_MOVT_BREL: break;
+        case R_ARM_MOVW_BREL: break;
+        case R_ARM_THM_MOVW_BREL_NC: break;
+        case R_ARM_THM_MOVT_BREL: break;
+        case R_ARM_THM_MOVW_BREL: break;
+        case R_ARM_TLS_GOTDESC: break;
+        case R_ARM_TLS_CALL: break;
+        case R_ARM_TLS_DESCSEQ: break;
+        case R_ARM_THM_TLS_CALL: break;
+        case R_ARM_PLT32_ABS: break;
+        case R_ARM_GOT_ABS: break;
+        case R_ARM_GOT_PREL: break;
+        case R_ARM_GOT_BREL12: break;
+        case R_ARM_GOTOFF12: break;
+        case R_ARM_GOTRELAX: break;
+        case R_ARM_GNU_VTENTRY: break;
+        case R_ARM_GNU_VTINHERIT: break;
+        case R_ARM_THM_PC11: break;
+        case R_ARM_THM_PC9: break;
+        case R_ARM_TLS_GD32: break;
+        case R_ARM_TLS_LDM32: break;
+        case R_ARM_TLS_LDO32: break;
+        case R_ARM_TLS_IE32: break;
+        case R_ARM_TLS_LE32: break;
+        case R_ARM_TLS_LDO12: break;
+        case R_ARM_TLS_LE12: break;
+        case R_ARM_TLS_IE12GP: break;
+        case R_ARM_ME_TOO: break;
+        case R_ARM_THM_TLS_DESCSEQ16: break;
+        case R_ARM_THM_TLS_DESCSEQ32: break;
+        case R_ARM_THM_GOT_BREL12: break;
+        case R_ARM_IRELATIVE: break;
+        case R_ARM_RXPC25: break;
+        case R_ARM_RSBREL32: break;
+        case R_ARM_THM_RPC22: break;
+        case R_ARM_RREL32: break;
+        case R_ARM_RABS22: break;
+        case R_ARM_RPC24: break;
+        case R_ARM_RBASE: break;
+        case R_ARM_NUM: break;
+        default: break;
     }
 
-    return library_absolute_address(lib, sym.offset);
+    CONSOLE("Unsupported relocation type: %d", rela->type);
+
+    return 0;
+}
+
+static size_t relocate_address(injecter_t *injecter, elf_relocate_t *rela) {
+    switch (injecter_get_machine(injecter)) {
+        case EM_X86_64:
+            return x86_64_relocate_address(injecter, rela);
+        case EM_ARM:
+            return arm_relocate_address(injecter, rela);
+        case EM_NONE:
+        default:
+            CONSOLE("Unsupported Architecture");
+            return 0;
+    }
+}
+
+
+static size_t x86_64_relocate_value(injecter_t *injecter, elf_relocate_t *rela) {
+    size_t value = 0;
+
+    switch (rela->type) {
+        case R_X86_64_64:
+        case R_X86_64_GLOB_DAT:
+        case R_X86_64_JUMP_SLOT:
+            if (rela->sym.offset) {
+                return library_absolute_address(injecter->inject_lib, rela->sym.offset);
+            }
+            if ((value = resolve_function_fromlib(rela, injecter->c_lib))) {
+                return value;
+            }
+            if (injecter->pthread_lib && (value = resolve_function_fromlib(rela, injecter->pthread_lib))) {
+                return value;
+            }
+            if ((value = resolve_function_fromlib(rela, injecter->program_lib))) {
+                return value;
+            }
+            TRACE_WARNING("Function %s() was not resolved", rela->sym.name);
+            break;
+        case R_X86_64_RELATIVE:
+            return library_absolute_address(injecter->inject_lib, rela->addend);
+        case R_X86_64_NONE:
+        case R_X86_64_PC32:
+        case R_X86_64_GOT32:
+        case R_X86_64_PLT32:
+        case R_X86_64_COPY:
+        case R_X86_64_GOTPCREL:
+        case R_X86_64_32:
+        case R_X86_64_32S:
+        case R_X86_64_16:
+        case R_X86_64_PC16:
+        case R_X86_64_8:
+        case R_X86_64_PC8:
+        case R_X86_64_DTPMOD64:
+        case R_X86_64_DTPOFF64:
+        case R_X86_64_TPOFF64:
+        case R_X86_64_TLSGD:
+        case R_X86_64_TLSLD:
+        case R_X86_64_DTPOFF32:
+        case R_X86_64_GOTTPOFF:
+        case R_X86_64_TPOFF32:
+        case R_X86_64_PC64:
+        case R_X86_64_GOTOFF64:
+        case R_X86_64_GOTPC32:
+        case R_X86_64_GOT64:
+        case R_X86_64_GOTPCREL64:
+        case R_X86_64_GOTPC64:
+        case R_X86_64_GOTPLT64:
+        case R_X86_64_PLTOFF64:
+        case R_X86_64_SIZE32:
+        case R_X86_64_SIZE64:
+        case R_X86_64_GOTPC32_TLSDESC:
+        case R_X86_64_TLSDESC_CALL:
+        case R_X86_64_TLSDESC:
+        case R_X86_64_IRELATIVE:
+        case R_X86_64_RELATIVE64:
+        case R_X86_64_GOTPCRELX:
+        case R_X86_64_REX_GOTPCRELX:
+        default:
+            CONSOLE("%x is not handled", rela->type);
+            break;
+    }
+
+    return value;
+
+}
+
+static size_t arm_relocate_value(injecter_t *injecter, elf_relocate_t *rela) {
+    size_t value = 0;
+
+    switch (rela->type) {
+        case R_ARM_ABS32:
+        case R_ARM_GLOB_DAT:
+        case R_ARM_JUMP_SLOT:
+            if (rela->sym.offset) {
+                return library_absolute_address(injecter->inject_lib, rela->sym.offset);
+            }
+            if ((value = resolve_function_fromlib(rela, injecter->c_lib))) {
+                return value;
+            }
+            if (injecter->pthread_lib && (value = resolve_function_fromlib(rela, injecter->pthread_lib))) {
+                return value;
+            }
+            if ((value = resolve_function_fromlib(rela, injecter->program_lib))) {
+                return value;
+            }
+            TRACE_WARNING("Function %s() was not resolved", rela->sym.name);
+            break;
+        case R_ARM_RELATIVE:
+            return library_absolute_address(injecter->inject_lib, rela->addend);
+        case R_ARM_NONE: break;
+        case R_ARM_PC24: break;
+        case R_ARM_REL32: break;
+        case R_ARM_PC13: break;
+        case R_ARM_ABS16: break;
+        case R_ARM_ABS12: break;
+        case R_ARM_THM_ABS5: break;
+        case R_ARM_ABS8: break;
+        case R_ARM_SBREL32: break;
+        case R_ARM_THM_PC22: break;
+        case R_ARM_THM_PC8: break;
+        case R_ARM_AMP_VCALL9: break;
+        case R_ARM_TLS_DESC: break;
+        case R_ARM_THM_SWI8: break;
+        case R_ARM_XPC25: break;
+        case R_ARM_THM_XPC22: break;
+        case R_ARM_TLS_DTPMOD32: break;
+        case R_ARM_TLS_DTPOFF32: break;
+        case R_ARM_TLS_TPOFF32: break;
+        case R_ARM_COPY: break;
+        case R_ARM_GOTOFF: break;
+        case R_ARM_GOTPC: break;
+        case R_ARM_GOT32: break;
+        case R_ARM_PLT32: break;
+        case R_ARM_CALL: break;
+        case R_ARM_JUMP24: break;
+        case R_ARM_THM_JUMP24: break;
+        case R_ARM_BASE_ABS: break;
+        case R_ARM_ALU_PCREL_7_0: break;
+        case R_ARM_ALU_PCREL_15_8: break;
+        case R_ARM_ALU_PCREL_23_15: break;
+        case R_ARM_LDR_SBREL_11_0: break;
+        case R_ARM_ALU_SBREL_19_12: break;
+        case R_ARM_ALU_SBREL_27_20: break;
+        case R_ARM_TARGET1: break;
+        case R_ARM_SBREL31: break;
+        case R_ARM_V4BX: break;
+        case R_ARM_TARGET2: break;
+        case R_ARM_PREL31: break;
+        case R_ARM_MOVW_ABS_NC: break;
+        case R_ARM_MOVT_ABS: break;
+        case R_ARM_MOVW_PREL_NC: break;
+        case R_ARM_MOVT_PREL: break;
+        case R_ARM_THM_MOVW_ABS_NC: break;
+        case R_ARM_THM_MOVT_ABS: break;
+        case R_ARM_THM_MOVW_PREL_NC: break;
+        case R_ARM_THM_MOVT_PREL: break;
+        case R_ARM_THM_JUMP19: break;
+        case R_ARM_THM_JUMP6: break;
+        case R_ARM_THM_ALU_PREL_11_0: break;
+        case R_ARM_THM_PC12: break;
+        case R_ARM_ABS32_NOI: break;
+        case R_ARM_REL32_NOI: break;
+        case R_ARM_ALU_PC_G0_NC: break;
+        case R_ARM_ALU_PC_G0: break;
+        case R_ARM_ALU_PC_G1_NC: break;
+        case R_ARM_ALU_PC_G1: break;
+        case R_ARM_ALU_PC_G2: break;
+        case R_ARM_LDR_PC_G1: break;
+        case R_ARM_LDR_PC_G2: break;
+        case R_ARM_LDRS_PC_G0: break;
+        case R_ARM_LDRS_PC_G1: break;
+        case R_ARM_LDRS_PC_G2: break;
+        case R_ARM_LDC_PC_G0: break;
+        case R_ARM_LDC_PC_G1: break;
+        case R_ARM_LDC_PC_G2: break;
+        case R_ARM_ALU_SB_G0_NC: break;
+        case R_ARM_ALU_SB_G0: break;
+        case R_ARM_ALU_SB_G1_NC: break;
+        case R_ARM_ALU_SB_G1: break;
+        case R_ARM_ALU_SB_G2: break;
+        case R_ARM_LDR_SB_G0: break;
+        case R_ARM_LDR_SB_G1: break;
+        case R_ARM_LDR_SB_G2: break;
+        case R_ARM_LDRS_SB_G0: break;
+        case R_ARM_LDRS_SB_G1: break;
+        case R_ARM_LDRS_SB_G2: break;
+        case R_ARM_LDC_SB_G0: break;
+        case R_ARM_LDC_SB_G1: break;
+        case R_ARM_LDC_SB_G2: break;
+        case R_ARM_MOVW_BREL_NC: break;
+        case R_ARM_MOVT_BREL: break;
+        case R_ARM_MOVW_BREL: break;
+        case R_ARM_THM_MOVW_BREL_NC: break;
+        case R_ARM_THM_MOVT_BREL: break;
+        case R_ARM_THM_MOVW_BREL: break;
+        case R_ARM_TLS_GOTDESC: break;
+        case R_ARM_TLS_CALL: break;
+        case R_ARM_TLS_DESCSEQ: break;
+        case R_ARM_THM_TLS_CALL: break;
+        case R_ARM_PLT32_ABS: break;
+        case R_ARM_GOT_ABS: break;
+        case R_ARM_GOT_PREL: break;
+        case R_ARM_GOT_BREL12: break;
+        case R_ARM_GOTOFF12: break;
+        case R_ARM_GOTRELAX: break;
+        case R_ARM_GNU_VTENTRY: break;
+        case R_ARM_GNU_VTINHERIT: break;
+        case R_ARM_THM_PC11: break;
+        case R_ARM_THM_PC9: break;
+        case R_ARM_TLS_GD32: break;
+        case R_ARM_TLS_LDM32: break;
+        case R_ARM_TLS_LDO32: break;
+        case R_ARM_TLS_IE32: break;
+        case R_ARM_TLS_LE32: break;
+        case R_ARM_TLS_LDO12: break;
+        case R_ARM_TLS_LE12: break;
+        case R_ARM_TLS_IE12GP: break;
+        case R_ARM_ME_TOO: break;
+        case R_ARM_THM_TLS_DESCSEQ16: break;
+        case R_ARM_THM_TLS_DESCSEQ32: break;
+        case R_ARM_THM_GOT_BREL12: break;
+        case R_ARM_IRELATIVE: break;
+        case R_ARM_RXPC25: break;
+        case R_ARM_RSBREL32: break;
+        case R_ARM_THM_RPC22: break;
+        case R_ARM_RREL32: break;
+        case R_ARM_RABS22: break;
+        case R_ARM_RPC24: break;
+        case R_ARM_RBASE: break;
+        case R_ARM_NUM: break;
+        default: break;
+    }
+
+    CONSOLE("Unsupported relocation type: %d", rela->type);
+
+    return 0;
+}
+
+
+
+static size_t relocate_value(injecter_t *injecter, elf_relocate_t *rela) {
+    switch (injecter_get_machine(injecter)) {
+        case EM_X86_64:
+            return x86_64_relocate_value(injecter, rela);
+        case EM_ARM:
+            return arm_relocate_value(injecter, rela);
+        case EM_NONE:
+        default:
+            CONSOLE("Unsupported Architecture");
+            return 0;
+    }
 }
 
 bool resolve_function(elf_relocate_t *rela, void *userdata) {
     injecter_t *injecter = userdata;
     size_t rela_addr = 0;
-    size_t sym_addr = 0;
+    size_t rela_value = 0;
 
-    if (!(rela_addr = relocate_address(injecter->program_lib, injecter->inject_lib, rela))) {
+    if (!strcmp(rela->sym.name, "_ITM_deregisterTMCloneTable")
+        || !strcmp(rela->sym.name, "_ITM_registerTMCloneTable")
+        || !strcmp(rela->sym.name, "__gmon_start__")) {
+        // do not resolve these functions
+        return true;
+    }
+
+    if (!(rela_addr = relocate_address(injecter, rela))) {
         TRACE_ERROR("Failed to get %s() relocation adress", rela->sym.name);
         return true;
     }
 
-    if (!(sym_addr = resolve_function_fromlib(rela, injecter->c_lib))) {
-        if (!injecter->pthread_lib || !(sym_addr = resolve_function_fromlib(rela, injecter->pthread_lib))) {
-            if (!(sym_addr = resolve_function_fromlib(rela, injecter->inject_lib))) {
-                if (!(sym_addr = resolve_function_fromlib(rela, injecter->program_lib))) {
-                    TRACE_WARNING("Function %s() was not resolved", rela->sym.name);
-                    return true;
-                }
-            }
-        }
+    if (!(rela_value = relocate_value(injecter, rela))) {
+        TRACE_ERROR("Failed to get %s() relocation value", rela->sym.name);
+        return true;
     }
 
-    CONSOLE("Resolve %s() (*0x%zx = 0x%zx)", rela->sym.name, rela_addr, sym_addr);
-    if (ptrace(PTRACE_POKETEXT, injecter->pid, rela_addr, sym_addr) != 0) {
+    CONSOLE("Resolve %s() (*0x%zx = 0x%zx)", rela->sym.name, rela_addr, rela_value);
+    if (ptrace(PTRACE_POKETEXT, injecter->pid, rela_addr, rela_value) != 0) {
         TRACE_ERROR("Failed to replace function");
         return true;
     }
@@ -369,6 +768,12 @@ bool injecter_load_library(injecter_t *injecter, const char *libname) {
         return false;
     }
 
+    // Sanity check
+    if (syscall_getpid(injecter->pid) != injecter->pid) {
+        TRACE_ERROR("Failed to inject syscall in target process");
+        return false;
+    }
+
     // Allocate memory for writing string
     injecter->straddr = syscall_mmap(injecter->pid,
         0, 4096, PROT_READ, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
@@ -377,9 +782,11 @@ bool injecter_load_library(injecter_t *injecter, const char *libname) {
         TRACE_ERROR("mmap failed");
         return false;
     }
+    CONSOLE("straddr=%p", injecter->straddr);
 
     char memfile[64];
     snprintf(memfile, sizeof(memfile), "/proc/%d/mem", injecter->pid);
+    // FIXME: Use open instead fopen()
     FILE *mem = fopen(memfile, "w");
     assert(mem);
 
@@ -424,13 +831,20 @@ bool injecter_load_library(injecter_t *injecter, const char *libname) {
         size_t mapsize = ph->p_memsz + elf_pageoffset(base_addr + ph->p_vaddr);
         size_t mapoffset = ph->p_offset - elf_pageoffset(base_addr + ph->p_vaddr);
 
-        CONSOLE("Load program at 0x%zx, offset: %"PRIx64 ", size: %"PRIx64, mapaddr, mapoffset, mapsize);
+        CONSOLE("Load program at 0x%zx, offset: %zx, size: %zx", mapaddr, mapoffset, mapsize);
         if (syscall_mmap(injecter->pid,
             (void *) mapaddr, mapsize, prot, MAP_PRIVATE|MAP_FIXED, fd, mapoffset) != (void *) mapaddr)
         {
             TRACE_ERROR("Failed to map memory");
             return false;
         }
+
+        // Fill unitialized memory with zero
+        fseek(mem, (base_addr + ph->p_vaddr + ph->p_filesz), SEEK_SET);
+        for (size_t i = 0; i < (ph->p_memsz - ph->p_filesz); i++) {
+            fputc(0, mem);
+        }
+        fflush(mem);
         CONSOLE("Program mapped at 0x%zx (size=0x%zx)", mapaddr, mapsize);
     }
 
@@ -459,19 +873,6 @@ bool injecter_load_library(injecter_t *injecter, const char *libname) {
 
     // Resolve functions from injected library
     injecter_resolve_functions(injecter);
-
-    // Initialize .bss section to zero
-    // FIXME: We should zeroing (p_memsz-p_filesz) for each elf section
-    const section_header_t *bss = elf_section_header_get(library_elf(injecter->inject_lib), ".bss");
-    if (bss) {
-        size_t bss_addr = library_absolute_address(injecter->inject_lib, bss->sh_addr);
-        CONSOLE("Initializing BSS Section (addr = 0x%zx, size = 0x%zx)", bss_addr, bss->sh_size);
-        fseek(mem, bss_addr, SEEK_SET);
-        for (size_t i = 0; i < bss->sh_size; i++) {
-            fputc(0, mem);
-        }
-        fflush(mem);
-    }
 
     elf_close(elf);
     fclose(fp);

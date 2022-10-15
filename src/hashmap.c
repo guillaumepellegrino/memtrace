@@ -106,7 +106,7 @@ void hashmap_iterator_destroy(hashmap_iterator_t *iterator) {
     list_iterator_take(&iterator->bucket_it);
     list_iterator_take(&iterator->hashmap_it);
     if (hashmap->cfg.destroy) {
-        hashmap->cfg.destroy(iterator->key, iterator);
+        hashmap->cfg.destroy(hashmap, iterator->key, iterator);
     }
 }
 

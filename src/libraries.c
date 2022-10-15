@@ -32,12 +32,16 @@
 #include "debug_info.h"
 #include "debug_line.h"
 #include "fs.h"
+#include "arch.h"
 #include "log.h"
+
+#define stack_pointer_address() __builtin_frame_address(0)
 
 struct _libraries {
     int pid;
     size_t count;
     library_t *list;
+    list_t threads;
 };
 
 struct _library {
@@ -48,6 +52,94 @@ struct _library {
     void *end;
     size_t offset;
 };
+
+// TODO: move this in thread.c
+typedef struct {
+    list_iterator_t it;
+    pthread_t id;
+    void *begin;
+    void *end;
+} thread_stack_t;
+
+bool thread_stack_update(thread_stack_t *thread, void *sp) {
+    char buff[4096];
+    bool rt = false;
+
+    CONSOLE("thread_stack_update(%p)", sp);
+
+
+    //copy file in buffer
+    FILE *fp = fopen("/proc/self/maps", "r");
+    if (!fp) {
+        TRACE_ERROR("Failed to open /proc/self/maps: %m");
+        goto error;
+    }
+
+    while (fgets(buff, sizeof(buff), fp)) {
+        char *sep = NULL;
+        void *begin = NULL;
+        void *end = NULL;
+
+        // Strip new line character
+        if ((sep = strchr(buff, '\n'))) {
+            *sep = 0;
+        }
+
+        // Scan line
+        if ((sscanf(buff, "%p-%p", &begin, &end) != 2)) {
+            continue;
+        }
+
+        if (sp >= begin && sp < end) {
+            thread->begin = begin;
+            thread->end = end;
+            rt = true;
+            break;
+        }
+    }
+
+error:
+    if (fp) {
+        fclose(fp);
+    }
+    return rt;
+}
+
+thread_stack_t *threads_findme(list_t *threads, void *sp) {
+    pthread_t id = pthread_self();
+    list_iterator_t *it = NULL;
+    list_for_each(it, threads) {
+        thread_stack_t *thread = container_of(it, thread_stack_t, it);
+        if (thread->id != id) {
+            continue;
+        }
+        // FIXME: update thread when sp is not in range
+        return thread;
+    }
+    return NULL;
+}
+
+thread_stack_t *threads_addme(list_t *threads, void *sp) {
+    thread_stack_t *thread = NULL;
+
+    if (!(thread = calloc(1, sizeof(thread_stack_t)))) {
+        return NULL;
+    }
+    thread->id = pthread_self();
+    thread_stack_update(thread, sp);
+
+    return thread;
+}
+
+void threads_cleanup(list_t *threads) {
+    list_iterator_t *it = NULL;
+
+    while ((it = list_first(threads))) {
+        thread_stack_t *thread = container_of(it, thread_stack_t, it);
+        list_iterator_take(&thread->it);
+        free(thread);
+    }
+}
 
 static int so_qsort_compar(const void *lval, const void *rval) {
     const library_t *lso = lval;
@@ -110,8 +202,7 @@ static void libraries_entry_add(libraries_t *libraries, library_t *library, void
     library->begin = begin;
     library->end = end;
     library->offset = program ? program->p_vaddr : 0;
-
-    CONSOLE("Opening %s begin=%p offset=%zx", name, library->begin, library->offset);
+    //CONSOLE("Opening %s begin=%p offset=%zx", name, library->begin, library->offset);
 }
 
 libraries_t *libraries_create(int pid) {
@@ -193,6 +284,7 @@ void libraries_destroy(libraries_t *libraries) {
 
     }
     free(libraries->list);
+    threads_cleanup(&libraries->threads);
     free(libraries);
 }
 
@@ -248,6 +340,92 @@ library_t *libraries_get(libraries_t *libraries, size_t idx) {
 size_t libraries_count(const libraries_t *libraries) {
     assert(libraries);
     return libraries->count;
+}
+
+static void *libraries_stack_end(libraries_t *libraries, void *sp) {
+    thread_stack_t *thread = NULL;
+
+    if (!(thread = threads_findme(&libraries->threads, sp))) {
+        if (!(thread = threads_addme(&libraries->threads, sp))) {
+            return NULL;
+        }
+    }
+
+    return thread->end;
+}
+
+void libraries_backtrace(libraries_t *libraries, cpu_registers_t *regs, void **callstack, size_t size) {
+    assert(libraries);
+    assert(callstack);
+    assert(size);
+
+    void *pc = (void *) cpu_register_get(regs, cpu_register_pc);
+    void *sp = (void *) cpu_register_get(regs, cpu_register_sp);
+    void *lr = (void *) cpu_register_get(regs, cpu_register_ra);
+    void *end = libraries_stack_end(libraries, sp);
+    size_t i = 0, j = 0;
+
+    // start of the callstack
+    callstack[j++] = pc;
+    callstack[j++] = lr;
+
+    // skip all the symbols on the stack before lr
+    for (; ((size_t *)sp)+i < (size_t *)end; i++) {
+        void *address = ((void **) sp)[i];
+        if (address == lr) {
+            i++;
+            break;
+        }
+    }
+
+    // search all the symbols on the stack
+    for (; j < size && ((size_t *)sp)+i < (size_t *)end; i++) {
+        void *address = ((void **) sp)[i];
+        if (libraries_find(libraries, (size_t) address)) {
+            callstack[j++] = address;
+        }
+    }
+
+    // end callstack with null pointer
+    if (j < size) {
+        callstack[j] = NULL;
+    }
+}
+
+void libraries_backtrace_print(libraries_t *libraries, void **callstack, size_t size, void *fp)  {
+    assert(libraries);
+    assert(callstack);
+
+    fprintf(fp, "[callstack]\n");
+    for (size_t i = 0; i < size && callstack[i]; i++) {
+        library_t *library = libraries_find(libraries, (size_t) callstack[i]);
+        if (library) {
+            elf_sym_t sym = {0};
+            size_t ra = library_relative_address(library, (size_t) callstack[i]);
+            elf_file_t *dynsym = library_get_elf_section(library, library_section_dynsym);
+            elf_file_t *dynstr = library_get_elf_section(library, library_section_dynstr);
+            elf_file_t *symtab = library_get_elf_section(library, library_section_symtab);
+            elf_file_t *strtab = library_get_elf_section(library, library_section_strtab);
+
+            if (dynsym && dynstr) {
+                sym = elf_sym_from_addr(dynsym, dynstr, ra);
+            }
+            if (symtab && strtab && !sym.name) {
+                sym = elf_sym_from_addr(symtab, strtab, ra);
+            }
+
+            if (sym.name) {
+                size_t offset = ra - sym.offset;
+                fprintf(fp, "[addr]%s+0x%zx | %s()+0x%zx\n", library_name(library), ra, sym.name, offset);
+            }
+            else {
+                fprintf(fp, "[addr]%s+0x%zx\n", library_name(library), ra);
+            }
+        }
+    }
+
+    fprintf(fp, "[callstack end]\n\n");
+    fflush(fp);
 }
 
 elf_t *library_elf(const library_t *library) {

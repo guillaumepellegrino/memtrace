@@ -72,13 +72,6 @@ extern int zone;
 #define CONSOLE_RAW(fmt, ...) \
     fprintf(stderr, fmt, ##__VA_ARGS__)
 
-#ifdef DWARF_DEBUG
-#define TRACE_DWARF(fmt, ...) TRACE_DEBUG(fmt, ##__VA_ARGS__)
-#else
-#define TRACE_DWARF(fmt, ...) trace_debug_unused(fmt, ##__VA_ARGS__)
-#endif
-
-
 static inline void trace_debug_unused(const char *fmt, ...) {
     (void) fmt;
 }

@@ -42,7 +42,7 @@ typedef bool (*match_key_t)(hashmap_t *hashmap, void *lkey, void *rkey);
 typedef int (*hashmap_compar_t)(const hashmap_iterator_t **lval, const hashmap_iterator_t **rval);
 
 /** destroy key and iterator */
-typedef void (*hashmap_iterator_destroy_t)(void *key, hashmap_iterator_t *iterator);
+typedef void (*hashmap_iterator_destroy_t)(hashmap_t *hashmap, void *key, hashmap_iterator_t *iterator);
 
 struct _hashmap_cfg {
     uint32_t size;                          /** hashmap size */

@@ -21,6 +21,6 @@
 
 #include "types.h"
 
-void coredump_write(int pid, int memfd, FILE *fp);
+void coredump_write(int pid, int memfd, FILE *fp, cpu_registers_t *regs);
 
 #endif
