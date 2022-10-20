@@ -28,10 +28,13 @@ typedef struct {
     size_t free_count;
     size_t free_size;
     size_t byte_inuse;
+    size_t count_inuse;
     size_t block_inuse;
 } stats_t;
 
 typedef struct {
+    bool follow_allocs;
+    int pid;
     libraries_t *libraries;
     size_t callstack_size;
     hashmap_t allocations;
@@ -43,6 +46,7 @@ typedef struct {
 
 bool agent_initialize(agent_t *agent);
 void agent_cleanup(agent_t *agent);
+void agent_unfollow_allocs(agent_t *agent);
 void agent_alloc(agent_t *agent, cpu_registers_t *regs, size_t size, void *newptr);
 void agent_dealloc(agent_t *agent, void *ptr);
 

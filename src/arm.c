@@ -17,6 +17,7 @@
  */
 #include <errno.h>
 #include <sys/ptrace.h>
+#include <asm/ptrace.h>
 #include <sys/user.h>
 #include <stdlib.h>
 #include "arch.h"
@@ -27,6 +28,21 @@ static bool arm_cpu_registers_get(cpu_registers_t *regs, int pid) {
         TRACE_ERROR("ptrace(GETREGS, %d) failed: %m", pid);
         return false;
     }
+
+    return true;
+}
+
+static bool arm_cpu_registers_set(cpu_registers_t *regs, int pid) {
+    if (ptrace(PTRACE_SETREGS, pid, NULL, &regs->raw) != 0) {
+        TRACE_ERROR("ptrace(SETREGS, %d) failed: %m", pid);
+        return false;
+    }
+//#ifdef PTRACE_SET_SYSCALL
+    if (ptrace(PTRACE_SET_SYSCALL, pid, NULL, cpu_register_get(regs, cpu_register_syscall)) != 0) {
+        TRACE_ERROR("ptrace(SYSCALL, %d) failed: %m", pid);
+        return false;
+    }
+//#endif
 
     return true;
 }
@@ -46,11 +62,13 @@ static size_t *arm_cpu_register_reference(cpu_registers_t *registers, cpu_regist
         case cpu_register_arg6:     return (size_t *) &registers->raw.uregs[5];
         case cpu_register_arg7:     return (size_t *) &registers->raw.uregs[6];
         case cpu_register_retval:   return (size_t *) &registers->raw.uregs[0];
+        case cpu_register_syscall_exit_stop: return (size_t *) &registers->raw.uregs[12];
         default: return NULL;
     }
 }
 
 arch_t arch = {
     .cpu_registers_get = arm_cpu_registers_get,
+    .cpu_registers_set = arm_cpu_registers_set,
     .cpu_register_reference = arm_cpu_register_reference,
 };

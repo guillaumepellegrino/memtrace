@@ -67,14 +67,11 @@ void hooks_unlock(bool locked) {
 }
 
 void *malloc_hook(size_t size, size_t arg2, size_t arg3) {
-    //ucontext_t ucp = {0};
-    //getcontext(&ucp);
     size_t sp = stack_pointer_address();
     size_t ra = return_address();
     cpu_registers_t regs = {0};
     cpu_register_set(&regs, cpu_register_pc, (size_t) malloc);
     cpu_register_set(&regs, cpu_register_sp, sp);
-    //cpu_register_set(&regs, cpu_register_fp, ucp.uc_mcontext.gregs[REG_RBP]);
     cpu_register_set(&regs, cpu_register_ra, ra);
     cpu_register_set(&regs, cpu_register_arg1, size);
     cpu_register_set(&regs, cpu_register_arg2, arg2);
@@ -86,13 +83,6 @@ void *malloc_hook(size_t size, size_t arg2, size_t arg3) {
     locked = hooks_lock();
     newptr = malloc(size);
     if (locked) {
-        /*
-        printf("RSP=0x%llx, RBP=0x%llx (sp=0x%p, fp=0x%zx),\n",
-            ucp.uc_mcontext.gregs[REG_RSP],
-            ucp.uc_mcontext.gregs[REG_RBP],
-            &ucp,
-            sp);
-            */
         agent_alloc(&g_agent, &regs, size, newptr);
     }
     hooks_unlock(locked);
@@ -150,6 +140,17 @@ void *realloc_hook(void *ptr, size_t size) {
     hooks_unlock(locked);
 
     return newptr;
+}
+
+pid_t fork_hook() {
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        // we do not follow child process allocations
+        agent_unfollow_allocs(&g_agent);
+    }
+
+    return pid;
 }
 
 void *reallocarray_hook(void *ptr, size_t nmemb, size_t size) {
@@ -230,6 +231,16 @@ size_t strlen(const char *s) {
     for (i = 0; s[i]; i++);
 
     return i;
+}
+
+void *memcpy(void *dest, const void *src, size_t n) {
+    size_t i = 0;
+
+    for (i = 0; i < n; i++) {
+        ((unsigned char *) dest)[i] = ((unsigned char *) src)[i];
+    }
+
+    return dest;
 }
 
 void *memset(void *s, int c, size_t n) {

@@ -27,6 +27,8 @@ typedef enum {
     library_section_dynstr,
     library_section_symtab,
     library_section_strtab,
+    library_section_rel_dyn,
+    library_section_rel_plt,
     library_section_rela_dyn,
     library_section_rela_plt,
     library_section_bss,

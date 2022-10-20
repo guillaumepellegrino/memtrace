@@ -42,6 +42,7 @@ typedef enum {
     cpu_register_arg6,
     cpu_register_arg7,
     cpu_register_retval,
+    cpu_register_syscall_exit_stop,
 } cpu_register_name_t;
 
 struct _cpu_registers {
@@ -56,6 +57,7 @@ struct _cpu_registers {
 /** CPU Architecture specific functions */
 struct _arch {
     bool (*cpu_registers_get)(cpu_registers_t *regs, int pid);
+    bool (*cpu_registers_set)(cpu_registers_t *regs, int pid);
     size_t *(*cpu_register_reference)(cpu_registers_t *regs, cpu_register_name_t name);
 };
 extern arch_t arch;
@@ -67,7 +69,7 @@ static inline bool cpu_registers_get(cpu_registers_t *regs, int pid) {
 
 /** Set all CPU registers to process with specified pid */
 static inline bool cpu_registers_set(cpu_registers_t *regs, int pid) {
-    return ptrace(PTRACE_SETREGS, pid, NULL, &regs->raw) == 0;
+    return arch.cpu_registers_set(regs, pid);
 }
 
 /** Get the specified CPU register by name */

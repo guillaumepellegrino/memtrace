@@ -36,13 +36,24 @@ static bool x86_cpu_registers_get(cpu_registers_t *regs, int pid) {
     return true;
 }
 
+static bool x86_cpu_registers_set(cpu_registers_t *regs, int pid) {
+    if (ptrace(PTRACE_SETREGS, pid, NULL, &regs->raw) != 0) {
+        TRACE_ERROR("ptrace(SETREGS, %d) failed: %m", pid);
+        return false;
+    }
+
+    return true;
+}
+
+
 static size_t *x86_cpu_register_reference(cpu_registers_t *registers, cpu_register_name_t name) {
     switch (name) {
         case cpu_register_pc:       return (size_t *) &registers->raw.rip;
         case cpu_register_sp:       return (size_t *) &registers->raw.rsp;
         case cpu_register_fp:       return (size_t *) &registers->raw.rbp;
         case cpu_register_ra:       return (size_t *) &registers->extra[0];
-        case cpu_register_syscall:  return (size_t *) &registers->raw.orig_rax;
+        //case cpu_register_syscall:  return (size_t *) &registers->raw.orig_rax;
+        case cpu_register_syscall:  return (size_t *) &registers->raw.rax;
         case cpu_register_arg1:     return (size_t *) &registers->raw.rdi;
         case cpu_register_arg2:     return (size_t *) &registers->raw.rsi;
         case cpu_register_arg3:     return (size_t *) &registers->raw.rdx;
@@ -50,11 +61,13 @@ static size_t *x86_cpu_register_reference(cpu_registers_t *registers, cpu_regist
         case cpu_register_arg5:     return (size_t *) &registers->raw.r8;
         case cpu_register_arg6:     return (size_t *) &registers->raw.r9;
         case cpu_register_retval:   return (size_t *) &registers->raw.rax;
+        case cpu_register_syscall_exit_stop: return (size_t *) &registers->extra[0];
         default: return NULL;
     }
 }
 
 arch_t arch = {
     .cpu_registers_get = x86_cpu_registers_get,
+    .cpu_registers_set = x86_cpu_registers_set,
     .cpu_register_reference = x86_cpu_register_reference,
 };

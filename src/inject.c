@@ -1,3 +1,4 @@
+#define _LARGEFILE64_SOURCE
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -50,6 +51,10 @@ static int64_t library_get_rela_offset(library_t *target, const char *fname) {
     elf_file_t *dynsym = library_get_elf_section(target, library_section_dynsym);
     elf_file_t *dynstr = library_get_elf_section(target, library_section_dynstr);
 
+    if (!rela_plt) {
+        rela_plt = library_get_elf_section(target, library_section_rel_plt);
+        rela_dyn = library_get_elf_section(target, library_section_rel_dyn);
+    }
     if (!dynsym || !dynstr) {
         TRACE_ERROR("Failed to open .dynsym and .dynstr sections for %s", library_name(target));
         return -1;
@@ -140,207 +145,7 @@ int injecter_get_machine(injecter_t *injecter) {
     return hdr->e_machine;
 }
 
-static size_t x86_64_relocate_address(injecter_t *injecter, elf_relocate_t *rela) {
-    switch (rela->type) {
-        case R_X86_64_64:
-        case R_X86_64_GLOB_DAT:
-        case R_X86_64_JUMP_SLOT:
-        case R_X86_64_RELATIVE:
-            return library_absolute_address(injecter->inject_lib, rela->offset);
-        case R_X86_64_NONE:
-        case R_X86_64_PC32:
-        case R_X86_64_GOT32:
-        case R_X86_64_PLT32:
-        case R_X86_64_COPY:
-        case R_X86_64_GOTPCREL:
-        case R_X86_64_32:
-        case R_X86_64_32S:
-        case R_X86_64_16:
-        case R_X86_64_PC16:
-        case R_X86_64_8:
-        case R_X86_64_PC8:
-        case R_X86_64_DTPMOD64:
-        case R_X86_64_DTPOFF64:
-        case R_X86_64_TPOFF64:
-        case R_X86_64_TLSGD:
-        case R_X86_64_TLSLD:
-        case R_X86_64_DTPOFF32:
-        case R_X86_64_GOTTPOFF:
-        case R_X86_64_TPOFF32:
-        case R_X86_64_PC64:
-        case R_X86_64_GOTOFF64:
-        case R_X86_64_GOTPC32:
-        case R_X86_64_GOT64:
-        case R_X86_64_GOTPCREL64:
-        case R_X86_64_GOTPC64:
-        case R_X86_64_GOTPLT64:
-        case R_X86_64_PLTOFF64:
-        case R_X86_64_SIZE32:
-        case R_X86_64_SIZE64:
-        case R_X86_64_GOTPC32_TLSDESC:
-        case R_X86_64_TLSDESC_CALL:
-        case R_X86_64_TLSDESC:
-        case R_X86_64_IRELATIVE:
-        case R_X86_64_RELATIVE64:
-        case R_X86_64_GOTPCRELX:
-        case R_X86_64_REX_GOTPCRELX:
-        default:
-            CONSOLE("%x is not handled", rela->type);
-            return 0;
-    }
-}
-
-static size_t arm_relocate_address(injecter_t *injecter, elf_relocate_t *rela) {
-    switch (rela->type) {
-        case R_ARM_ABS32:
-        case R_ARM_GLOB_DAT:
-        case R_ARM_JUMP_SLOT:
-        case R_ARM_RELATIVE:
-            return library_absolute_address(injecter->inject_lib, rela->offset);
-        case R_ARM_NONE: break;
-        case R_ARM_PC24: break;
-        case R_ARM_REL32: break;
-        case R_ARM_PC13: break;
-        case R_ARM_ABS16: break;
-        case R_ARM_ABS12: break;
-        case R_ARM_THM_ABS5: break;
-        case R_ARM_ABS8: break;
-        case R_ARM_SBREL32: break;
-        case R_ARM_THM_PC22: break;
-        case R_ARM_THM_PC8: break;
-        case R_ARM_AMP_VCALL9: break;
-        case R_ARM_TLS_DESC: break;
-        case R_ARM_THM_SWI8: break;
-        case R_ARM_XPC25: break;
-        case R_ARM_THM_XPC22: break;
-        case R_ARM_TLS_DTPMOD32: break;
-        case R_ARM_TLS_DTPOFF32: break;
-        case R_ARM_TLS_TPOFF32: break;
-        case R_ARM_COPY: break;
-        case R_ARM_GOTOFF: break;
-        case R_ARM_GOTPC: break;
-        case R_ARM_GOT32: break;
-        case R_ARM_PLT32: break;
-        case R_ARM_CALL: break;
-        case R_ARM_JUMP24: break;
-        case R_ARM_THM_JUMP24: break;
-        case R_ARM_BASE_ABS: break;
-        case R_ARM_ALU_PCREL_7_0: break;
-        case R_ARM_ALU_PCREL_15_8: break;
-        case R_ARM_ALU_PCREL_23_15: break;
-        case R_ARM_LDR_SBREL_11_0: break;
-        case R_ARM_ALU_SBREL_19_12: break;
-        case R_ARM_ALU_SBREL_27_20: break;
-        case R_ARM_TARGET1: break;
-        case R_ARM_SBREL31: break;
-        case R_ARM_V4BX: break;
-        case R_ARM_TARGET2: break;
-        case R_ARM_PREL31: break;
-        case R_ARM_MOVW_ABS_NC: break;
-        case R_ARM_MOVT_ABS: break;
-        case R_ARM_MOVW_PREL_NC: break;
-        case R_ARM_MOVT_PREL: break;
-        case R_ARM_THM_MOVW_ABS_NC: break;
-        case R_ARM_THM_MOVT_ABS: break;
-        case R_ARM_THM_MOVW_PREL_NC: break;
-        case R_ARM_THM_MOVT_PREL: break;
-        case R_ARM_THM_JUMP19: break;
-        case R_ARM_THM_JUMP6: break;
-        case R_ARM_THM_ALU_PREL_11_0: break;
-        case R_ARM_THM_PC12: break;
-        case R_ARM_ABS32_NOI: break;
-        case R_ARM_REL32_NOI: break;
-        case R_ARM_ALU_PC_G0_NC: break;
-        case R_ARM_ALU_PC_G0: break;
-        case R_ARM_ALU_PC_G1_NC: break;
-        case R_ARM_ALU_PC_G1: break;
-        case R_ARM_ALU_PC_G2: break;
-        case R_ARM_LDR_PC_G1: break;
-        case R_ARM_LDR_PC_G2: break;
-        case R_ARM_LDRS_PC_G0: break;
-        case R_ARM_LDRS_PC_G1: break;
-        case R_ARM_LDRS_PC_G2: break;
-        case R_ARM_LDC_PC_G0: break;
-        case R_ARM_LDC_PC_G1: break;
-        case R_ARM_LDC_PC_G2: break;
-        case R_ARM_ALU_SB_G0_NC: break;
-        case R_ARM_ALU_SB_G0: break;
-        case R_ARM_ALU_SB_G1_NC: break;
-        case R_ARM_ALU_SB_G1: break;
-        case R_ARM_ALU_SB_G2: break;
-        case R_ARM_LDR_SB_G0: break;
-        case R_ARM_LDR_SB_G1: break;
-        case R_ARM_LDR_SB_G2: break;
-        case R_ARM_LDRS_SB_G0: break;
-        case R_ARM_LDRS_SB_G1: break;
-        case R_ARM_LDRS_SB_G2: break;
-        case R_ARM_LDC_SB_G0: break;
-        case R_ARM_LDC_SB_G1: break;
-        case R_ARM_LDC_SB_G2: break;
-        case R_ARM_MOVW_BREL_NC: break;
-        case R_ARM_MOVT_BREL: break;
-        case R_ARM_MOVW_BREL: break;
-        case R_ARM_THM_MOVW_BREL_NC: break;
-        case R_ARM_THM_MOVT_BREL: break;
-        case R_ARM_THM_MOVW_BREL: break;
-        case R_ARM_TLS_GOTDESC: break;
-        case R_ARM_TLS_CALL: break;
-        case R_ARM_TLS_DESCSEQ: break;
-        case R_ARM_THM_TLS_CALL: break;
-        case R_ARM_PLT32_ABS: break;
-        case R_ARM_GOT_ABS: break;
-        case R_ARM_GOT_PREL: break;
-        case R_ARM_GOT_BREL12: break;
-        case R_ARM_GOTOFF12: break;
-        case R_ARM_GOTRELAX: break;
-        case R_ARM_GNU_VTENTRY: break;
-        case R_ARM_GNU_VTINHERIT: break;
-        case R_ARM_THM_PC11: break;
-        case R_ARM_THM_PC9: break;
-        case R_ARM_TLS_GD32: break;
-        case R_ARM_TLS_LDM32: break;
-        case R_ARM_TLS_LDO32: break;
-        case R_ARM_TLS_IE32: break;
-        case R_ARM_TLS_LE32: break;
-        case R_ARM_TLS_LDO12: break;
-        case R_ARM_TLS_LE12: break;
-        case R_ARM_TLS_IE12GP: break;
-        case R_ARM_ME_TOO: break;
-        case R_ARM_THM_TLS_DESCSEQ16: break;
-        case R_ARM_THM_TLS_DESCSEQ32: break;
-        case R_ARM_THM_GOT_BREL12: break;
-        case R_ARM_IRELATIVE: break;
-        case R_ARM_RXPC25: break;
-        case R_ARM_RSBREL32: break;
-        case R_ARM_THM_RPC22: break;
-        case R_ARM_RREL32: break;
-        case R_ARM_RABS22: break;
-        case R_ARM_RPC24: break;
-        case R_ARM_RBASE: break;
-        case R_ARM_NUM: break;
-        default: break;
-    }
-
-    CONSOLE("Unsupported relocation type: %d", rela->type);
-
-    return 0;
-}
-
-static size_t relocate_address(injecter_t *injecter, elf_relocate_t *rela) {
-    switch (injecter_get_machine(injecter)) {
-        case EM_X86_64:
-            return x86_64_relocate_address(injecter, rela);
-        case EM_ARM:
-            return arm_relocate_address(injecter, rela);
-        case EM_NONE:
-        default:
-            CONSOLE("Unsupported Architecture");
-            return 0;
-    }
-}
-
-
-static size_t x86_64_relocate_value(injecter_t *injecter, elf_relocate_t *rela) {
+static size_t x86_64_relocate_value(injecter_t *injecter, elf_relocate_t *rela, size_t rela_addr) {
     size_t value = 0;
 
     switch (rela->type) {
@@ -409,7 +214,8 @@ static size_t x86_64_relocate_value(injecter_t *injecter, elf_relocate_t *rela) 
 
 }
 
-static size_t arm_relocate_value(injecter_t *injecter, elf_relocate_t *rela) {
+// Refer to glibc/sysdeps/arm/dl-machine.h
+static size_t arm_relocate_value(injecter_t *injecter, elf_relocate_t *rela, size_t rela_addr) {
     size_t value = 0;
 
     switch (rela->type) {
@@ -431,7 +237,13 @@ static size_t arm_relocate_value(injecter_t *injecter, elf_relocate_t *rela) {
             TRACE_WARNING("Function %s() was not resolved", rela->sym.name);
             break;
         case R_ARM_RELATIVE:
-            return library_absolute_address(injecter->inject_lib, rela->addend);
+            //ElfW(Addr) l_addr;		/* Difference between the address in the ELF
+            //file and the addresses in memory.  */
+            //
+            // in glibc$ vim sysdeps/arm/dl-machine :
+            //	*reloc_addr += map->l_addr;
+            value = ptrace(PTRACE_PEEKTEXT, injecter->pid, rela_addr, 0);
+            return library_absolute_address(injecter->inject_lib, value);
         case R_ARM_NONE: break;
         case R_ARM_PC24: break;
         case R_ARM_REL32: break;
@@ -563,12 +375,12 @@ static size_t arm_relocate_value(injecter_t *injecter, elf_relocate_t *rela) {
 
 
 
-static size_t relocate_value(injecter_t *injecter, elf_relocate_t *rela) {
+static size_t relocate_value(injecter_t *injecter, elf_relocate_t *rela, size_t rela_addr) {
     switch (injecter_get_machine(injecter)) {
         case EM_X86_64:
-            return x86_64_relocate_value(injecter, rela);
+            return x86_64_relocate_value(injecter, rela, rela_addr);
         case EM_ARM:
-            return arm_relocate_value(injecter, rela);
+            return arm_relocate_value(injecter, rela, rela_addr);
         case EM_NONE:
         default:
             CONSOLE("Unsupported Architecture");
@@ -583,24 +395,22 @@ bool resolve_function(elf_relocate_t *rela, void *userdata) {
 
     if (!strcmp(rela->sym.name, "_ITM_deregisterTMCloneTable")
         || !strcmp(rela->sym.name, "_ITM_registerTMCloneTable")
-        || !strcmp(rela->sym.name, "__gmon_start__")) {
+        || !strcmp(rela->sym.name, "__gmon_start__")
+        || !strcmp(rela->sym.name, "_Jv_RegisterClasses")) {
         // do not resolve these functions
         return true;
     }
 
-    if (!(rela_addr = relocate_address(injecter, rela))) {
-        TRACE_ERROR("Failed to get %s() relocation adress", rela->sym.name);
-        return true;
-    }
+    rela_addr = library_absolute_address(injecter->inject_lib, rela->offset);
 
-    if (!(rela_value = relocate_value(injecter, rela))) {
+    if (!(rela_value = relocate_value(injecter, rela, rela_addr))) {
         TRACE_ERROR("Failed to get %s() relocation value", rela->sym.name);
         return true;
     }
 
     CONSOLE("Resolve %s() (*0x%zx = 0x%zx)", rela->sym.name, rela_addr, rela_value);
     if (ptrace(PTRACE_POKETEXT, injecter->pid, rela_addr, rela_value) != 0) {
-        TRACE_ERROR("Failed to replace function");
+        TRACE_ERROR("Failed to replace function: %m");
         return true;
     }
 
@@ -613,8 +423,14 @@ static bool injecter_resolve_functions(injecter_t *injecter) {
     elf_file_t *rela_dyn_file = library_get_elf_section(inject, library_section_rela_dyn);
     elf_file_t *dynsym_file = library_get_elf_section(inject, library_section_dynsym);
     elf_file_t *dynstr_file = library_get_elf_section(inject, library_section_dynstr);
+
+    if (!rela_plt_file) {
+        rela_plt_file = library_get_elf_section(inject, library_section_rel_plt);
+        rela_dyn_file = library_get_elf_section(inject, library_section_rel_dyn);
+    }
     if (!rela_plt_file || !rela_dyn_file || !dynsym_file || !dynstr_file) {
-        TRACE_ERROR("Failed to open .rela.plt section");
+        TRACE_ERROR("Failed to open .rela.plt=%p, .rela.dyn=%p, .dynsym=%p, .dynstr=%p sections)",
+            rela_plt_file, rela_dyn_file, dynsym_file, dynstr_file);
         return false;
     }
 
@@ -750,7 +566,39 @@ size_t elf_find_available_memory(int pid, elf_t *elf) {
     return alignup(base_unaligned_addr, align);
 }
 
+static bool memfd_zerowrite(int memfd, size_t addr, size_t len) {
+        char buff[1] = {0};
+        size_t i = 0;
+        size_t remain = 0;
+
+        if (len <= 0) {
+            return true;
+        }
+
+        if (lseek64(memfd, addr, SEEK_SET) < 0) {
+            TRACE_ERROR("Failed lseek 0x%zx: %m", addr);
+            return false;
+        }
+
+        for (i = 0; (i + sizeof(buff)) < len; i += sizeof(buff)) {
+            if (write(memfd, buff, sizeof(buff)) < 0) {
+                TRACE_ERROR("Failed write(0x%zx): %m", addr+i);
+                return false;
+            }
+        }
+
+        remain = len - i;
+        if (write(memfd, buff, remain) < 0) {
+            TRACE_ERROR("Failed write(0x%zx): %m", addr+i);
+            return false;
+        }
+
+        return true;
+}
+
 bool injecter_load_library(injecter_t *injecter, const char *libname) {
+    char memfile[64];
+    int memfd = -1;
     elf_t *elf = NULL;
     const program_header_t *ph = NULL;
     FILE *fp = NULL;
@@ -769,10 +617,26 @@ bool injecter_load_library(injecter_t *injecter, const char *libname) {
     }
 
     // Sanity check
+    CONSOLE("Waiting for target process to perform a system call to hijack it");
+    if (!syscall_init(injecter->pid)) {
+        TRACE_ERROR("Failed to init syscall");
+        return false;
+    }
     if (syscall_getpid(injecter->pid) != injecter->pid) {
         TRACE_ERROR("Failed to inject syscall in target process");
         return false;
     }
+    if (syscall_getpid(injecter->pid) != injecter->pid) {
+        TRACE_ERROR("Failed to inject syscall in target process");
+        return false;
+    }
+    if (syscall_getpid(injecter->pid) != injecter->pid) {
+        TRACE_ERROR("Failed to inject syscall in target process");
+        return false;
+    }
+
+    //CONSOLE("DEBUG ERROR");
+    //return false;
 
     // Allocate memory for writing string
     injecter->straddr = syscall_mmap(injecter->pid,
@@ -782,18 +646,23 @@ bool injecter_load_library(injecter_t *injecter, const char *libname) {
         TRACE_ERROR("mmap failed");
         return false;
     }
-    CONSOLE("straddr=%p", injecter->straddr);
+    CONSOLE("Memory mapped at %p to store library name", injecter->straddr);
 
-    char memfile[64];
     snprintf(memfile, sizeof(memfile), "/proc/%d/mem", injecter->pid);
-    // FIXME: Use open instead fopen()
-    FILE *mem = fopen(memfile, "w");
-    assert(mem);
+    if ((memfd = open(memfile, O_RDWR)) < 0) {
+        TRACE_ERROR("Failed to open %s: %m", memfile);
+        return false;
+    }
 
     // Write library name in target memory
-    fseek(mem, (size_t)injecter->straddr, SEEK_SET);
-    fprintf(mem, "%s", injecter->inject_libname);
-    fflush(mem);
+    if (lseek64(memfd, (size_t)injecter->straddr, SEEK_SET) < 0) {
+        TRACE_ERROR("Failed lseek %p: %m", injecter->straddr);
+        return false;
+    }
+    if (write(memfd, injecter->inject_libname, strlen(injecter->inject_libname) + 1) < 0) {
+        TRACE_ERROR("Failed write(memfd): %m");
+        return false;
+    }
     int fd = syscall_open(injecter->pid, injecter->straddr, O_RDONLY, 0);
     if (fd < 0) {
         TRACE_ERROR("Failed to open %s inside pid %d", injecter->inject_libname, injecter->pid);
@@ -840,11 +709,12 @@ bool injecter_load_library(injecter_t *injecter, const char *libname) {
         }
 
         // Fill unitialized memory with zero
-        fseek(mem, (base_addr + ph->p_vaddr + ph->p_filesz), SEEK_SET);
-        for (size_t i = 0; i < (ph->p_memsz - ph->p_filesz); i++) {
-            fputc(0, mem);
+        size_t zeroaddr = base_addr + ph->p_vaddr + ph->p_filesz;
+        size_t zerolen = ph->p_memsz - ph->p_filesz;
+        if (!memfd_zerowrite(memfd, zeroaddr, zerolen)) {
+            TRACE_ERROR("Failed to zeroing memory at 0x%zx (len=0x%zx)", zeroaddr, zerolen);
+            //return false;
         }
-        fflush(mem);
         CONSOLE("Program mapped at 0x%zx (size=0x%zx)", mapaddr, mapsize);
     }
 
@@ -876,7 +746,7 @@ bool injecter_load_library(injecter_t *injecter, const char *libname) {
 
     elf_close(elf);
     fclose(fp);
-    fclose(mem);
+    close(memfd);
     return true;
 }
 

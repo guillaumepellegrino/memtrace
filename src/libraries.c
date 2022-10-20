@@ -69,9 +69,12 @@ bool thread_stack_update(thread_stack_t *thread, void *sp) {
 
 
     //copy file in buffer
-    FILE *fp = fopen("/proc/self/maps", "r");
+    const char *filename = "/proc/self/maps";
+    const char *mode = "r";
+
+    FILE *fp = fopen(filename, mode);
     if (!fp) {
-        TRACE_ERROR("Failed to open /proc/self/maps: %m");
+        TRACE_ERROR("Failed to open /proc/self/maps: %m, fp:%p", fp);
         goto error;
     }
 
@@ -126,6 +129,7 @@ thread_stack_t *threads_addme(list_t *threads, void *sp) {
         return NULL;
     }
     thread->id = pthread_self();
+    list_append(threads, &thread->it);
     thread_stack_update(thread, sp);
 
     return thread;
@@ -459,6 +463,8 @@ elf_file_t *library_get_elf_section(library_t *library, library_section_t sectio
         [library_section_dynstr] = ".dynstr",
         [library_section_symtab] = ".symtab",
         [library_section_strtab] = ".strtab",
+        [library_section_rel_dyn] = ".rel.dyn",
+        [library_section_rel_plt] = ".rel.plt",
         [library_section_rela_dyn] = ".rela.dyn",
         [library_section_rela_plt] = ".rela.plt",
         [library_section_bss] = ".bss",

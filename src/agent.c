@@ -63,6 +63,7 @@ static void allocations_maps_destroy(hashmap_t *hashmap, void *key, hashmap_iter
     agent->stats.free_count += 1;
     agent->stats.free_size += allocation->ptr_size;
     agent->stats.byte_inuse -= allocation->ptr_size;
+    agent->stats.count_inuse -= 1;
     if (block->count <= 0) {
         hashmap_iterator_destroy(&block->it);
     }
@@ -168,8 +169,8 @@ static void cmd_status(agent_t *agent, FILE *fp, int argc, char *argv[]) {
     bool lock = hooks_lock();
     //time_t now = time(NULL);
     fprintf(fp, "HEAP SUMMARY\n"/*, asctime(localtime(&now))*/);
-    fprintf(fp, "    in use: %zu bytes in %zu blocks\n",
-        agent->stats.byte_inuse, agent->stats.block_inuse);
+    fprintf(fp, "    in use: %zu allocs, %zu bytes in %zu contexts\n",
+        agent->stats.count_inuse, agent->stats.byte_inuse, agent->stats.block_inuse);
     fprintf(fp, "    total heap usage: %zu allocs, %zu frees, %zu bytes allocated\n",
         agent->stats.alloc_count, agent->stats.free_count, agent->stats.alloc_size);
     hooks_unlock(lock);
@@ -194,7 +195,7 @@ static void cmd_report(agent_t *agent, FILE *fp, int argc, char *argv[]) {
         }
 
         fprintf(fp, "Memory allocation context n°%zu\n", i);
-        fprintf(fp, "%zd bytes in %zd blocks were not free\n", block->size, block->count);
+        fprintf(fp, "%zd allocs, %zd bytes were not free\n", block->count, block->size);
         libraries_backtrace_print(agent->libraries, block->callstack, agent->callstack_size, fp);
         fprintf(fp, "\n");
 
@@ -214,21 +215,11 @@ static void cmd_clear(agent_t *agent, FILE *fp, int argc, char *argv[]) {
     agent->stats.free_count = 0;
     agent->stats.free_size = 0;
     agent->stats.byte_inuse = 0;
+    agent->stats.count_inuse = 0;
     agent->stats.block_inuse = 0;
     hooks_unlock(lock);
 }
 
-// TODO:
-//
-// 1. Mark block number i for coredump with the corresponding file pointer.
-// 2. When coredump should be done, notify external process to generate coredump.
-//
-// => coredump 0
-// <= [cmd_done]
-// |||| agent wait for resume command
-// |||| memtrace generate agent's coredump
-// => resume
-// <= resume_done
 static void cmd_coredump(agent_t *agent, FILE *fp, int argc, char *argv[]) {
     int i = 0;
     int num = 0;
@@ -390,7 +381,6 @@ bool agent_initialize(agent_t *agent) {
     hashmap_initialize(&agent->allocations, &allocations_maps_cfg);
     hashmap_initialize(&agent->blocks, &blocks_maps_cfg);
 
-
     libraries_print(agent->libraries, stdout);
 
     if ((agent->ipc = ipc_socket()) < 0) {
@@ -402,12 +392,19 @@ bool agent_initialize(agent_t *agent) {
         return false;
     }
 
+    agent->follow_allocs = true;
+
     return true;
 }
 
 void agent_cleanup(agent_t *agent) {
     libraries_destroy(agent->libraries);
     ipc_socket_close(agent->ipc);
+    agent->follow_allocs = false;
+}
+
+void agent_unfollow_allocs(agent_t *agent) {
+    agent->follow_allocs = false;
 }
 
 static void agent_notifify_do_coredump(block_t *block, cpu_registers_t *regs) {
@@ -443,12 +440,13 @@ void agent_alloc(agent_t *agent, cpu_registers_t *regs, size_t size, void *newpt
     block_t *block = NULL;
     allocation_t *allocation = NULL;
 
+    if (!agent->follow_allocs) {
+        return;
+    }
     if (pthread_self() == agent->thread) {
         // ignore allocation from the agent itself
         return;
     }
-
-    CONSOLE("agent_alloc()");
 
     assert((callstack = calloc(agent->callstack_size, sizeof(size_t))));
     libraries_backtrace(agent->libraries, regs, callstack, agent->callstack_size);
@@ -488,12 +486,15 @@ void agent_alloc(agent_t *agent, cpu_registers_t *regs, size_t size, void *newpt
     agent->stats.alloc_count += 1;
     agent->stats.alloc_size += size;
     agent->stats.byte_inuse += size;
-    CONSOLE("agent_alloc() done");
+    agent->stats.count_inuse += 1;
 }
 
 void agent_dealloc(agent_t *agent, void *ptr) {
     hashmap_iterator_t *it = NULL;
 
+    if (!agent->follow_allocs) {
+        return;
+    }
     if (pthread_self() == agent->thread) {
         // ignore allocation from the agent itself
         return;

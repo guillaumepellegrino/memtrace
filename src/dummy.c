@@ -53,6 +53,7 @@ int main(int argc, char *argv[]) {
     signal(SIGTERM, sigint_handler);
 
     while (!exit_loop) {
+        /*
         int *num = calloc(1, sizeof(num));
         if (num) {
             *num = getmagicnumber(loop);
@@ -63,10 +64,15 @@ int main(int argc, char *argv[]) {
             printf("num is NULL\n");
         }
         fflush(stdout);
+        */
 
         //char *toto = alloc_toto();
         //printf("strdup() -> %s (%p)\n", toto, toto);
-        sleep(1);
+        time_t now = time(NULL);
+        printf("sleep() IN @%s", asctime(localtime(&now)));
+        sleep(5);
+        now = time(NULL);
+        printf("sleep() OUT @%s", asctime(localtime(&now)));
         loop++;
     }
 
