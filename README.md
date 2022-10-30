@@ -113,6 +113,7 @@ Connecting to [targethostname.com]:3002
 Connected
 
 # You should now have the hand on Target
+```
 ## 4. Console Usage
 memtrace provide a console to inspect the HEAP usage. It currently offers the following commands:
 ```
