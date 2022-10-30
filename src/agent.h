@@ -21,6 +21,7 @@
 
 #include "types.h"
 #include "hashmap.h"
+#include "bus.h"
 
 typedef struct {
     size_t alloc_count;
@@ -42,6 +43,12 @@ typedef struct {
     stats_t stats;
     int ipc;
     pthread_t thread;
+    evlp_t *evlp;
+    bus_t bus;
+    bus_topic_t status_topic;
+    bus_topic_t report_topic;
+    bus_topic_t clear_topic;
+    bus_topic_t coredump_topic;
 } agent_t;
 
 bool agent_initialize(agent_t *agent);

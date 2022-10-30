@@ -95,34 +95,5 @@ void fs_register_topic(fs_topic_t *topic);
 
 FILE *fs_write_request(const char *topic, map_t *options);
 
-/**
- * Simple Message Protocol
- *
- * > POST TOPIC\r\n
- * > $KEY0=$VALUE0\n
- * > $KEY1=$VALUE1\n
- * > \n
- * > $DATA
- *
- * < /REPLY/$TOPIC\n
- * < $KEY2=$VALUE2\n
- * < $KEY3=$VALUE3\n
- * < \n
- * < $DATA
- */
-typedef struct _smp smp_t;
-typedef struct _smp_topic smp_topic_t;
-struct _smp_topic {
-    list_t it;
-    const char *name;
-    bool (*read)(smp_topic_t *topic, map_t *options, FILE *fp);
-};
-
-void smp_initialize(smp_t *smp);
-void smp_cleanup(smp_t *smp);
-void smp_register_topic(smp_t *smp, smp_topic_t *topic);
-FILE *smp_write_request(smp_t *smp, const char *topic, map_t *options);
-
-
 
 #endif

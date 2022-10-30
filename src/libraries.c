@@ -400,7 +400,6 @@ void libraries_backtrace_print(libraries_t *libraries, void **callstack, size_t 
     assert(libraries);
     assert(callstack);
 
-    fprintf(fp, "[callstack]\n");
     for (size_t i = 0; i < size && callstack[i]; i++) {
         library_t *library = libraries_find(libraries, (size_t) callstack[i]);
         if (library) {
@@ -427,8 +426,6 @@ void libraries_backtrace_print(libraries_t *libraries, void **callstack, size_t 
             }
         }
     }
-
-    fprintf(fp, "[callstack end]\n\n");
     fflush(fp);
 }
 

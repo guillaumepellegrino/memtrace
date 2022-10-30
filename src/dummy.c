@@ -70,7 +70,7 @@ int main(int argc, char *argv[]) {
         //printf("strdup() -> %s (%p)\n", toto, toto);
         time_t now = time(NULL);
         printf("sleep() IN @%s", asctime(localtime(&now)));
-        sleep(5);
+        sleep(1);
         now = time(NULL);
         printf("sleep() OUT @%s", asctime(localtime(&now)));
         loop++;

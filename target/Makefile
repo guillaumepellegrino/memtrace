@@ -21,10 +21,12 @@ endif
 
 all: $(TARGETS)
 
-memtrace: memtrace.o inject.o syscall_hijack.o ptrace.o hashmap.o strlist.o libraries.o log.o elf.o elf_file.o elf_sym.o elf_relocate.o console.o coredump.o $(ARCH_OBJECT)
+memtrace: memtrace.o evlp.o bus.o net.o strlist.o strmap.o inject.o syscall_hijack.o ptrace.o hashmap.o libraries.o log.o elf.o elf_file.o elf_sym.o elf_relocate.o console.o coredump.o $(ARCH_OBJECT)
 	$(CC) -o $(@) $(^) $(LDFLAGS)
 
-libmemtrace-agent.so: agent.o agent_hooks.o hashmap.o libraries.o elf.o elf_file.o elf_sym.o coredump.o log.o $(ARCH_OBJECT)
+install:
+
+libmemtrace-agent.so: agent.o evlp.o bus.o net.o strlist.o strmap.o agent_hooks.o hashmap.o libraries.o elf.o elf_file.o elf_sym.o coredump.o log.o $(ARCH_OBJECT)
 	$(CC) --shared -fPIC -o $(@) $(^) $(LDFLAGS)
 
 dummy: dummy.o

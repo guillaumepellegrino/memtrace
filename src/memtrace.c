@@ -33,6 +33,9 @@
 #include <sys/user.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/epoll.h>
+#include "evlp.h"
+#include "bus.h"
 #include "inject.h"
 #include "libraries.h"
 #include "console.h"
@@ -41,15 +44,36 @@
 #include "log.h"
 
 typedef struct {
+    evlp_handler_t stdin_handler;
     console_t console;
-    FILE *ipc;
+    bus_t server;
+    bus_t agent;
     int pid;
-} console_ctx_t;
+} memtrace_t;
 
 __attribute__((aligned)) char g_buff[G_BUFF_SIZE];
 
 #define process_for_each_thread(tid, dir) \
     for (tid = process_first_thread(dir); tid > 0; tid = process_next_thread(dir))
+
+static const char *toolchain_path() {
+    static char toolchain[256];
+    char *sep = NULL;
+
+    snprintf(toolchain, sizeof(toolchain), "%s", COMPILER);
+
+    if ((sep = strrchr(toolchain, '/'))) {
+        sep = toolchain;
+        if ((sep = strrchr(sep, '-'))) {
+            *sep = 0;
+        }
+    }
+    else {
+        toolchain[0] = 0;
+    }
+
+    return toolchain;
+}
 
 static DIR *process_threads(int pid) {
     char task_path[128];
@@ -124,13 +148,13 @@ static bool thread_attach(int tid) {
     return true;
 }
 
-static FILE *connect_to_memtrace_agent(int pid) {
+static bool connect_to_memtrace_agent(bus_t *bus, int pid) {
     struct sockaddr_un connaddr = {
         .sun_family = AF_UNIX,
     };
     struct stat buf = {0};
     int s = -1;
-    FILE *fp = NULL;
+    bool rt = false;
 
     snprintf(connaddr.sun_path, sizeof(connaddr.sun_path),
         "/tmp/memtrace-agent-%d", pid);
@@ -155,17 +179,17 @@ static FILE *connect_to_memtrace_agent(int pid) {
         printf("Failed to bind ipc socket to %s: %m\n", connaddr.sun_path);
         goto error;
     }
-    if (!(fp = fdopen(s, "w+"))) {
-        TRACE_ERROR("fdopen() error: %m");
+    if (!bus_ipc_socket(bus, s)) {
+        printf("Failed to add ipc socket to bus\n");
         goto error;
     }
+    rt = true;
 
-    return fp;
 error:
-    if (s >= 0) {
+    if (!rt) {
         close(s);
     }
-    return NULL;
+    return rt;
 }
 
 static void memtrace_console_quit(console_t *console, int argc, char *argv[]) {
@@ -175,21 +199,60 @@ static void memtrace_console_quit(console_t *console, int argc, char *argv[]) {
 
 static void memtrace_console_forward(console_t *console, int argc, char *argv[]) {
     char line[4096];
+    memtrace_t *memtrace = container_of(console, memtrace_t, console);
+    bus_connection_t *ipc = NULL;
 
-    console_ctx_t *ctx = container_of(console, console_ctx_t, console);
-    for (int i = 0; i < argc; i++) {
-        fprintf(ctx->ipc, "%s ", argv[i]);
+    if (!(ipc = bus_first_connection(&memtrace->agent))) {
+        CONSOLE("memtrace is not connected to target process");
+        return;
     }
-    fprintf(ctx->ipc, "\n");
-    fflush(ctx->ipc);
 
-
-    while (fgets(line, sizeof(line), ctx->ipc)) {
+    bus_connection_write_request(ipc, argv[0], NULL);
+    while (bus_connection_readline(ipc, line, sizeof(line))) {
         if (!strcmp(line, "[cmd_done]\n")) {
             break;
         }
-        else if (!strcmp(line, "[cmd_unknown]\n")) {
-            CONSOLE("Unknown command: %s", argv[0]);
+        CONSOLE_RAW("%s", line);
+    }
+}
+
+static void memtrace_console_report(console_t *console, int argc, char *argv[]) {
+    char line[4096];
+    strmap_t options = {0};
+    memtrace_t *memtrace = container_of(console, memtrace_t, console);
+    bus_connection_t *ipc = NULL;
+    bus_connection_t *server = NULL;
+    bus_connection_t *in = NULL;
+
+    if (!(ipc = bus_first_connection(&memtrace->agent))) {
+        CONSOLE("memtrace is not connected to target process");
+        return;
+    }
+
+    if (argc > 1) {
+        strmap_add(&options, "count", argv[1]);
+    }
+    bus_connection_write_request(ipc, "report", &options);
+
+    // Are we connected to memtrace-server ?
+    if ((server = bus_first_connection(&memtrace->server))) {
+        // Forward report to memtrace-server for decodding addresses to line and functions
+        strmap_add(&options, "sysroot", SYSROOT);
+        strmap_add(&options, "toolchain", toolchain_path());
+        bus_connection_write_request(server, "report", &options);
+        while (bus_connection_readline(ipc, line, sizeof(line))) {
+            bus_connection_printf(server, "%s", line);
+            if (!strcmp(line, "[cmd_done]\n")) {
+                break;
+            }
+        }
+        bus_connection_flush(server);
+    }
+
+    // Read report and dump it on console
+    in = server ? server : ipc;
+    while (bus_connection_readline(in, line, sizeof(line))) {
+        if (!strcmp(line, "[cmd_done]\n")) {
             break;
         }
         else {
@@ -197,10 +260,7 @@ static void memtrace_console_forward(console_t *console, int argc, char *argv[])
         }
     }
 
-    if (feof(ctx->ipc) || ferror(ctx->ipc)) {
-        CONSOLE("Connection to memtrace-agent closed");
-        memtrace_console_quit(console, 0, NULL);
-    }
+    strmap_cleanup(&options);
 }
 
 void memtrace_coredump(int pid, cpu_registers_t *regs) {
@@ -257,7 +317,8 @@ error:
 
 void memtrace_console_coredump(console_t *console, int argc, char *argv[]) {
     char line[4096];
-    console_ctx_t *ctx = container_of(console, console_ctx_t, console);
+    memtrace_t *memtrace = container_of(console, memtrace_t, console);
+    bus_connection_t *ipc = NULL;
     cpu_registers_t regs = {0};
     int tid = 0;
     size_t pc = 0;
@@ -268,15 +329,17 @@ void memtrace_console_coredump(console_t *console, int argc, char *argv[]) {
     size_t arg2 = 0;
     size_t arg3 = 0;
 
-    // Forward command
-    for (int i = 0; i < argc; i++) {
-        fprintf(ctx->ipc, "%s ", argv[i]);
+
+    if (!(ipc = bus_first_connection(&memtrace->agent))) {
+        CONSOLE("memtrace is not connected to target process");
+        return;
     }
-    fprintf(ctx->ipc, "\n");
-    fflush(ctx->ipc);
+
+    // Forward command
+    bus_connection_write_request(ipc, "coredump", NULL);
 
     // Read reply
-    while (fgets(line, sizeof(line), ctx->ipc)) {
+    while (bus_connection_readline(ipc, line, sizeof(line))) {
         if (!strcmp(line, "[cmd_done]\n")) {
             break;
         }
@@ -286,7 +349,7 @@ void memtrace_console_coredump(console_t *console, int argc, char *argv[]) {
     }
 
     // Wait for notification do_coredump
-    while (fgets(line, sizeof(line), ctx->ipc)) {
+    while (bus_connection_readline(ipc, line, sizeof(line))) {
         if (sscanf(line, "notify do_coredump %d 0x%zx 0x%zx 0x%zx 0x%zx 0x%zx 0x%zx 0x%zx",
             &tid, &pc, &sp, &fp, &ra, &arg1, &arg2, &arg3) == 8) {
             cpu_register_set(&regs, cpu_register_pc, pc);
@@ -308,8 +371,8 @@ void memtrace_console_coredump(console_t *console, int argc, char *argv[]) {
     memtrace_coredump(tid, &regs);
     CONSOLE("Do coredump done");
 
-    fclose(ctx->ipc);
-    ctx->ipc = connect_to_memtrace_agent(ctx->pid);
+    bus_connection_close(ipc);
+    connect_to_memtrace_agent(&memtrace->agent, memtrace->pid);
 }
 
 static const console_cmd_t memtrace_console_commands[] = {
@@ -317,7 +380,7 @@ static const console_cmd_t memtrace_console_commands[] = {
     {.name = "quit",        .help = "Quit memtrace and show report", .handler = memtrace_console_quit},
     {.name = "status",      .help = "Show memtrace status", .handler = memtrace_console_forward},
     {.name = "monitor",     .help = "Monitor memory allocations", .handler = NULL},
-    {.name = "report",      .help = "Show memtrace report", .handler = memtrace_console_forward},
+    {.name = "report",      .help = "Show memtrace report", .handler = memtrace_console_report},
     {.name = "coredump",    .help = "Generate a coredump", .handler = memtrace_console_coredump},
     {.name = "clear",       .help = "Clear memory statistics", .handler = memtrace_console_forward},
     {0},
@@ -401,25 +464,61 @@ error:
     return rt;
 }
 
-static void memtrace_console(FILE *ipc, int pid) {
-    console_ctx_t ctx = {
-        .ipc = ipc,
-        .pid = pid,
-    };
+static void stdin_handler(evlp_handler_t *self, int events) {
+    memtrace_t *memtrace = container_of(self, memtrace_t, stdin_handler);
+    console_poll(&memtrace->console);
+}
 
-    console_initiliaze(&ctx.console, memtrace_console_commands);
-    while (true) {
-        console_poll(&ctx.console);
+static bool is_cross_compiled() {
+    return strlen(SYSROOT) > 1;
+}
+
+int local_memtrace_server(bus_t *bus) {
+    char socketarg[32];
+    int pid = -1;
+    int sockets[2] = {-1, -1};
+
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) < 0) {
+        TRACE_ERROR("socketpair failed: %m");
+        return -1;
     }
-    console_cleanup(&ctx.console);
+
+    pid = fork();
+    if (pid < 0) {
+        TRACE_ERROR("fork failed: %m");
+        return -1;
+    }
+    else if (pid > 0) {
+        close(sockets[1]);
+        bus_ipc_socket(bus, sockets[0]);
+        return pid;
+    }
+
+    // run memtrace server
+    close(sockets[0]);
+    snprintf(socketarg, sizeof(socketarg), "%d", sockets[1]);
+    if (execlp("memtrace-server", "memtrace-server", "--socket", socketarg, "/", NULL) != 0) {
+        TRACE_ERROR("Failed to exec memtrace-server: %m");
+    }
+
+    exit(1);
+    return -1;
 }
 
 static void help() {
     CONSOLE("./target/inject -p $(pidof dummy)");
+    CONSOLE("Options: ");
+    CONSOLE("  -L, --library=PATH   Library to inject in target process");
+    if (is_cross_compiled()) {
+        CONSOLE("  -m, --multicast ");
+        CONSOLE("  -c, --connect ");
+        CONSOLE("  -l, --listen ");
+    }
+    CONSOLE("  -h, --help           Display this help");
 }
 
 int main(int argc, char *argv[]) {
-    const char *short_options = "+p:l:chV";
+    const char *short_options = "+p:L:Cmc:l:hV";
     const struct option long_options[] = {
         {"pid",         required_argument,  0, 'p'},
         {"library",     required_argument,  0, 'l'},
@@ -427,21 +526,41 @@ int main(int argc, char *argv[]) {
     };
     int rt = 1;
     int opt = -1;
-    int pid = -1;
     bool do_coredump = false;
-    FILE *ipc = NULL;
-    const char *libname = "/home/sahphilog2/workspace/memtrace/target/libmemtrace-agent.so";
+    evlp_t *evlp = NULL;
+    const char *libname = "/home/sahphilog2/Workspace/memtrace/target/libmemtrace-agent.so";
+    const char *hostname = NULL;
+    const char *port = "3002";
+    bool client = false;
+    bool multicast = false;
+    int memtrace_server_pid = -1;
+    memtrace_t memtrace = {
+        .stdin_handler = {.fn = stdin_handler},
+        .pid = -1,
+    };
 
     while ((opt = getopt_long(argc, argv, short_options, long_options, NULL)) != -1) {
         switch (opt) {
             case 'p':
-                pid = atoi(optarg);
+                memtrace.pid = atoi(optarg);
                 break;
-            case 'l':
+            case 'L':
                 libname = optarg;
                 break;
-            case 'c':
+            case 'C':
                 do_coredump = true;
+                break;
+            case 'm':
+                multicast = true;
+                break;
+            case 'c':
+                hostname = strtok(optarg, ":");
+                port = strtok(NULL, ":");
+                client = true;
+                break;
+            case 'l':
+                hostname = strtok(optarg, ":");
+                port = strtok(NULL, ":");
                 break;
             case 'h':
                 help();
@@ -454,7 +573,7 @@ int main(int argc, char *argv[]) {
 
     signal(SIGPIPE, SIG_IGN);
 
-    if (pid <= 0) {
+    if (memtrace.pid <= 0) {
         CONSOLE("PID not provided");
         help();
         goto error;
@@ -464,15 +583,53 @@ int main(int argc, char *argv[]) {
         help();
         goto error;
     }
-
     if (do_coredump) {
-        memtrace_coredump(pid, NULL);
+        memtrace_coredump(memtrace.pid, NULL);
         rt = 0;
         goto error;
     }
 
-    if (!library_is_loaded(pid, libname)) {
-        if (!inject_memtrace_agent(pid, libname)) {
+    // Create event loop
+    evlp = evlp_create();
+
+    // Add standard input to event loop
+    console_initiliaze(&memtrace.console, memtrace_console_commands);
+    evlp_add_handler(evlp, &memtrace.stdin_handler, 0, EPOLLIN);
+
+    // Establish connection to memtrace-server and add socket to event loop
+    if (hostname && client) {
+        bus_initialize(&memtrace.server, evlp, "memtrace", "memtrace-server");
+        if (!bus_tcp_connect(&memtrace.server, hostname, port)) {
+            TRACE_ERROR("Failed to connect to %s:%s", hostname, port);
+            goto error;
+        }
+        bus_wait4connect(&memtrace.server);
+    }
+    else if (hostname) {
+        bus_initialize(&memtrace.server, evlp, "memtrace", "memtrace-server");
+        if (!bus_tcp_listen(&memtrace.server, hostname, port)) {
+            TRACE_ERROR("Failed to listen on %s:%s", hostname, port);
+            goto error;
+        }
+        bus_wait4connect(&memtrace.server);
+    }
+    else if (multicast) {
+        bus_initialize(&memtrace.server, evlp, "memtrace", "memtrace-server");
+        if (!bus_tcp_autoconnect(&memtrace.server)) {
+            TRACE_ERROR("Failed to discover memtrace-server");
+            goto error;
+        }
+        bus_wait4connect(&memtrace.server);
+    }
+    else if (!is_cross_compiled()) {
+        CONSOLE("Run memtrace-server locally");
+        bus_initialize(&memtrace.server, evlp, "memtrace", "memtrace-server");
+        memtrace_server_pid = local_memtrace_server(&memtrace.server);
+    }
+
+    // Inject memtrace-agent library in target process
+    if (!library_is_loaded(memtrace.pid, libname)) {
+        if (!inject_memtrace_agent(memtrace.pid, libname)) {
             CONSOLE("Failed to inject memtrace agent in target process");
             goto error;
         }
@@ -482,20 +639,29 @@ int main(int argc, char *argv[]) {
         CONSOLE("Memtrace agent is already injected in target process");
     }
 
-    if (!(ipc = connect_to_memtrace_agent(pid))) {
+    // Establish ipc connection to memtrace-agent
+    bus_initialize(&memtrace.agent, evlp, "memtrace", "memtrace.agent");
+    if (!connect_to_memtrace_agent(&memtrace.agent, memtrace.pid)) {
         CONSOLE("Failed to connect to memtrace-agent");
         goto error;
     }
-
-    CONSOLE("Memtrace is connected to target process %d", pid);
+    CONSOLE("Memtrace is connected to target process %d", memtrace.pid);
     CONSOLE("Enter 'help' for listing possible commands");
-    memtrace_console(ipc, pid);
 
+    // Enter event loop
+    evlp_main(evlp);
     rt = 0;
 
 error:
-    if (ipc) {
-        fclose(ipc);
+    console_cleanup(&memtrace.console);
+    bus_cleanup(&memtrace.server);
+    bus_cleanup(&memtrace.agent);
+    if (evlp) {
+        evlp_destroy(evlp);
+    }
+    if (memtrace_server_pid > 0) {
+        kill(memtrace_server_pid, SIGKILL);
+        waitpid(memtrace_server_pid, NULL, 0);
     }
 
     return rt;

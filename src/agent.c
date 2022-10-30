@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <sys/signal.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/stat.h>
@@ -20,6 +21,8 @@
 #include "elf.h"
 #include "elf_file.h"
 #include "coredump.h"
+#include "evlp.h"
+#include "bus.h"
 #include "arch.h"
 #include "log.h"
 
@@ -152,38 +155,31 @@ static void ipc_socket_close(int ipc) {
     unlink(bindaddr.sun_path);
 }
 
-static void cmd_help(agent_t *agent, FILE *fp, int argc, char *argv[]) {
+static bool agent_status(bus_t *bus, bus_connection_t *connection, bus_topic_t *topic, strmap_t *options, FILE *fp) {
     bool lock = hooks_lock();
-    fprintf(fp,
-        "Command list:\n"
-        " - help:           Display this help\n"
-        " - status:         Display a short memory status\n"
-        " - report $1:      Display full memory report\n"
-        " - clear:          Clear the tracked memory\n"
-        " - coredump $1 $2: Generate a coredump\n"
-        "\n");
-    hooks_unlock(lock);
-}
-
-static void cmd_status(agent_t *agent, FILE *fp, int argc, char *argv[]) {
-    bool lock = hooks_lock();
+    agent_t *agent = container_of(topic, agent_t, status_topic);
     //time_t now = time(NULL);
     fprintf(fp, "HEAP SUMMARY\n"/*, asctime(localtime(&now))*/);
     fprintf(fp, "    in use: %zu allocs, %zu bytes in %zu contexts\n",
         agent->stats.count_inuse, agent->stats.byte_inuse, agent->stats.block_inuse);
     fprintf(fp, "    total heap usage: %zu allocs, %zu frees, %zu bytes allocated\n",
         agent->stats.alloc_count, agent->stats.free_count, agent->stats.alloc_size);
+    fprintf(fp, "[cmd_done]\n");
+    fflush(fp);
     hooks_unlock(lock);
+
+    return true;
 }
 
-static void cmd_report(agent_t *agent, FILE *fp, int argc, char *argv[]) {
+static bool agent_report(bus_t *bus, bus_connection_t *connection, bus_topic_t *topic, strmap_t *options, FILE *fp) {
     bool lock = hooks_lock();
+    agent_t *agent = container_of(topic, agent_t, report_topic);
     size_t i = 0;
     size_t max = 10;
     hashmap_iterator_t *it = NULL;
 
-    if (argc > 1) {
-        max = atoi(argv[1]);
+    if (strmap_get(options, "count")) {
+        max = atoi(strmap_get(options, "count"));
     }
 
     hashmap_qsort(&agent->blocks, blocks_map_compar);
@@ -202,13 +198,21 @@ static void cmd_report(agent_t *agent, FILE *fp, int argc, char *argv[]) {
         i++;
     }
 
-    cmd_status(agent, fp, 0, NULL);
+    fprintf(fp, "HEAP SUMMARY\n"/*, asctime(localtime(&now))*/);
+    fprintf(fp, "    in use: %zu allocs, %zu bytes in %zu contexts\n",
+        agent->stats.count_inuse, agent->stats.byte_inuse, agent->stats.block_inuse);
+    fprintf(fp, "    total heap usage: %zu allocs, %zu frees, %zu bytes allocated\n",
+        agent->stats.alloc_count, agent->stats.free_count, agent->stats.alloc_size);
+    fprintf(fp, "[cmd_done]\n");
+    fflush(fp);
     hooks_unlock(lock);
+
+    return true;
 }
 
-static void cmd_clear(agent_t *agent, FILE *fp, int argc, char *argv[]) {
+static bool agent_clear(bus_t *bus, bus_connection_t *connection, bus_topic_t *topic, strmap_t *options, FILE *fp) {
     bool lock = hooks_lock();
-    fprintf(fp, "Clearing list of allocations\n");
+    agent_t *agent = container_of(topic, agent_t, clear_topic);
     hashmap_clear(&agent->allocations);
     agent->stats.alloc_count = 0;
     agent->stats.alloc_size = 0;
@@ -217,7 +221,18 @@ static void cmd_clear(agent_t *agent, FILE *fp, int argc, char *argv[]) {
     agent->stats.byte_inuse = 0;
     agent->stats.count_inuse = 0;
     agent->stats.block_inuse = 0;
+
+    fprintf(fp, "List of allocations clear\n");
+    fprintf(fp, "[cmd_done]\n");
+    fflush(fp);
     hooks_unlock(lock);
+
+    return true;
+}
+
+static bool agent_coredump(bus_t *bus, bus_connection_t *connection, bus_topic_t *topic, strmap_t *options, FILE *fp) {
+
+    return true;
 }
 
 static void cmd_coredump(agent_t *agent, FILE *fp, int argc, char *argv[]) {
@@ -281,10 +296,6 @@ void ipc_connection_loop(agent_t *agent, FILE *fp) {
         const char *name;
         void (*function)(agent_t *agent, FILE *fp, int argc, char *argv[]);
     } cmd_list[] = {
-        {"help", cmd_help},
-        {"status", cmd_status},
-        {"report", cmd_report},
-        {"clear", cmd_clear},
         {"coredump", cmd_coredump},
     };
 
@@ -330,31 +341,14 @@ void ipc_connection_loop(agent_t *agent, FILE *fp) {
 void *ipc_accept_loop(void *arg) {
     agent_t *agent = arg;
 
-    (void) agent;
+    signal(SIGPIPE, SIG_IGN);
 
     printf("Entered event loop\n");
-
-    while (true) {
-        int s = -1;
-        FILE *fp = NULL;
-
-        if ((s = accept4(agent->ipc, NULL, NULL, SOCK_CLOEXEC)) < 0) {
-            printf("accept error: %m\n");
-            continue;
-        }
-
-        if (!(fp = fdopen(s, "w+"))) {
-            printf("fdopen error: %m\n");
-            close(s);
-            continue;
-        }
-
-        printf("\n[memtrace-agent] ipc connection accepted\n");
-        ipc_connection_loop(agent, fp);
-        close(s);
-        printf("\n[memtrace-agent] ipc connection closed\n");
+    if (!bus_ipc_listen(&agent->bus, agent->ipc)) {
+        printf("Failed to listen on ipc socket\n");
+        return NULL;
     }
-
+    evlp_main(agent->evlp);
     printf("Exiting event loop\n");
 
     return NULL;
@@ -394,10 +388,28 @@ bool agent_initialize(agent_t *agent) {
 
     agent->follow_allocs = true;
 
+
+    agent->evlp = evlp_create();
+    bus_initialize(&agent->bus, agent->evlp, "memtrace-agent", "memtrace");
+    agent->status_topic.name = "status";
+    agent->status_topic.read = agent_status;
+    bus_register_topic(&agent->bus, &agent->status_topic);
+    agent->report_topic.name = "report";
+    agent->report_topic.read = agent_report;
+    bus_register_topic(&agent->bus, &agent->report_topic);
+    agent->clear_topic.name = "clear";
+    agent->clear_topic.read = agent_clear;
+    bus_register_topic(&agent->bus, &agent->clear_topic);
+    agent->coredump_topic.name = "coredump";
+    agent->coredump_topic.read = agent_coredump;
+    bus_register_topic(&agent->bus, &agent->coredump_topic);
+
     return true;
 }
 
 void agent_cleanup(agent_t *agent) {
+    bus_cleanup(&agent->bus);
+    evlp_destroy(agent->evlp);
     libraries_destroy(agent->libraries);
     ipc_socket_close(agent->ipc);
     agent->follow_allocs = false;

@@ -3,13 +3,7 @@
 *.so
 *.log
 *.out
-ftrace
-cli
-ptraceopen
-test
 memtrace
-memtrace-fs
-inject
+memtrace-server
 dummy
-cloudathome.sh
-qemu
+dummy2

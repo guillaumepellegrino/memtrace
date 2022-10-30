@@ -40,13 +40,15 @@
 #define countof(array) (sizeof(array)/sizeof(*array))
 #define min(lval, rval) (((lval) < (rval)) ? (lval) : (rval))
 #define max(lval, rval) (((lval) > (rval)) ? (lval) : (rval))
+#define when_null(_op, _label) if (!(_op)) { goto _label; }
+#define when_true(_op, _label) if ((_op)) { goto _label; }
+#define G_BUFF_SIZE 32768
 
 typedef enum _breakpoint_state breakpoint_state_t;
 typedef union _variant_value variant_value_t;
 
-typedef struct _ftrace ftrace_t;
-typedef struct _ftrace_fcall ftrace_fcall_t;
-typedef struct _epoll_handler epoll_handler_t;
+typedef struct _evlp evlp_t;
+typedef struct _evlp_handler evlp_handler_t;
 typedef struct _backtrace backtrace_t;
 typedef struct _libraries libraries_t;
 typedef struct _library library_t;
@@ -61,6 +63,8 @@ typedef struct _fs fs_t;
 typedef struct _console_cmd console_cmd_t;
 typedef struct _console console_t;
 typedef struct _cpu_registers cpu_registers_t;
+typedef struct _strmap strmap_t;
+typedef struct _strmap_iterator strmap_iterator_t;
 
 
 union _variant_value {
@@ -75,11 +79,9 @@ union _variant_value {
     const char *str;
 };
 
-struct _epoll_handler {
-    void (*fn)(epoll_handler_t *self, int events);
+struct _evlp_handler {
+    void (*fn)(evlp_handler_t *self, int events);
 };
-
-#define G_BUFF_SIZE 32768
 
 extern char g_buff[G_BUFF_SIZE];
 

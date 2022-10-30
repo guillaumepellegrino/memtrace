@@ -11,6 +11,58 @@ It's main advantages are:
 
 ## 2. Local debugging with MEMTRACE
 ### 2.1 Architecture
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Memtrace
+    participant TargetProcess
+    participant MemtraceAgent
+    participant MemtraceServer
+
+    User->>MemtraceServer: Start memtrace-server on Host Computer
+    User->>Memtrace: Start memtrace on Target
+
+
+    Memtrace->>+TargetProcess: ptrace(PTRACE_ATTACH, pid)
+    Memtrace->>TargetProcess: ptrace(PTRACE_SYSCALL, pid)
+    Memtrace->>+TargetProcess: wait(pid)
+    TargetProcess->>TargetProcess: syscall
+    TargetProcess-->>-Memtrace: wait(pid)
+    Memtrace->>TargetProcess: Inject libMemtraceAgent.so
+    Memtrace->>TargetProcess: Override malloc() functions
+    TargetProcess-->>-Memtrace: ptrace(PTRACE_DETACH, pid)
+
+    TargetProcess->>TargetProcess: malloc()
+    TargetProcess->>MemtraceAgent: pthread_create()
+    MemtraceAgent->>MemtraceAgent: Create ipc listen socket
+    Memtrace->>Memtrace: ipc connect loop
+    Memtrace->>MemtraceAgent: ipc connect
+
+    Memtrace->>+MemtraceServer: Query MemtraceServer (udp multicast)
+    MemtraceServer-->>-Memtrace: Announce MemtraceServer (udp)
+    Memtrace->>MemtraceServer: TCP Connect
+
+    MemtraceAgent->>+TargetProcess: Monitor memory alllocations
+    TargetProcess->>TargetProcess: 
+    TargetProcess->>TargetProcess: 
+    TargetProcess->>TargetProcess: 
+    TargetProcess->>TargetProcess: Process running and leaking memory
+    TargetProcess->>TargetProcess: 
+    TargetProcess->>TargetProcess: 
+
+
+    User->>Memtrace: report command
+    Memtrace->>MemtraceAgent:Forward report command to MemtraceAgent
+    TargetProcess-->>-MemtraceAgent: Raw memory alllocations report
+    MemtraceAgent-->>Memtrace:Raw memory allocations report
+    Memtrace->>MemtraceServer:Forward raw memory allocations report
+    MemtraceServer->>MemtraceServer: Decode report with addr2line
+    MemtraceServer-->>Memtrace: Decoded memory allocation report
+    Memtrace-->>User: Decoded memory allocation report
+    User->>User: Analyze memory leak report
+```
+
 ```
   HOST    ptrace   HOST
 memtrace <------> process (with debug symbols)
