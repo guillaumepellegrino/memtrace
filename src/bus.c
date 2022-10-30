@@ -378,6 +378,7 @@ void bus_initialize(bus_t *bus, evlp_t *evlp, const char *me, const char *to) {
     assert(to);
 
     memset(bus, 0, sizeof(bus_t));
+    bus->is_init = true;
     bus->evlp = evlp;
     bus->me = strdup(me);
     bus->to = strdup(to);
@@ -394,12 +395,24 @@ void bus_initialize(bus_t *bus, evlp_t *evlp, const char *me, const char *to) {
 
 void bus_cleanup(bus_t *bus) {
     bus_connection_t *connection = NULL;
-    if (bus) {
-        while ((connection = bus_first_connection(bus))) {
-            bus_connection_close(connection);
-        }
-        free(bus->me);
+    if (!bus || !bus->is_init) {
+        return;
     }
+    while ((connection = bus_first_connection(bus))) {
+        bus_connection_close(connection);
+    }
+    if (bus->timerfd >= 0) {
+        close(bus->timerfd);
+    }
+    if (bus->mcast >= 0) {
+        close(bus->mcast);
+    }
+    if (bus->server >= 0) {
+        close(bus->server);
+    }
+    free(bus->me);
+    free(bus->to);
+    free(bus->port);
 }
 
 void bus_register_topic(bus_t *bus, bus_topic_t *topic) {

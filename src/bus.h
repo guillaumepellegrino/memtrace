@@ -21,6 +21,7 @@ struct _bus_topic {
 };
 
 struct _bus {
+    bool is_init BUS_PRIVATE;
     list_t topics BUS_PRIVATE;
     evlp_t *evlp BUS_PRIVATE;
     char *me BUS_PRIVATE;

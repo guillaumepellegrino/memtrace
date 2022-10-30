@@ -16,7 +16,6 @@ void *thread_loop(void *arg) {
     while (!exit_loop) {
         char *toto = strdup("thread");
         printf("thread: strdup() -> %s (%p)\n", toto, toto);
-        free(toto);
         sleep(1);
     }
 

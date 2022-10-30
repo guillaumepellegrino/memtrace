@@ -48,6 +48,7 @@ typedef struct {
     console_t console;
     bus_t server;
     bus_t agent;
+    strlist_t commands;
     int pid;
 } memtrace_t;
 
@@ -466,7 +467,9 @@ error:
 
 static void stdin_handler(evlp_handler_t *self, int events) {
     memtrace_t *memtrace = container_of(self, memtrace_t, stdin_handler);
-    console_poll(&memtrace->console);
+    if (!console_poll(&memtrace->console)) {
+        memtrace_console_quit(NULL, 0, NULL);
+    }
 }
 
 static bool is_cross_compiled() {
@@ -506,7 +509,8 @@ int local_memtrace_server(bus_t *bus) {
 }
 
 static void help() {
-    CONSOLE("./target/inject -p $(pidof dummy)");
+    CONSOLE("Usage: memtrace [OPTION]..");
+    CONSOLE("A cross-debugging tool to trace memory allocations for debugging memory leaks");
     CONSOLE("Options: ");
     CONSOLE("  -L, --library=PATH   Library to inject in target process");
     if (is_cross_compiled()) {
@@ -514,20 +518,29 @@ static void help() {
         CONSOLE("  -c, --connect ");
         CONSOLE("  -l, --listen ");
     }
+    CONSOLE("  -x, --command        Execute memtrace command and exit");
     CONSOLE("  -h, --help           Display this help");
 }
 
 int main(int argc, char *argv[]) {
-    const char *short_options = "+p:L:Cmc:l:hV";
+    const char *short_options = "+p:L:Cmc:l:x:hV";
     const struct option long_options[] = {
         {"pid",         required_argument,  0, 'p'},
-        {"library",     required_argument,  0, 'l'},
+        {"library",     required_argument,  0, 'L'},
+        {"coredump",    no_argument,        0, 'C'},
+        {"multicast",   no_argument,        0, 'm'},
+        {"connect",     required_argument,  0, 'c'},
+        {"listen",      required_argument,  0, 'l'},
+        {"command",     required_argument,  0, 'x'},
+        {"help",        no_argument,        0, 'h'},
+        {"version",     no_argument,        0, 'V'},
         {0},
     };
     int rt = 1;
     int opt = -1;
     bool do_coredump = false;
     evlp_t *evlp = NULL;
+    // FIXME: we should use a relative path and compute the absolute path from it.
     const char *libname = "/home/sahphilog2/Workspace/memtrace/target/libmemtrace-agent.so";
     const char *hostname = NULL;
     const char *port = "3002";
@@ -562,6 +575,9 @@ int main(int argc, char *argv[]) {
                 hostname = strtok(optarg, ":");
                 port = strtok(NULL, ":");
                 break;
+            case 'x':
+                strlist_append(&memtrace.commands, optarg);
+                break;
             case 'h':
                 help();
                 goto error;
@@ -592,9 +608,25 @@ int main(int argc, char *argv[]) {
     // Create event loop
     evlp = evlp_create();
 
-    // Add standard input to event loop
-    console_initiliaze(&memtrace.console, memtrace_console_commands);
-    evlp_add_handler(evlp, &memtrace.stdin_handler, 0, EPOLLIN);
+    // Inject memtrace-agent library in target process
+    if (!library_is_loaded(memtrace.pid, libname)) {
+        if (!inject_memtrace_agent(memtrace.pid, libname)) {
+            CONSOLE("Failed to inject memtrace agent in target process");
+            goto error;
+        }
+        CONSOLE("");
+    }
+    else {
+        CONSOLE("Memtrace agent is already injected in target process");
+    }
+
+    // Establish ipc connection to memtrace-agent
+    bus_initialize(&memtrace.agent, evlp, "memtrace", "memtrace.agent");
+    if (!connect_to_memtrace_agent(&memtrace.agent, memtrace.pid)) {
+        CONSOLE("Failed to connect to memtrace-agent");
+        goto error;
+    }
+    CONSOLE("Memtrace is connected to target process %d", memtrace.pid);
 
     // Establish connection to memtrace-server and add socket to event loop
     if (hostname && client) {
@@ -625,34 +657,37 @@ int main(int argc, char *argv[]) {
         CONSOLE("Run memtrace-server locally");
         bus_initialize(&memtrace.server, evlp, "memtrace", "memtrace-server");
         memtrace_server_pid = local_memtrace_server(&memtrace.server);
+        bus_wait4connect(&memtrace.server);
     }
 
-    // Inject memtrace-agent library in target process
-    if (!library_is_loaded(memtrace.pid, libname)) {
-        if (!inject_memtrace_agent(memtrace.pid, libname)) {
-            CONSOLE("Failed to inject memtrace agent in target process");
-            goto error;
+    // Add standard input to event loop
+    if (strlist_first(&memtrace.commands)) {
+        // TODO: move this in a dedicated function
+        strlist_iterator_t *it = NULL;
+        FILE *fp = NULL;
+        int fds[2] = {-1, -1};
+        assert(pipe(fds) == 0);
+        assert(dup2(fds[0], 0) == 0);
+        close(fds[0]);
+        assert((fp = fdopen(fds[1], "w")));
+        strlist_for_each(it, &memtrace.commands) {
+            fprintf(fp, "%s\n", strlist_iterator_value(it));
         }
-        CONSOLE("");
+        fflush(fp);
+        fclose(fp);
     }
     else {
-        CONSOLE("Memtrace agent is already injected in target process");
+        CONSOLE("Enter 'help' for listing possible commands");
     }
-
-    // Establish ipc connection to memtrace-agent
-    bus_initialize(&memtrace.agent, evlp, "memtrace", "memtrace.agent");
-    if (!connect_to_memtrace_agent(&memtrace.agent, memtrace.pid)) {
-        CONSOLE("Failed to connect to memtrace-agent");
-        goto error;
-    }
-    CONSOLE("Memtrace is connected to target process %d", memtrace.pid);
-    CONSOLE("Enter 'help' for listing possible commands");
+    console_initiliaze(&memtrace.console, memtrace_console_commands);
+    evlp_add_handler(evlp, &memtrace.stdin_handler, 0, EPOLLIN);
 
     // Enter event loop
     evlp_main(evlp);
     rt = 0;
 
 error:
+    strlist_cleanup(&memtrace.commands);
     console_cleanup(&memtrace.console);
     bus_cleanup(&memtrace.server);
     bus_cleanup(&memtrace.agent);

@@ -21,6 +21,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <getopt.h>
+#include <errno.h>
 #include "console.h"
 #include "log.h"
 
@@ -204,29 +205,29 @@ bool console_initiliaze(console_t *console, const console_cmd_t *cmd_list) {
     memset(console, 0, sizeof(console_t));
     console->cmd_list = cmd_list;
 
-    if (tcgetattr(0, &termios) < 0) {
-        TRACE_ERROR("Failed to get console attr: %m");
-        return false;
-    }
-    console->backup = termios;
+    if (tcgetattr(0, &termios) == 0) {
+        console->backup = termios;
 
-    // Read char by char
-    termios.c_lflag &= ~(ECHO | ECHONL | ICANON);
-    if (tcsetattr(0, 0, &termios) < 0) {
-        TRACE_ERROR("Failed to set console attr: %m");
-        return false;
+        // Read char by char
+        termios.c_lflag &= ~(ECHO | ECHONL | ICANON);
+        if (tcsetattr(0, 0, &termios) < 0) {
+            TRACE_ERROR("Failed to set console attr: %m");
+            return false;
+        }
+        console->is_tty = true;
     }
-
     console_reset(console);
 
     return true;
 }
 
 void console_cleanup(console_t *console) {
-    assert(console);
+    if (!console) {
+        return;
+    }
 
     TRACE_LOG("cleanup");
-    if (tcsetattr(0, 0, &console->backup) < 0) {
+    if (console->is_tty && tcsetattr(0, 0, &console->backup) < 0) {
         TRACE_ERROR("Failed to set console attr: %m");
     }
 }
@@ -263,12 +264,16 @@ static void console_escape_character(console_t *console) {
     }
 }
 
-void console_poll(console_t *console) {
+bool console_poll(console_t *console) {
     assert(console);
 
     char c = 0;
-    if (read(0, &c, 1) < 0) {
-        return;
+    ssize_t len = 0;
+    if ((len = read(0, &c, 1)) < 0) {
+        return (errno == EINTR) ? true: false;
+    }
+    if (len == 0) {
+        return false;
     }
 
     switch (c) {
@@ -288,6 +293,8 @@ void console_poll(console_t *console) {
             console_autocomplete(console);
             break;
     }
+
+    return true;
 }
 
 void console_cmd_help(console_t *console, int argc, char *argv[]) {

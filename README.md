@@ -63,47 +63,13 @@ sequenceDiagram
     User->>User: Analyze memory leak report
 ```
 
-```
-  HOST    ptrace   HOST
-memtrace <------> process (with debug symbols)
-addr2line
-gdb
-```
-
-- memtrace retrieve the callstack of the target process each time it performs a memory allocation
-- memtrace rely on addr2line and gdb to analyse callstack
-- target process and libraries MUST have debug symbols
+- memtrace inject an agent in the target process and override all memory allocations functions (malloc, calloc, realloc, free) with ptrace.
+- The agent maintains the statistics and the callstack of the memory allocations done by the target process.
+- memtrace can be attached to a process without debug symbols (Example: Embedded systems with limited flash memory)
+- memtrace query the agent (status, report) through an ipc socket.
+- memtrace-server provide addr2line and gdb tools to memtrace for callstack analysis
 
 ### 2.2 Compilation
-```
-$ cd memtrace
-$ make
-$ make install
-```
-
-### 2.3 Usage
-```
-memtrace [OPTION]... -p PID
-memtrace [OPTION]... PROGRAM [ARG]...
-```
-
-## 3. Cross-debugging with MEMTRACE
-### 3.1 Architecture
-
-```
-    HOST       TCP    TARGET   ptrace  TARGET
-memtrace-fs <------> memtrace <------> process (without debug symbols)
-stagingdir
-gdb
-addr2line
-```
-
-- memtrace can be attached to a process without debug symbols (Example: Embedded systems with limited flash memory)
-- memtrace-fs provide addr2line and gdb tools to memtrace for callstack analysis
-- memtrace-fs provide the libraries with debug symbols to memtrace through a TCP socket
-
-
-### 3.2 Cross-Compilation
 ```
 $ cd memtrace
 $ export CC=arm-linux-gnueabi-gcc
@@ -111,50 +77,26 @@ $ make
 $ make install
 ```
 
-### 3.3 Local network
+### 2.3 Usage in local network for Cross-debugging.
 ```
-# Start memtrace-fs on Host.
+# Start memtrace-server on Host.
 # The service will listen on port 3002 and annouce itself with multicast.
-# The service allow memtrace to retrieve debug symbols from staging directory
-guillaume@ubuntu:~$ memtrace-fs output/staging/
+# The service allow memtrace to retrieve debug symbols from build directory
+guillaume@ubuntu:~$ memtrace-server output/staging/
 Adding directory output/staging/ to search path
-Listening on [::0]:3002
-Waiting for client to connect
-
+Listening on [0.0.0.0]:3002
 
 # Attach memtrace to process on Target
-# memtrace will start to query memtrace-fs service with multicast and try to connect to it
-# Once connected, it set breakpoints on allocation functions to track the memory
+# memtrace will:
+# - inject the agent in target process to follow memory allocations
+# - connect to the agent through ipc socket
+# - query memtrace-server service with multicast and try to connect to it.
 /cfg/system/root # /ext/memtrace -p $(pidof dnsmasq)
-Query memtrace-fs service on [224.0.0.251]:3002
-memtrace-fs announced on 192.168.1.104:3002
-Connecting to [192.168.1.104]:3002
-Connected
-Ataching to pid 16563
-Opening /sbin/dnsmasq begin=0xab0b2000 offset=10000
-Opening /usr/lib/pcb/libpcb_serialize_odl.so begin=0xf6d58000 offset=0
-Opening /usr/lib/pcb/libpcb_serialize_ddw.so begin=0xf6d81000 offset=0
-Opening /lib/libnss_files.so.2 begin=0xf6d9c000 offset=0
-Opening /lib/librt.so.1 begin=0xf6dbc000 offset=0
-Opening /lib/libc.so.6 begin=0xf6dd3000 offset=0
-Opening /lib/libsahtrace.so begin=0xf6f14000 offset=0
-Opening /lib/libdl.so.2 begin=0xf6f27000 offset=0
-Opening /lib/libpthread.so.0 begin=0xf6f3a000 offset=0
-Opening /lib/libpcb_utils.so begin=0xf6f63000 offset=0
-Opening /lib/libpcb_sl.so begin=0xf6f8c000 offset=0
-Opening /lib/libpcb_dm.so begin=0xf6fa9000 offset=0
-Opening /lib/libpcb_preload.so begin=0xf6ffb000 offset=0
-Opening /lib/ld-2.26.so begin=0xf700d000 offset=0
-Set breakpoint on malloc in /lib/libc.so.6:0x70ed8 (0xf6e43ed8)
-Set breakpoint on calloc in /lib/libc.so.6:0x71d0c (0xf6e44d0c)
-Set breakpoint on realloc in /lib/libc.so.6:0x71784 (0xf6e44784)
-Set breakpoint on reallocarray in /lib/libc.so.6:0x74484 (0xf6e47484)
-Set breakpoint on free in /lib/libc.so.6:0x7162c (0xf6e4462c)
 ```
 
-### 3.4 Non local nework
-When target is not running on local network, memtrace can not rely on multicast to discover memtrace-fs.
-In this case, it is useful to start memtrace as a tcp server and memtrace-fs as a tcp client. Roles can be inverted if needed.
+### 2.4 Non local nework
+When target is not running on local network, memtrace can not rely on multicast to discover memtrace-server .
+In this case, it is useful to start memtrace as a tcp server and memtrace-server as a tcp client. Roles can be inverted if needed.
 
 ```
 # Attach memtrace to process on Target
@@ -163,8 +105,8 @@ In this case, it is useful to start memtrace as a tcp server and memtrace-fs as 
 Listening on [0.0.0.0]:3002
 Waiting for client to connect
 
-# Ask memtrace-fs on Host to connect to memtrace on Target
-guillaume@ubuntu:~$ memtrace-fs -c targethostname.com  workspace/ib3_12.02.12/output/staging/
+# Ask memtrace-server on Host to connect to memtrace on Target
+guillaume@ubuntu:~$ memtrace-server -c targethostname.com  workspace/ib3_12.02.12/output/staging/
 Adding directory workspace/ib3_12.02.12/output/staging/ to search path
 Connect to [targethostname.com]:3002
 Connecting to [targethostname.com]:3002

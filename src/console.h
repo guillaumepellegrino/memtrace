@@ -38,11 +38,12 @@ struct _console {
     struct termios backup;
     strlist_t history;
     strlist_iterator_t *history_iterator;
+    bool is_tty;
 };
 
 bool console_initiliaze(console_t *console, const console_cmd_t *cmd_list);
 void console_cleanup(console_t *console);
-void console_poll(console_t *console);
+bool console_poll(console_t *console);
 
 void console_cmd_help(console_t *console, int argc, char *argv[]);
 

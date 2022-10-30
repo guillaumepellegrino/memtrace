@@ -57,6 +57,10 @@ __attribute__((aligned)) char g_buff[G_BUFF_SIZE];
 bool host_path_is_allowed(const char *path, strlist_t *acls) {
     strlist_iterator_t *it = NULL;
 
+    if (path[0] == 0) {
+        return true;
+    }
+
     strlist_for_each(it, acls) {
         const char *acl = strlist_iterator_value(it);
         if (!strncmp(acl, path, strlen(acl))) {
@@ -183,7 +187,6 @@ static bool server_report_cmd(bus_t *bus, bus_connection_t *connection, bus_topi
     const char *toolchain = NULL;
     char *addr2line = NULL;
 
-    // TODO: check ACLs for sysroot and toolchain
     when_null(sysroot = strmap_get(options, "sysroot"), error);
     when_null(toolchain = strmap_get(options, "toolchain"), error);
     when_true(asprintf(&addr2line, "%saddr2line", toolchain) <= 0, error);
@@ -307,11 +310,11 @@ int main(int argc, char *argv[]) {
         }
 
         if ((st.st_mode & S_IFMT) == S_IFDIR) {
-            CONSOLE("Adding directory %s to search path", path);
+            //CONSOLE("Adding directory %s to search path", path);
             strlist_insert(&server.directories, path);
         }
         else {
-            CONSOLE("Adding file %s to search path", path);
+            //CONSOLE("Adding file %s to search path", path);
             strlist_insert(&server.files, path);
         }
     }
@@ -329,11 +332,13 @@ int main(int argc, char *argv[]) {
         }
     }
     else if (client) {
+        CONSOLE("Connecting to [%s]:%s", hostname, port);
         if (!bus_tcp_connect(&server.bus, hostname, port)) {
             TRACE_ERROR("Failed to connect to %s:%s", hostname, port);
         }
     }
     else {
+        CONSOLE("Listening on [%s]:%s", hostname, port);
         if (!bus_tcp_listen(&server.bus, hostname, port)) {
             TRACE_ERROR("Failed to listen on %s:%s", hostname, port);
         }
