@@ -1,0 +1,47 @@
+MACHINE?=$(shell $(CC) -dumpmachine)
+BUILDTGT?=build-$(MACHINE)
+BUILD?=$(BUILDTGT)
+CC?=cc
+CFLAGS+=-Wall -Wextra -Wno-unused-parameter -Werror -g -O2 -fPIC -pthread \
+	-Iinclude \
+	-DVERSION=\"$(shell git describe --all)\" \
+	-DSYSROOT=\"$(shell $(CC) -print-sysroot)\" \
+	-DCOMPILER=\"$(CC)\"
+LDFLAGS+=-pthread
+
+TARGETS=$(addprefix $(BUILD)/,memtrace libmemtrace-agent.so dummy)
+
+ifneq (,$(findstring x86_64,$(MACHINE)))
+ARCH_OBJECT=x86_64.o
+endif
+
+ifneq (,$(findstring arm,$(MACHINE)))
+CFLAGS+=
+ARCH_OBJECT=arm.o
+endif
+
+all: $(TARGETS)
+
+$(BUILD)/:
+	mkdir -p $(BUILD)/
+
+$(BUILD)/memtrace: $(addprefix $(BUILD)/,memtrace.o evlp.o bus.o net.o strlist.o strmap.o inject.o syscall_hijack.o ptrace.o hashmap.o libraries.o log.o elf.o elf_file.o elf_sym.o elf_relocate.o console.o coredump.o $(ARCH_OBJECT))
+	$(CC) -o $(@) $(^) $(LDFLAGS)
+
+install:
+
+$(BUILD)/libmemtrace-agent.so: $(addprefix $(BUILD)/,agent.o evlp.o bus.o net.o strlist.o strmap.o agent_hooks.o hashmap.o libraries.o elf.o elf_file.o elf_sym.o coredump.o log.o libcext.o $(ARCH_OBJECT))
+	$(CC) --shared -fPIC -o $(@) $(^) $(LDFLAGS)
+
+$(BUILD)/dummy: $(BUILD)/dummy.o
+	$(CC) -o $(@) $(^) $(LDFLAGS)
+
+-include $(willdcard *.d)
+
+$(BUILD)/%.o:src/%.c | $(BUILD)/
+	$(CC) -c -MD $(CFLAGS) $(<) -o $(@)
+
+clean:
+	rm -rf $(BUILD)/
+
+.PHONY: all clean

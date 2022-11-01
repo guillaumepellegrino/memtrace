@@ -3,6 +3,7 @@
 *.so
 *.log
 *.out
+build-*
 memtrace
 memtrace-server
 dummy

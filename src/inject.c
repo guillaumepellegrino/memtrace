@@ -221,8 +221,6 @@ static size_t x86_64_relocate_value(injecter_t *injecter, elf_relocate_t *rela, 
         case R_X86_64_TLSDESC:
         case R_X86_64_IRELATIVE:
         case R_X86_64_RELATIVE64:
-        case R_X86_64_GOTPCRELX:
-        case R_X86_64_REX_GOTPCRELX:
         default:
             CONSOLE("%x is not handled", rela->type);
             break;

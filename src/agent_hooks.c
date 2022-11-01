@@ -33,6 +33,7 @@
 #include "agent.h"
 #include "arch.h"
 
+
 #define stack_pointer_address() (size_t) __builtin_frame_address(0)
 #define return_address()        (size_t) __builtin_return_address(0)
 
@@ -175,7 +176,7 @@ void *reallocarray_hook(void *ptr, size_t nmemb, size_t size) {
     size_t sp = stack_pointer_address();
     size_t ra = return_address();
     cpu_registers_t regs = {0};
-    cpu_register_set(&regs, cpu_register_pc, (size_t) reallocarray);
+    cpu_register_set(&regs, cpu_register_pc, (size_t) realloc);
     cpu_register_set(&regs, cpu_register_sp, sp);
     cpu_register_set(&regs, cpu_register_ra, ra);
     cpu_register_set(&regs, cpu_register_arg1, (size_t) ptr);
@@ -186,7 +187,8 @@ void *reallocarray_hook(void *ptr, size_t nmemb, size_t size) {
 
     try_initialize();
     locked = hooks_lock();
-    newptr = reallocarray(ptr, nmemb, size);
+    // reallocarray() may not exist in old c library
+    newptr = realloc(ptr, nmemb * size);
     if (locked) {
         if (ptr) {
             agent_dealloc(&g_agent, ptr);
@@ -210,63 +212,4 @@ void free_hook(void *ptr) {
     }
     free(ptr);
     hooks_unlock(locked);
-}
-
-char *strchr(const char *s, int c) {
-    for (size_t i = 0; s[i]; i++) {
-        if (s[i] == c) {
-            return (char *) &s[i];
-        }
-    }
-    return NULL;
-}
-
-char *strrchr(const char *s, int c) {
-    char *last = NULL;
-    for (size_t i = 0; s[i]; i++) {
-        if (s[i] == c) {
-            last = (char *) &s[i];
-        }
-    }
-    return last;
-}
-
-int strcmp(const char *s1, const char *s2) {
-    size_t i = 0;
-
-    for (i = 0; s1[i] && s2[i]; i++) {
-        if (s1[i] != s2[i]) {
-            return s1[i] - s2[i];
-        }
-    }
-
-    return s1[i] - s2[i];
-}
-
-size_t strlen(const char *s) {
-    size_t i = 0;
-
-    for (i = 0; s[i]; i++);
-
-    return i;
-}
-
-void *memcpy(void *dest, const void *src, size_t n) {
-    size_t i = 0;
-
-    for (i = 0; i < n; i++) {
-        ((unsigned char *) dest)[i] = ((unsigned char *) src)[i];
-    }
-
-    return dest;
-}
-
-void *memset(void *s, int c, size_t n) {
-    size_t i = 0;
-
-    for (i = 0; i < n; i++) {
-        ((unsigned char *) s)[i] = c;
-    }
-
-    return s;
 }

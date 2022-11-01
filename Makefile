@@ -1,18 +1,21 @@
-SUBDIR=host target
+SUBMAKE=host target
 
-all: $(addsuffix -all, $(SUBDIR))
+all: $(addsuffix -all, $(SUBMAKE))
 
-install: $(addsuffix -install, $(SUBDIR))
+install: $(addsuffix -install, $(SUBMAKE))
 
-clean: $(addsuffix -clean, $(SUBDIR))
+clean: $(addsuffix -clean, $(SUBMAKE))
 
 %-all:
-	$(MAKE) -C ${@:-all=} all
+	$(MAKE) -f Makefile.${@:-all=} all
 
 %-install:
-	$(MAKE) -C ${@:-install=} install
+	$(MAKE) -f Makefile.${@:-install=} install
 
 %-clean:
-	$(MAKE) -C ${@:-clean=} clean
+	$(MAKE) -f Makefile.${@:-clean=} clean
 
-.PHONY: all install clean
+cleanall:
+	rm -rf build-*
+
+.PHONY: all install clean cleanall
