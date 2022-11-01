@@ -234,6 +234,7 @@ static void help() {
     CONSOLE("   -l, --listen=HOST[:PORT]    Listen on the specified HOST");
     CONSOLE("   -p, --port=VALUE            Use the specified port");
     CONSOLE("   -a, --acl=PATH              Add this directory to ACL");
+    CONSOLE("   -d, --debug                 Enable debug logs");
     CONSOLE("   -h, --help                  Display this help");
     CONSOLE("   -V, --version               Display the version");
 }
@@ -243,15 +244,15 @@ static void version() {
 }
 
 int main(int argc, char *argv[]) {
-    const char *short_options = "+c:l:a:s:vhV";
+    const char *short_options = "+c:l:a:s:dhv";
     const struct option long_options[] = {
         {"connect",     required_argument,  0, 'c'},
         {"listen",      required_argument,  0, 'l'},
         {"acl",         required_argument,  0, 'a'},
         {"socket",      required_argument,  0, 's'},
-        {"verbose",     no_argument,        0, 'v'},
+        {"debug",       no_argument,        0, 'd'},
         {"help",        no_argument,        0, 'h'},
-        {"version",     no_argument,        0, 'V'},
+        {"version",     no_argument,        0, 'v'},
         {0}
     };
     int i = 0;
@@ -290,13 +291,13 @@ int main(int argc, char *argv[]) {
             case 's':
                 ipc_socket = atoi(optarg);
                 break;
-            case 'v':
+            case 'd':
                 verbose++;
                 break;
             case 'h':
                 help();
                 return 0;
-            case 'V':
+            case 'v':
                 version();
                 return 0;
             default:

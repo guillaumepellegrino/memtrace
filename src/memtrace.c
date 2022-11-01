@@ -519,11 +519,17 @@ static void help() {
         CONSOLE("  -l, --listen ");
     }
     CONSOLE("  -x, --command        Execute memtrace command and exit");
+    CONSOLE("  -d, --debug          Enable debug logs");
     CONSOLE("  -h, --help           Display this help");
+    CONSOLE("  -v, --version        Display program version");
+}
+
+static void version() {
+    CONSOLE("memtrace %s", VERSION);
 }
 
 int main(int argc, char *argv[]) {
-    const char *short_options = "+p:L:Cmc:l:x:hV";
+    const char *short_options = "+p:L:Cmc:l:x:dhv";
     const struct option long_options[] = {
         {"pid",         required_argument,  0, 'p'},
         {"library",     required_argument,  0, 'L'},
@@ -532,8 +538,9 @@ int main(int argc, char *argv[]) {
         {"connect",     required_argument,  0, 'c'},
         {"listen",      required_argument,  0, 'l'},
         {"command",     required_argument,  0, 'x'},
+        {"debug",       no_argument,        0, 'd'},
         {"help",        no_argument,        0, 'h'},
-        {"version",     no_argument,        0, 'V'},
+        {"version",     no_argument,        0, 'v'},
         {0},
     };
     int rt = 1;
@@ -580,6 +587,9 @@ int main(int argc, char *argv[]) {
                 break;
             case 'h':
                 help();
+                goto error;
+            case 'v':
+                version();
                 goto error;
             default:
                 help();
