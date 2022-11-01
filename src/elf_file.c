@@ -33,8 +33,8 @@
 #include <sys/socket.h>
 #include <sys/sendfile.h>
 #include <fcntl.h>
+#include "elf_main.h"
 #include "elf_file.h"
-#include "elf.h"
 #include "log.h"
 
 #define FS_DEFAULT_BINDADDR "::0"

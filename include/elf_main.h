@@ -16,8 +16,8 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#ifndef ELF_H
-#define ELF_H
+#ifndef MEMTRACE_ELF_H
+#define MEMTRACE_ELF_H
 
 #include "types.h"
 

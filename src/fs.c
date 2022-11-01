@@ -41,7 +41,7 @@
 #include "net.h"
 #include "log.h"
 #include "addr2line.h"
-#include "elf.h"
+#include "elf_main.h"
 #include "gdb.h"
 #include "net.h"
 

@@ -33,7 +33,7 @@
 #include "list.h"
 #include "coredump.h"
 #include "arch.h"
-#include "elf.h"
+#include "elf_main.h"
 
 #define section_name_empty 0
 #define section_name_shstrtab 1

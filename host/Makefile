@@ -1,5 +1,6 @@
 CC_HOST?=cc
 CFLAGS_HOST+=-Wall -Wextra -Wno-unused-parameter -Werror -g -O2 \
+	-I../include \
 	-DVERSION=\"$(shell git describe --all)\"
 LDFLAGS_HOST+=
 

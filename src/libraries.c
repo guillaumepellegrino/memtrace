@@ -26,7 +26,7 @@
 #include <pthread.h>
 #include <regex.h>
 #include "libraries.h"
-#include "elf.h"
+#include "elf_main.h"
 #include "elf_file.h"
 #include "elf_sym.h"
 #include "debug_info.h"

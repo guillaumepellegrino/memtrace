@@ -22,7 +22,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "debug_info.h"
-#include "elf.h"
+#include "elf_main.h"
 #include "elf_file.h"
 #include "log.h"
 

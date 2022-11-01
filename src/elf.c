@@ -23,7 +23,7 @@
 #include <string.h>
 #include <endian.h>
 #include <inttypes.h>
-#include "elf.h"
+#include "elf_main.h"
 #include "elf_file.h"
 #include "types.h"
 #include "log.h"

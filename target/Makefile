@@ -2,6 +2,7 @@ MACHINE=$(shell $(CC) -dumpmachine)
 LD?=$(CC:cc=ld)
 OBJCOPY?=$(CC:cc=objcopy)
 CFLAGS+=-Wall -Wextra -Wno-unused-parameter -Werror -g -O2 -fPIC -pthread \
+	-I../include \
 	-DVERSION=\"$(shell git describe --all)\" \
 	-DSYSROOT=\"$(shell $(CC) -print-sysroot)\" \
 	-DCOMPILER=\"$(CC)\"
