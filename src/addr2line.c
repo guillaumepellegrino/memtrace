@@ -16,9 +16,9 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#define ADDR2LINE_PRIVATE
 #include "addr2line.h"
 #include "log.h"
-#include "list.h"
 #include "process.h"
 #include <stdlib.h>
 #include <string.h>
@@ -27,16 +27,13 @@ typedef struct {
     list_iterator_t it;
     char *so;
     process_t process;
-} addr2line_t;
+} addr2line_process_t;
 
-static const char *addr2line_binary = NULL;
-static list_t addr2line_list;
-
-static addr2line_t *addr2line_find_by_so(const char *so) {
+static addr2line_process_t *addr2line_find_by_so(addr2line_t *ctx, const char *so) {
     list_iterator_t *it = NULL;
 
-    list_for_each(it, &addr2line_list) {
-        addr2line_t *addr2line = container_of(it, addr2line_t, it);
+    list_for_each(it, &ctx->list) {
+        addr2line_process_t *addr2line = container_of(it, addr2line_process_t, it);
         if (!strcmp(addr2line->so, so)) {
             return addr2line;
         }
@@ -45,28 +42,28 @@ static addr2line_t *addr2line_find_by_so(const char *so) {
     return NULL;
 }
 
-static addr2line_t *addr2line_create(const char *so) {
-    const char *cmd[] = {addr2line_binary, "-e", so, "-f", NULL};
+static addr2line_process_t *addr2line_create(addr2line_t *ctx, const char *so) {
+    const char *cmd[] = {ctx->binary, "-e", so, "-f", NULL};
 
-    addr2line_t *addr2line = calloc(1, sizeof(addr2line_t));
+    addr2line_process_t *addr2line = calloc(1, sizeof(addr2line_process_t));
     addr2line->so = strdup(so);
     if (!process_start(&addr2line->process, cmd)) {
-        TRACE_ERROR("Failed to start %s", addr2line_binary);
+        TRACE_ERROR("Failed to start %s", ctx->binary);
     }
 
-    list_insert(&addr2line_list, &addr2line->it);
+    list_insert(&ctx->list, &addr2line->it);
 
     return addr2line;
 }
 
-static void addr2line_destroy(addr2line_t *addr2line) {
+static void addr2line_destroy(addr2line_process_t *addr2line) {
     list_iterator_take(&addr2line->it);
     free(addr2line->so);
     process_stop(&addr2line->process);
     free(addr2line);
 }
 
-static const char *addr2line_process_readline(addr2line_t *addr2line) {
+static const char *addr2line_process_readline(addr2line_process_t *addr2line) {
     static char line[4096];
 
     if (addr2line->process.output) {
@@ -83,7 +80,7 @@ static const char *addr2line_process_readline(addr2line_t *addr2line) {
     return line;
 }
 
-static void addr2line_resolve(addr2line_t *addr2line, uint64_t address, FILE *out) {
+static void addr2line_resolve(addr2line_process_t *addr2line, uint64_t address, FILE *out) {
     bool error = false;
     const char *line = NULL;
 
@@ -115,28 +112,33 @@ static void addr2line_resolve(addr2line_t *addr2line, uint64_t address, FILE *ou
 }
 
 
-void addr2line_initialize(const char *binary) {
-    addr2line_binary = binary;
+void addr2line_initialize(addr2line_t *ctx, const char *binary) {
+    assert(ctx);
+    assert(binary);
+    memset(ctx, 0, sizeof(addr2line_t));
+    ctx->binary = strdup(binary);
 }
 
-void addr2line_cleanup() {
+void addr2line_cleanup(addr2line_t *ctx) {
     list_iterator_t *it = NULL;
 
-    while ((it = list_first(&addr2line_list))) {
-        addr2line_t *addr2line = container_of(it, addr2line_t, it);
+    assert(ctx);
+    while ((it = list_first(&ctx->list))) {
+        addr2line_process_t *addr2line = container_of(it, addr2line_process_t, it);
         addr2line_destroy(addr2line);
     }
+    free(ctx->binary);
 }
 
-void addr2line_print(const char *so, uint64_t address, FILE *out) {
-    addr2line_t *addr2line = NULL;
+void addr2line_print(addr2line_t *ctx, const char *so, uint64_t address, FILE *out) {
+    addr2line_process_t *addr2line = NULL;
 
-    if (!so || !addr2line_binary) {
-        return;
-    }
+    assert(ctx);
+    assert(so);
+    assert(out);
 
-    if (!(addr2line = addr2line_find_by_so(so))) {
-        addr2line = addr2line_create(so);
+    if (!(addr2line = addr2line_find_by_so(ctx, so))) {
+        addr2line = addr2line_create(ctx, so);
     }
 
     addr2line_resolve(addr2line, address, out);

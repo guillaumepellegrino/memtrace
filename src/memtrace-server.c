@@ -147,7 +147,7 @@ static char *target2host_path(const char *sysroot, strlist_t *files, strlist_t *
     return NULL;
 }
 
-static bool server_report_parseline(memtrace_server_t *server, bus_connection_t *connection, char *line, const char *sysroot) {
+static bool server_report_parseline(memtrace_server_t *server, bus_connection_t *connection, addr2line_t *addr2line, char *line, const char *sysroot) {
     const char topic[] = "[addr]";
     char *sep = NULL;
     const char *tgtpath = NULL;
@@ -173,7 +173,7 @@ static bool server_report_parseline(memtrace_server_t *server, bus_connection_t 
         bus_connection_printf(connection, "%s", line);
         goto exit;
     }
-    addr2line_print(hostpath, address, bus_connection_writer(connection));
+    addr2line_print(addr2line, hostpath, address, bus_connection_writer(connection));
 
 exit:
     return true;
@@ -185,35 +185,41 @@ static bool server_report_cmd(bus_t *bus, bus_connection_t *connection, bus_topi
     bool rt = false;
     const char *sysroot = NULL;
     const char *toolchain = NULL;
-    char *addr2line = NULL;
+    char *binary= NULL;
+    addr2line_t addr2line = {0};
 
-    when_null(sysroot = strmap_get(options, "sysroot"), error);
-    when_null(toolchain = strmap_get(options, "toolchain"), error);
-    when_true(asprintf(&addr2line, "%saddr2line", toolchain) <= 0, error);
-
+    if (!(sysroot = strmap_get(options, "sysroot"))) {
+        TRACE_ERROR("Missing sysroot option");
+        goto error;
+    }
+    if (!(toolchain = strmap_get(options, "toolchain"))) {
+        TRACE_ERROR("Missing toolchain option");
+        goto error;
+    }
+    assert(asprintf(&binary, "%saddr2line", toolchain) > 0);
+    addr2line_initialize(&addr2line, binary);
     if (!host_path_is_allowed(sysroot, &server->acls)) {
         TRACE_ERROR("sysroot path '%s' is not allowed by ACLs", sysroot);
         goto error;
     }
-
     if (!host_path_is_allowed(toolchain, &server->acls)) {
         TRACE_ERROR("toolchain path '%s' is not allowed by ACLs", toolchain);
         goto error;
     }
 
-    addr2line_initialize(addr2line);
     while (bus_connection_readline(connection, line, sizeof(line))) {
-        server_report_parseline(server, connection, line, sysroot);
+        server_report_parseline(server, connection, &addr2line, line, sysroot);
         if (!strcmp(line, "[cmd_done]\n")) {
             break;
         }
     }
     bus_connection_printf(connection, "[cmd_done]", line);
     bus_connection_flush(connection);
-    addr2line_cleanup();
     rt = true;
 
 error:
+    addr2line_cleanup(&addr2line);
+    free(binary);
     return rt;
 }
 

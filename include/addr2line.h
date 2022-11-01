@@ -19,11 +19,21 @@
 #ifndef ADDR2LINE_H
 #define ADDR2LINE_H
 
+#ifndef ADDR2LINE_PRIVATE
+#define ADDR2LINE_PRIVATE __attribute__((deprecated))
+#endif
+
 #include "types.h"
+#include "list.h"
 #include <stdio.h>
 
-void addr2line_initialize(const char *binary);
-void addr2line_cleanup();
-void addr2line_print(const char *so, uint64_t address, FILE *out);
+typedef struct {
+    char *binary ADDR2LINE_PRIVATE;
+    list_t list ADDR2LINE_PRIVATE;
+} addr2line_t;
+
+void addr2line_initialize(addr2line_t *ctx, const char *binary);
+void addr2line_cleanup(addr2line_t *ctx);
+void addr2line_print(addr2line_t *ctx, const char *so, uint64_t address, FILE *out);
 
 #endif
