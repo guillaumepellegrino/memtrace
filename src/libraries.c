@@ -29,9 +29,7 @@
 #include "elf_main.h"
 #include "elf_file.h"
 #include "elf_sym.h"
-#include "debug_info.h"
-#include "debug_line.h"
-#include "fs.h"
+#include "list.h"
 #include "arch.h"
 #include "log.h"
 
