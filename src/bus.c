@@ -145,7 +145,7 @@ static void bus_connection_read_handler(evlp_handler_t *self, int events) {
 
     while (true) {
         if (!fgets(line, sizeof(line), connection->in)) {
-            CONSOLE("Client connection to %s closed", bus->to);
+            TRACE_WARNING("Client connection to %s closed", bus->to);
             goto error;
         }
 
@@ -324,7 +324,7 @@ static void bus_mcast_handle_query(bus_t *bus, mcast_msg_t *query) {
     if (!strcmp(query->service, bus->me)) {
         // We are being queried.
         // Let's tell who we are.
-        CONSOLE("Multicast query received. Announce me");
+        TRACE_WARNING("Multicast query received. Announce me");
         //ucast_announce(bus->me, bus->port, &query->sockaddr, query->sockaddrlen);
         mcast_announce(bus->mcast, bus->me, bus->port);
     }
@@ -334,13 +334,13 @@ static void bus_mcast_handle_announce(bus_t *bus, mcast_msg_t *announce) {
     if (!strcmp(announce->service, bus->to)) {
         // We have find the device we were looking for
         // Let's connect
-        CONSOLE("%s announced on %s:%s",
+        TRACE_WARNING("%s announced on %s:%s",
             announce->service, announce->from, announce->port);
         if (!bus_add_connection(bus, tcp_connect(announce->from, announce->port))) {
             TRACE_ERROR("Failed to connect");
             return;
         }
-        CONSOLE("Client connected to %s:%s", announce->from, announce->port);
+        TRACE_WARNING("Client connected to %s:%s", announce->from, announce->port);
         // we can stop mcast query timer
         if (bus->timerfd >= 0) {
             close(bus->timerfd);
@@ -364,7 +364,6 @@ static void bus_mcast_handler(evlp_handler_t *self, int events) {
         TRACE_ERROR("Failed to read mcast message");
         return;
     }
-    //CONSOLE("mcast.msg={type:%s, service:%s, port:%s}", msg.msgtype, msg.service, msg.port);
 
     if (bus_is_server(bus)) {
         if (!strcmp(msg.msgtype, "query")) {
@@ -388,7 +387,7 @@ static void bus_server_handler(evlp_handler_t *self, int events) {
     if (!bus_add_connection(bus, client)) {
         TRACE_WARNING("Failed to add connection");
     }
-    CONSOLE("Client accepted");
+    TRACE_WARNING("Client accepted");
 }
 
 void bus_initialize(bus_t *bus, evlp_t *evlp, const char *me, const char *to) {

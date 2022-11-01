@@ -32,7 +32,7 @@
 #include "agent_hooks.h"
 #include "agent.h"
 #include "arch.h"
-
+#include "log.h"
 
 #define stack_pointer_address() (size_t) __builtin_frame_address(0)
 #define return_address()        (size_t) __builtin_return_address(0)
@@ -70,7 +70,7 @@ static void try_initialize() {
         atexit(cleanup);
     }
     else {
-        printf("Failed to initialize memtrace agent\n");
+        TRACE_ERROR("Failed to initialize memtrace agent");
     }
     hooks_unlock(locked);
 }

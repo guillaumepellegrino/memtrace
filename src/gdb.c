@@ -169,7 +169,7 @@ bool gdb_interact(gdb_t *gdb) {
             }
         }
         if (fds[GDBOUT].revents & POLLHUP) {
-            CONSOLE("gdbout POLLHUP");
+            TRACE_ERROR("gdbout POLLHUP");
             return true;
         }
         if (fds[USERIN].revents & POLLHUP) {

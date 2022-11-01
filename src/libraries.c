@@ -63,8 +63,7 @@ bool thread_stack_update(thread_stack_t *thread, void *sp) {
     char buff[4096];
     bool rt = false;
 
-    CONSOLE("thread_stack_update(%p)", sp);
-
+    TRACE_WARNING("thread_stack_update(%p)", sp);
 
     //copy file in buffer
     const char *filename = "/proc/self/maps";
@@ -204,7 +203,6 @@ static void libraries_entry_add(libraries_t *libraries, library_t *library, void
     library->begin = begin;
     library->end = end;
     library->offset = program ? program->p_vaddr : 0;
-    //CONSOLE("Opening %s begin=%p offset=%zx", name, library->begin, library->offset);
 }
 
 libraries_t *libraries_create(int pid) {

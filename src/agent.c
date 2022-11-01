@@ -141,7 +141,7 @@ static int ipc_socket() {
     int s = -1;
 
     if ((s = socket(AF_UNIX, SOCK_STREAM|SOCK_CLOEXEC, 0)) < 0) {
-        printf("Failed to create ipc socket: %m\n");
+        TRACE_ERROR("Failed to create ipc socket: %m");
         return -1;
     }
 
@@ -149,11 +149,11 @@ static int ipc_socket() {
         "/tmp/memtrace-agent-%d", getpid());
 
     if (bind(s, (struct sockaddr *) &bindaddr, sizeof(bindaddr)) != 0) {
-        printf("Failed to bind ipc socket to %s: %m\n", bindaddr.sun_path);
+        TRACE_ERROR("Failed to bind ipc socket to %s: %m", bindaddr.sun_path);
         return -1;
     }
     if (listen(s, 10) != 0) {
-        printf("Failed to listen ipc socket: %m\n");
+        TRACE_ERROR("Failed to listen ipc socket: %m");
         return -1;
     }
 
@@ -299,7 +299,7 @@ static void ipc_connection_disconnect(agent_t *agent, FILE *fp) {
     hashmap_for_each(it, &agent->blocks) {
         block_t *block = container_of(it, block_t, it);
         if (block->do_coredump == fileno(fp)) {
-            CONSOLE("Cancel coredump %p", fp);
+            TRACE_WARNING("Cancel coredump %p", fp);
             block->do_coredump = -1;
         }
     }
@@ -359,20 +359,21 @@ void *ipc_accept_loop(void *arg) {
 
     signal(SIGPIPE, SIG_IGN);
 
-    printf("Entered event loop\n");
+    TRACE_WARNING("Entered event loop");
     if (!bus_ipc_listen(&agent->bus, agent->ipc)) {
-        printf("Failed to listen on ipc socket\n");
+        TRACE_ERROR("Failed to listen on ipc socket");
         return NULL;
     }
     evlp_main(agent->evlp);
-    printf("Exiting event loop\n");
+    TRACE_WARNING("Exiting event loop");
 
     return NULL;
 }
 
 bool agent_initialize(agent_t *agent) {
+    log_set_header("[memtrace-agent]");
     if (!(agent->libraries = libraries_create(getpid()))) {
-        printf("Failed to create libraries");
+        TRACE_ERROR("Failed to create libraries");
         return false;
     }
     const hashmap_cfg_t allocations_maps_cfg = {
@@ -398,7 +399,7 @@ bool agent_initialize(agent_t *agent) {
     }
 
     if (pthread_create(&agent->thread, NULL, ipc_accept_loop, agent) != 0) {
-        printf("Failed to create thread");
+        TRACE_ERROR("Failed to create thread: %m");
         return false;
     }
 
@@ -451,14 +452,14 @@ static void agent_notifify_do_coredump(block_t *block, cpu_registers_t *regs) {
         cpu_register_get(regs, cpu_register_arg3));
 
     if (write(block->do_coredump, buff, len) < 0) {
-        CONSOLE("write failed: %m");
+        TRACE_ERROR("write failed: %m");
     }
 
-    CONSOLE("Do coredump for %d", tid);
+    TRACE_WARNING("Do coredump for %d", tid);
     if (read(block->do_coredump, buff, sizeof(buff)) < 0) {
-        CONSOLE("read failed: %m");
+        TRACE_ERROR("read failed: %m");
     }
-    CONSOLE("Do coredump done");
+    TRACE_WARNING("Do coredump done");
     block->do_coredump = -1;
 }
 

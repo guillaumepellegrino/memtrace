@@ -37,34 +37,17 @@ extern int zone;
 #define TRACE_ZONE TRACE_ZONE_NONE
 #endif
 
-
 #define TRACE_DEBUG(fmt, ...) \
-    do { \
-        if (verbose >= 2 || zone & TRACE_ZONE) { \
-            fprintf(stderr, "[DBG]  " fmt " in %s:%d\n", ##__VA_ARGS__, __FUNCTION__, __LINE__); \
-        } \
-    } while (0)
+    log_trace_print(3, TRACE_ZONE, __FUNCTION__, __LINE__, fmt, ##__VA_ARGS__)
 
 #define TRACE_LOG(fmt, ...) \
-    do { \
-        if (verbose >= 1 || zone & TRACE_ZONE) { \
-            fprintf(stderr, "[LOG]  " fmt " in %s:%d\n", ##__VA_ARGS__, __FUNCTION__, __LINE__); \
-        } \
-    } while (0)
+    log_trace_print(2, TRACE_ZONE, __FUNCTION__, __LINE__, fmt, ##__VA_ARGS__)
 
 #define TRACE_WARNING(fmt, ...) \
-    fprintf(stderr, "[WRN]  " fmt " in %s:%d\n", ##__VA_ARGS__, __FUNCTION__, __LINE__);
+    log_trace_print(1, TRACE_ZONE, __FUNCTION__, __LINE__, fmt, ##__VA_ARGS__)
 
 #define TRACE_ERROR(fmt, ...) \
-    fprintf(stderr, "[ERR]  " fmt " in %s:%d\n", ##__VA_ARGS__, __FUNCTION__, __LINE__);
-
-#define TRACE_ASSERT(value, fmt, ...) \
-    do { \
-        if ((value) != 0) { \
-            fprintf(stderr, "[ASSERTION ERROR]  " fmt " in %s:%d\n", ##__VA_ARGS__, __FUNCTION__, __LINE__); \
-            assert(0); \
-        } \
-    } while (0)
+    log_trace_print(0, TRACE_ZONE, __FUNCTION__, __LINE__, fmt, ##__VA_ARGS__)
 
 #define CONSOLE(fmt, ...) \
     fprintf(stderr, fmt "\n", ##__VA_ARGS__)
@@ -72,11 +55,11 @@ extern int zone;
 #define CONSOLE_RAW(fmt, ...) \
     fprintf(stderr, fmt, ##__VA_ARGS__)
 
-static inline void trace_debug_unused(const char *fmt, ...) {
-    (void) fmt;
-}
+void log_set_header(const char *header);
+void log_more_verbose();
+void log_set_trace_zones(char *zones);
+void log_print_trace_zones(FILE *fp);
+void log_trace_print(int level, int zone_arg, const char *funct, int line, const char *fmt, ...);
 
-void set_trace_zones(char *zones);
-void print_trace_zones(FILE *fp);
 
 #endif

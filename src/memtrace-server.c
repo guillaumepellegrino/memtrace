@@ -292,7 +292,7 @@ int main(int argc, char *argv[]) {
                 ipc_socket = atoi(optarg);
                 break;
             case 'd':
-                verbose++;
+                log_more_verbose();
                 break;
             case 'h':
                 help();

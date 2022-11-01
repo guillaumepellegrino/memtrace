@@ -79,15 +79,6 @@ elf_sym_t elf_sym(elf_file_t *symtab, elf_file_t *strtab, uint64_t address) {
             result.offset = address - sym.st_value;
             result.section_index = sym.st_shndx;
             return result;
-/*
-            CONSOLE("[0x%"PRIx64"] Symbol:", offset);
-            CONSOLE("   name:  0x%"PRIx32" (%s)",  sym.st_name, name);
-            CONSOLE("   info:  0x%"PRIx8,   sym.st_info);
-            CONSOLE("   other: 0x%"PRIx8,   sym.st_other);
-            CONSOLE("   shndx  0x%"PRIx16,  sym.st_shndx);
-            CONSOLE("   value: 0x%"PRIx64,  sym.st_value);
-            CONSOLE("   size:  0x%"PRIx64,  sym.st_size);
-            */
         }
     } while (!elf_file_eof(symtab));
 

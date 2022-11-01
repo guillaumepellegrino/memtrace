@@ -119,7 +119,7 @@ bool elf_relocate_read(elf_t *elf, elf_file_t *rela_file, elf_file_t *symtab, el
 }
 
 static bool dump_handler(elf_relocate_t *rela, void *userdata) {
-    CONSOLE("offset: 0x%"PRIx64" info: 0x%"PRIx64" (type: 0x%x, symidx: 0x%x (%s)) addend: 0x%"PRIx64,
+    TRACE_WARNING("offset: 0x%"PRIx64" info: 0x%"PRIx64" (type: 0x%x, symidx: 0x%x (%s)) addend: 0x%"PRIx64,
             rela->offset, rela->info, rela->type, rela->symidx, rela->sym.name, rela->addend);
     return true;
 }

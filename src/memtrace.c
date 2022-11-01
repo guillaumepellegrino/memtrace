@@ -590,6 +590,9 @@ int main(int argc, char *argv[]) {
             case 'x':
                 strlist_append(&memtrace.commands, optarg);
                 break;
+            case 'd':
+                log_more_verbose();
+                break;
             case 'h':
                 help();
                 goto error;

@@ -51,16 +51,16 @@ static void evlp_signal_handler(evlp_handler_t *self, int events) {
 
     switch (fdsi.ssi_signo) {
         case SIGINT:
-            CONSOLE("SIGINT received. Exit event loop");
+            TRACE_WARNING("SIGINT received. Exit event loop");
             break;
         case SIGQUIT:
-            CONSOLE("SIGQUIT received. Exit event loop\n");
+            TRACE_WARNING("SIGQUIT received. Exit event loop");
             break;
         case SIGTERM:
-            CONSOLE("SIGTERM received. Exit event loop\n");
+            TRACE_WARNING("SIGTERM received. Exit event loop");
             break;
         default:
-            CONSOLE("Unknown signal %d received. Exit event loop", fdsi.ssi_signo);
+            TRACE_ERROR("Unknown signal %d received. Exit event loop", fdsi.ssi_signo);
             break;
     }
 
