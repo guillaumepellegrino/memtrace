@@ -1,5 +1,10 @@
 #!/usr/bin/python3
 
+####################################################################
+# Build for multiple targets.
+# Targets names and toolchains are read from /etc/multibuild.yaml
+####################################################################
+
 import yaml
 import os
 
