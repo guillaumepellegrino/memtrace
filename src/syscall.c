@@ -21,7 +21,7 @@
 #include <sys/ptrace.h>
 #include <sys/mman.h>
 #include <sys/user.h>
-#include "syscall_hijack.h"
+#include "syscall.h"
 #include "libraries.h"
 #include "ptrace.h"
 #include "arch.h"
@@ -82,14 +82,10 @@ bool syscall_init(int pid) {
     size_t pc = 0;
     pc = cpu_register_get(&syscall_regs, cpu_register_pc);
     syscall_instr = ptrace(PTRACE_PEEKTEXT, pid, (pc - SYSCALL_SIZE), 0) & SYSCALL_MASK;
-    CONSOLE("syscall_instr=0x%zx", syscall_instr);
 
     // Wait to leave SYSCALL instruction
     do {
         cpu_registers_get(&regs, pid);
-        printf("STEP |");
-        cpu_registers_print(&regs);
-
         if (ptrace(PTRACE_SINGLESTEP, pid, 0, 0) != 0) {
             TRACE_ERROR("Failed STEP: %m");
             goto error;
@@ -127,9 +123,7 @@ static bool syscall_hijack(int pid, size_t syscall, size_t arg1, size_t arg2, si
         return false;
     }
 
-    printf("Syscall|");
     cpu_registers_get(&regs, pid);
-    cpu_registers_print(&regs);
 
     if (ptrace(PTRACE_SINGLESTEP, pid, 0, 0) != 0) {
         TRACE_ERROR("Failed STEP: %m");
@@ -139,9 +133,7 @@ static bool syscall_hijack(int pid, size_t syscall, size_t arg1, size_t arg2, si
         TRACE_ERROR("waitpid(%d) failed: %m", pid);
         return false;
     }
-    printf("Done   |");
     cpu_registers_get(&regs, pid);
-    cpu_registers_print(&regs);
     if (ret) {
         *ret = cpu_register_get(&regs, cpu_register_retval);
     }
@@ -151,88 +143,6 @@ static bool syscall_hijack(int pid, size_t syscall, size_t arg1, size_t arg2, si
     return true;
 }
 
-#if 0
-static bool syscall_hijack(int pid, size_t syscall, size_t arg1, size_t arg2, size_t arg3, size_t arg4, size_t arg5, size_t arg6, size_t *ret) {
-    cpu_registers_t regs = {0};
-    cpu_registers_t save_regs = {0};
-    int status = 0;
-/*
-    // Wait for next syscall
-    if (ptrace(PTRACE_SYSCALL, pid, NULL, NULL) != 0) {
-        TRACE_ERROR("ptrace(SYSCALL, %d) failed: %m", pid);
-        return false;
-    }
-    if (waitpid(pid, &status, 0) < 0) {
-        TRACE_ERROR("waitpid(%d) failed: %m", pid);
-        return false;
-    }
-    if (!ptrace_stopped_by_syscall(status)) {
-        TRACE_ERROR("process(%d) was not stopped by syscall (status: %d)", pid, status);
-        return false;
-    }
-*/
-    // Get and save registers
-    // We are assuming than we are in syscall-enter-stop STATE.
-    if (!cpu_registers_get(&regs, pid)) {
-        TRACE_ERROR("Failed to getregs for process %d", pid);
-        return false;
-    }
-    if (!cpu_register_get(&regs, cpu_register_syscall_exit_stop)) {
-        TRACE_ERROR("Process %d is not in the expected syscall-exit-stop STATE", pid);
-        return false;
-    }
-    save_regs = regs;
-
-    // Set registers
-    cpu_register_set(&regs, cpu_register_syscall, syscall);
-    cpu_register_set(&regs, cpu_register_arg1, arg1);
-    cpu_register_set(&regs, cpu_register_arg2, arg2);
-    cpu_register_set(&regs, cpu_register_arg3, arg3);
-    cpu_register_set(&regs, cpu_register_arg4, arg4);
-    cpu_register_set(&regs, cpu_register_arg5, arg5);
-    cpu_register_set(&regs, cpu_register_arg6, arg6);
-    if (!cpu_registers_set(&regs, pid)) {
-        TRACE_ERROR("Failed to setregs for process %d (%m)", pid);
-        return false;
-    }
-
-    printf("Hijack|");
-    cpu_registers_print(&regs);
-
-    // Hijack syscall
-    if (ptrace(PTRACE_SYSCALL, pid, NULL, NULL) != 0) {
-        TRACE_ERROR("ptrace(SYSCALL, %d) failed: %m", pid);
-        return false;
-    }
-    if (waitpid(pid, &status, 0) < 0) {
-        TRACE_ERROR("waitpid(%d) failed: %m", pid);
-        return false;
-    }
-    if (!ptrace_stopped_by_syscall(status)) {
-        TRACE_ERROR("process(%d) was not stopped by syscall (stautus: %d)", pid, status);
-        return false;
-    }
-    if (!cpu_registers_get(&regs, pid)) {
-        TRACE_ERROR("Failed to getregs for process %d", pid);
-        return false;
-    }
-    if (ret) {
-        *ret = cpu_register_get(&regs, cpu_register_retval);
-    }
-    printf("Hij Ret|");
-    cpu_registers_print(&regs);
-
-    // Restore saved registers
-    if (!cpu_registers_set(&save_regs, pid)) {
-        TRACE_ERROR("Failed to setregs for process %d (%m)", pid);
-        return false;
-    }
-    printf("Restore|");
-    cpu_registers_print(&save_regs);
-    return true;
-}
-
-#endif
 int syscall_open(int pid, void *path, int flags, mode_t mode) {
     size_t ret = 0;
 
@@ -261,8 +171,6 @@ int syscall_getpid(int pid) {
 
     syscall_hijack(pid,
         SYS_getpid, 0, 0, 0, 0, 0, 0, &ret);
-
-    CONSOLE("getpid()->%zu", ret);
 
     return (ssize_t) ret;
 }

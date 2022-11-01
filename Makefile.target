@@ -25,7 +25,7 @@ all: $(TARGETS)
 $(BUILD)/:
 	mkdir -p $(BUILD)/
 
-$(BUILD)/memtrace: $(addprefix $(BUILD)/,memtrace.o agent.o agent_hooks.o evlp.o bus.o net.o strlist.o strmap.o inject.o syscall_hijack.o ptrace.o hashmap.o libraries.o log.o elf.o elf_file.o elf_sym.o elf_relocate.o console.o coredump.o libcext.o $(ARCH_OBJECT))
+$(BUILD)/memtrace: $(addprefix $(BUILD)/,memtrace.o agent.o agent_hooks.o evlp.o bus.o net.o strlist.o strmap.o inject.o syscall.o ptrace.o hashmap.o libraries.o log.o elf.o elf_file.o elf_sym.o elf_relocate.o console.o coredump.o libcext.o $(ARCH_OBJECT))
 	$(CC) -o $(@) $(^) $(LDFLAGS)
 
 install:

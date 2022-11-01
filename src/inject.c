@@ -40,7 +40,7 @@
 #include "elf_file.h"
 #include "elf_sym.h"
 #include "elf_relocate.h"
-#include "syscall_hijack.h"
+#include "syscall.h"
 
 struct _injecter {
     int pid; /** PID of the target process */
