@@ -9,7 +9,7 @@ CFLAGS+=-Wall -Wextra -Wno-unused-parameter -Werror -g -O2 -fPIC -pthread \
 	-DCOMPILER=\"$(CC)\"
 LDFLAGS+=-pthread
 
-TARGETS=$(addprefix $(BUILD)/,memtrace libmemtrace-agent.so dummy)
+TARGETS=$(addprefix $(BUILD)/,memtrace dummy)
 
 ifneq (,$(findstring x86_64,$(MACHINE)))
 ARCH_OBJECT=x86_64.o
@@ -25,18 +25,15 @@ all: $(TARGETS)
 $(BUILD)/:
 	mkdir -p $(BUILD)/
 
-$(BUILD)/memtrace: $(addprefix $(BUILD)/,memtrace.o evlp.o bus.o net.o strlist.o strmap.o inject.o syscall_hijack.o ptrace.o hashmap.o libraries.o log.o elf.o elf_file.o elf_sym.o elf_relocate.o console.o coredump.o $(ARCH_OBJECT))
+$(BUILD)/memtrace: $(addprefix $(BUILD)/,memtrace.o agent.o agent_hooks.o evlp.o bus.o net.o strlist.o strmap.o inject.o syscall_hijack.o ptrace.o hashmap.o libraries.o log.o elf.o elf_file.o elf_sym.o elf_relocate.o console.o coredump.o libcext.o $(ARCH_OBJECT))
 	$(CC) -o $(@) $(^) $(LDFLAGS)
 
 install:
 
-$(BUILD)/libmemtrace-agent.so: $(addprefix $(BUILD)/,agent.o evlp.o bus.o net.o strlist.o strmap.o agent_hooks.o hashmap.o libraries.o elf.o elf_file.o elf_sym.o coredump.o log.o libcext.o $(ARCH_OBJECT))
-	$(CC) --shared -fPIC -o $(@) $(^) $(LDFLAGS)
-
 $(BUILD)/dummy: $(BUILD)/dummy.o
 	$(CC) -o $(@) $(^) $(LDFLAGS)
 
--include $(willdcard *.d)
+-include $(willdcard $(BUILD)/*.d)
 
 $(BUILD)/%.o:src/%.c | $(BUILD)/
 	$(CC) -c -MD $(CFLAGS) $(<) -o $(@)

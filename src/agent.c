@@ -60,8 +60,6 @@ typedef struct {
     block_t *block;
 } allocation_t;
 
-__attribute__((aligned)) char g_buff[G_BUFF_SIZE];
-
 static uint32_t allocations_maps_hash(hashmap_t *hashmap, void *key) {
     size_t addr = (size_t) key;
     return addr >> 2;
