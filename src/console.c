@@ -230,6 +230,7 @@ void console_cleanup(console_t *console) {
     if (console->is_tty && tcsetattr(0, 0, &console->backup) < 0) {
         TRACE_ERROR("Failed to set console attr: %m");
     }
+    strlist_cleanup(&console->history);
 }
 
 static void console_escape_character(console_t *console) {

@@ -45,7 +45,7 @@ int tcp_connect(const char *address, const char *port) {
 
     if ((rt = getaddrinfo(address, port, &hints, &ai_list)) != 0) {
         TRACE_ERROR("Failed to resolve %s:%s. %s", address, port, gai_strerror(rt));
-        return -1;
+        goto error;
     }
 
     for (ai = ai_list; ai; ai = ai->ai_next) {
@@ -63,7 +63,10 @@ int tcp_connect(const char *address, const char *port) {
         break;
     }
 
-    freeaddrinfo(ai_list);
+error:
+    if (ai_list) {
+        freeaddrinfo(ai_list);
+    }
 
     return client;
 }
@@ -80,7 +83,7 @@ int tcp_listen(const char *address, const char *port) {
 
     if ((rt = getaddrinfo(address, port, &hints, &ai_list)) != 0) {
         TRACE_ERROR("Failed to resolve %s:%s. %s", address, port, gai_strerror(rt));
-        return -1;
+        goto error;
     }
 
     for (ai = ai_list; ai; ai = ai->ai_next) {
@@ -110,7 +113,10 @@ int tcp_listen(const char *address, const char *port) {
         break;
     }
 
-    freeaddrinfo(ai_list);
+error:
+    if (ai_list) {
+        freeaddrinfo(ai_list);
+    }
 
     return server;
 }
@@ -138,7 +144,7 @@ int mcast_listen(const char *address, const char *port) {
 
     if ((rt = getaddrinfo(address, port, &hints, &ai_list)) != 0) {
         TRACE_ERROR("Failed to resolve %s:%s. %s", address, port, gai_strerror(rt));
-        return -1;
+        goto error;
     }
 
     for (ai = ai_list; ai; ai = ai->ai_next) {
@@ -179,7 +185,14 @@ int mcast_listen(const char *address, const char *port) {
                 TRACE_WARNING("Failed to send multicast membership for %s : %m", address);
             }
         }
-        freeifaddrs(addrs);
+        if (addrs) {
+            freeifaddrs(addrs);
+        }
+    }
+
+error:
+    if (ai_list) {
+        freeaddrinfo(ai_list);
     }
 
     return s;

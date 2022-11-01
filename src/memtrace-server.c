@@ -151,7 +151,7 @@ static bool server_report_parseline(memtrace_server_t *server, bus_connection_t 
     const char topic[] = "[addr]";
     char *sep = NULL;
     const char *tgtpath = NULL;
-    const char *hostpath = NULL;
+    char *hostpath = NULL;
     size_t address = 0;
 
     if (strncmp(line, topic, strlen(topic)) != 0) {
@@ -176,6 +176,7 @@ static bool server_report_parseline(memtrace_server_t *server, bus_connection_t 
     addr2line_print(addr2line, hostpath, address, bus_connection_writer(connection));
 
 exit:
+    free(hostpath);
     return true;
 }
 

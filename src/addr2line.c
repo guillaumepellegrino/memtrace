@@ -43,14 +43,14 @@ static addr2line_process_t *addr2line_find_by_so(addr2line_t *ctx, const char *s
 }
 
 static addr2line_process_t *addr2line_create(addr2line_t *ctx, const char *so) {
+    addr2line_process_t *addr2line = NULL;
     const char *cmd[] = {ctx->binary, "-e", so, "-f", NULL};
 
-    addr2line_process_t *addr2line = calloc(1, sizeof(addr2line_process_t));
-    addr2line->so = strdup(so);
+    assert((addr2line = calloc(1, sizeof(addr2line_process_t))));
+    assert((addr2line->so = strdup(so)));
     if (!process_start(&addr2line->process, cmd)) {
         TRACE_ERROR("Failed to start %s", ctx->binary);
     }
-
     list_insert(&ctx->list, &addr2line->it);
 
     return addr2line;
@@ -84,7 +84,7 @@ static void addr2line_resolve(addr2line_process_t *addr2line, uint64_t address, 
     bool error = false;
     const char *line = NULL;
 
-    if (addr2line->process.pid <= 0) {
+    if (process_get_pid(&addr2line->process) <= 0) {
         fprintf(out, "%s:0x%"PRIx64" (shared libary not found)\n", addr2line->so, address);
     }
 

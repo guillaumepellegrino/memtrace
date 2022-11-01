@@ -16,6 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#define PROCESS_PRIVATE
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
@@ -31,6 +32,9 @@
 
 
 bool process_start(process_t *process, const char *argv[]) {
+    assert(process);
+    assert(argv);
+
     int pid = -1;
     int pipe_in[2];
     int pipe_out[2];
@@ -84,9 +88,20 @@ bool process_start(process_t *process, const char *argv[]) {
 }
 
 void process_stop(process_t *process) {
-    if (process->pid) {
-        kill(process->pid, SIGTERM);
+    assert(process);
+    if (process->pid > 0) {
+        kill(process->pid, SIGKILL);
         waitpid(process->pid, NULL, 0);
+    }
+    if (process->input) {
+        fclose(process->input);
+    }
+    if (process->output) {
         fclose(process->output);
     }
+}
+
+int process_get_pid(process_t *process) {
+    assert(process);
+    return process->pid;
 }

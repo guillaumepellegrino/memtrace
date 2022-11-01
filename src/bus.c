@@ -117,8 +117,10 @@ bus_connection_t *bus_connection_next(bus_connection_t *current) {
 
 void bus_connection_close(bus_connection_t *connection) {
     if (connection) {
+        bus_t *bus = bus_from_connection(connection);
         list_iterator_take(&connection->it);
         if (connection->in) {
+            evlp_remove_handler(bus->evlp, fileno(connection->in));
             fclose(connection->in);
         }
         if (connection->out) {
@@ -420,12 +422,15 @@ void bus_cleanup(bus_t *bus) {
         bus_connection_close(connection);
     }
     if (bus->timerfd >= 0) {
+        evlp_remove_handler(bus->evlp, bus->timerfd);
         close(bus->timerfd);
     }
     if (bus->mcast >= 0) {
+        evlp_remove_handler(bus->evlp, bus->mcast);
         close(bus->mcast);
     }
     if (bus->server >= 0) {
+        evlp_remove_handler(bus->evlp, bus->server);
         close(bus->server);
     }
     free(bus->me);

@@ -23,6 +23,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <signal.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/epoll.h>
@@ -35,18 +36,61 @@
 struct _evlp {
     int epfd;
     bool run;
+    evlp_handler_t sighandler;
+    int sfd;
 };
+
+static void evlp_signal_handler(evlp_handler_t *self, int events) {
+    evlp_t *evlp = container_of(self, evlp_t, sighandler);
+    struct signalfd_siginfo fdsi = {0};
+
+    if (read(evlp->sfd, &fdsi, sizeof(fdsi)) < 0) {
+        TRACE_ERROR("Failed to read signalfd");
+        goto error;
+    }
+
+    switch (fdsi.ssi_signo) {
+        case SIGINT:
+            CONSOLE("SIGINT received. Exit event loop");
+            break;
+        case SIGQUIT:
+            CONSOLE("SIGQUIT received. Exit event loop\n");
+            break;
+        case SIGTERM:
+            CONSOLE("SIGTERM received. Exit event loop\n");
+            break;
+        default:
+            CONSOLE("Unknown signal %d received. Exit event loop", fdsi.ssi_signo);
+            break;
+    }
+
+error:
+    evlp->run = false;
+}
 
 evlp_t *evlp_create() {
     evlp_t *evlp = NULL;
+    sigset_t mask = {0};
 
     assert((evlp = calloc(1, sizeof(evlp_t))));
     assert((evlp->epfd = epoll_create1(EPOLL_CLOEXEC)) > 0);
+
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGINT);
+    sigaddset(&mask, SIGQUIT);
+    sigaddset(&mask, SIGTERM);
+
+    assert(sigprocmask(SIG_BLOCK, &mask, NULL) == 0);
+    evlp->sighandler.fn = evlp_signal_handler;
+    assert((evlp->sfd = signalfd(-1, &mask, 0)) >= 0);
+    assert(evlp_add_handler(evlp, &evlp->sighandler, evlp->sfd, EPOLLIN));
 
     return evlp;
 }
 
 void evlp_destroy(evlp_t *evlp) {
+    assert(evlp);
+    evlp_remove_handler(evlp, evlp->epfd);
     close(evlp->epfd);
     free(evlp);
 }
@@ -65,6 +109,14 @@ bool evlp_add_handler(evlp_t *evlp, evlp_handler_t *handler, int fd, int events)
     }
 
     return true;
+}
+
+void evlp_remove_handler(evlp_t *evlp, int fd) {
+    assert(evlp);
+
+    if (fd >= 0) {
+        epoll_ctl(evlp->epfd, EPOLL_CTL_DEL, fd, NULL);
+    }
 }
 
 bool evlp_main(evlp_t *evlp) {

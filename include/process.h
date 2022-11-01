@@ -19,15 +19,20 @@
 #ifndef PROCESS_H
 #define PROCESS_H
 
+#ifndef PROCESS_PRIVATE
+#define PROCESS_PRIVATE __attribute__((deprecated))
+#endif
+
 #include "types.h"
 
 typedef struct {
-    int pid;
+    int pid PROCESS_PRIVATE;
     FILE *input;
     FILE *output;
 } process_t;
 
 bool process_start(process_t *process, const char *argv[]);
 void process_stop(process_t *process);
+int process_get_pid(process_t *process);
 
 #endif
