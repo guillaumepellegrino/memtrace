@@ -35,8 +35,11 @@ $(BUILD)/dummy: $(BUILD)/dummy.o
 
 -include $(willdcard $(BUILD)/*.d)
 
-$(BUILD)/%.o:src/%.c | $(BUILD)/
+$(BUILD)/%.o: src/%.c | $(BUILD)/
 	$(CC) -c -MD $(CFLAGS) $(<) -o $(@)
+
+$(BUILD)/libcext.o: src/libcext.c | $(BUILD)/
+	$(CC) -c -MD $(CFLAGS) -fno-tree-pre $(<) -o $(@)
 
 clean:
 	rm -rf $(BUILD)/

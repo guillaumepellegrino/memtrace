@@ -2,10 +2,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-// Disable optimization option to avoid memset() calling itself
-#pragma GCC push_options
-#pragma GCC optimize ("no-tree-pre")
-
 char *strchr(const char *s, int c) {
     for (size_t i = 0; s[i]; i++) {
         if (s[i] == c) {
@@ -64,5 +60,3 @@ void *memset(void *s, int c, size_t n) {
 
     return s;
 }
-
-#pragma GCC pop_options
