@@ -34,9 +34,12 @@ static inline void strmap_initialize(strmap_t *strmap) {
 
 void strmap_cleanup(strmap_t *strmap);
 void strmap_add(strmap_t *strmap, const char *key, const char *value);
+void strmap_add_fmt(strmap_t *strmap, const char *key, const char *fmt, ...);
 const char *strmap_get(strmap_t *strmap, const char *key);
+int strmap_get_fmt(strmap_t *strmap, const char *key, const char *fmt, ...);
 
 strmap_iterator_t *strmap_first(strmap_t *strmap);
 strmap_iterator_t *strmap_iterator_next(strmap_iterator_t *strit);
 const char *strmap_iterator_key(strmap_iterator_t *strit);
 const char *strmap_iterator_value(strmap_iterator_t *strit);
+

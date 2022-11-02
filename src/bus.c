@@ -553,7 +553,7 @@ bool bus_connection_write_reply(bus_connection_t *connection, strmap_t *options)
     return bus_connection_write_request(connection, "REPLY", options);
 }
 
-bool bus_connection_read_reply(bus_connection_t *connection, strmap_t *options) {
+bool bus_connection_read_request(bus_connection_t *connection, const char *topic, strmap_t *options) {
     char line[4096];
     const char *sep = ":\n\r\t";
     const char *key = NULL;
@@ -579,13 +579,18 @@ bool bus_connection_read_reply(bus_connection_t *connection, strmap_t *options) 
         }
     }
 
-    when_null((option = strmap_get(options, "REQUEST")), error);
-    when_true(strcmp(option, "REPLY") != 0, error);
+    if (topic) {
+        when_null((option = strmap_get(options, "REQUEST")), error);
+        when_true(strcmp(option, topic) != 0, error);
+    }
 
     rt = true;
-
 error:
     return rt;
+}
+
+bool bus_connection_read_reply(bus_connection_t *connection, strmap_t *options) {
+    return bus_connection_read_request(connection, "REPLY", options);
 }
 
 bool bus_connection_readline(bus_connection_t *connection, char *line, size_t size) {

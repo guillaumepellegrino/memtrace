@@ -82,7 +82,7 @@ evlp_t *evlp_create() {
 
     assert(sigprocmask(SIG_BLOCK, &mask, NULL) == 0);
     evlp->sighandler.fn = evlp_signal_handler;
-    assert((evlp->sfd = signalfd(-1, &mask, 0)) >= 0);
+    assert((evlp->sfd = signalfd(-1, &mask, SFD_CLOEXEC)) >= 0);
     assert(evlp_add_handler(evlp, &evlp->sighandler, evlp->sfd, EPOLLIN));
 
     return evlp;
@@ -127,12 +127,16 @@ bool evlp_main(evlp_t *evlp) {
     evlp->run = true;
     while (evlp->run) {
         int cnt = 0;
-        if ((cnt = epoll_wait(evlp->epfd, &event, 1, -1)) <= 0) {
-            TRACE_ERROR("epoll_wait() error: %m");
-            return false;
+        if ((cnt = epoll_wait(evlp->epfd, &event, 1, -1)) < 0) {
+            if (errno != EINTR) {
+                TRACE_ERROR("epoll_wait() error: %m");
+                return false;
+            }
         }
-        evlp_handler_t *handler = event.data.ptr;
-        handler->fn(handler, event.events);
+        if (cnt > 0) {
+            evlp_handler_t *handler = event.data.ptr;
+            handler->fn(handler, event.events);
+        }
     }
 
     return true;

@@ -15,9 +15,11 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-
+#define _GNU_SOURCE
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 #include "strmap.h"
 
 struct _strmap_iterator {
@@ -55,6 +57,22 @@ void strmap_add(strmap_t *strmap, const char *key, const char *value) {
     assert((strit->value = strdup(value)));
 }
 
+void strmap_add_fmt(strmap_t *strmap, const char *key, const char *fmt, ...) {
+    va_list ap;
+    char *value = NULL;
+
+    if (!strmap || !key || !fmt) {
+        return;
+    }
+
+    va_start(ap, fmt);
+    if (vasprintf(&value, fmt, ap) >= 0) {
+        strmap_add(strmap, key, value);
+        free(value);
+    }
+    va_end(ap);
+}
+
 const char *strmap_get(strmap_t *strmap, const char *key) {
     list_iterator_t *it = NULL;
 
@@ -70,6 +88,20 @@ const char *strmap_get(strmap_t *strmap, const char *key) {
     }
 
     return NULL;
+}
+
+int strmap_get_fmt(strmap_t *strmap, const char *key, const char *fmt, ...) {
+    va_list ap;
+    int count = 0;
+    const char *value = NULL;
+
+    va_start(ap, fmt);
+    if ((value = strmap_get(strmap, key))) {
+        count = vsscanf(value, fmt, ap);
+    }
+    va_end(ap);
+
+    return count;
 }
 
 strmap_iterator_t *strmap_first(strmap_t *strmap) {

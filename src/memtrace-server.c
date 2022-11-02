@@ -307,6 +307,7 @@ int main(int argc, char *argv[]) {
     }
 
     signal(SIGPIPE, SIG_IGN);
+    log_set_header("[memtrace-server]");
 
     for (i = optind; i < argc; i++) {
         struct stat st = {0};

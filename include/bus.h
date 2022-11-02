@@ -103,6 +103,7 @@ bus_connection_t *bus_connection_next(bus_connection_t *current);
  *
  */
 bool bus_connection_write_request(bus_connection_t *connection, const char *topic, strmap_t *options);
+bool bus_connection_read_request(bus_connection_t *connection, const char *topic, strmap_t *options);
 
 FILE *bus_connection_reader(bus_connection_t *connection);
 FILE *bus_connection_writer(bus_connection_t *connection);

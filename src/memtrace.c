@@ -50,6 +50,7 @@ typedef struct {
     bus_t agent;
     strlist_t commands;
     int pid;
+    bus_topic_t notify_do_coredump_topic;
 } memtrace_t;
 
 __attribute__((aligned)) char g_buff[G_BUFF_SIZE];
@@ -317,11 +318,40 @@ error:
 }
 
 void memtrace_console_coredump(console_t *console, int argc, char *argv[]) {
-    char line[4096];
     memtrace_t *memtrace = container_of(console, memtrace_t, console);
     bus_connection_t *ipc = NULL;
+    strmap_t options = {0};
+    int retval = 0;
+    const char *descr = NULL;
+
+    if (!(ipc = bus_first_connection(&memtrace->agent))) {
+        CONSOLE("memtrace is not connected to target process");
+        goto error;
+    }
+
+    // Write coredump request and read reply
+    if (argc > 1) {
+        strmap_add(&options, "context", argv[1]);
+    }
+    bus_connection_write_request(ipc, "coredump", &options);
+    bus_connection_read_reply(ipc, &options);
+    strmap_get_fmt(&options, "retval", "%d", &retval);
+    if (!(descr = strmap_get(&options, "descr"))) {
+        descr = "Unknown error";
+    }
+    if (!retval) {
+        CONSOLE("Coredump error: %s", descr);
+        goto error;
+    }
+    CONSOLE("Coredump: %s", descr);
+
+error:
+    strmap_cleanup(&options);
+}
+
+bool memtrace_notify_do_coredump(bus_t *bus, bus_connection_t *connection, bus_topic_t *topic, strmap_t *options, FILE *file) {
     cpu_registers_t regs = {0};
-    int tid = 0;
+    size_t tid = 0;
     size_t pc = 0;
     size_t sp = 0;
     size_t fp = 0;
@@ -330,50 +360,28 @@ void memtrace_console_coredump(console_t *console, int argc, char *argv[]) {
     size_t arg2 = 0;
     size_t arg3 = 0;
 
+    strmap_get_fmt(options, "tid", "%zu", &tid);
+    strmap_get_fmt(options, "pc", "%zu", &pc);
+    strmap_get_fmt(options, "sp", "%zu", &sp);
+    strmap_get_fmt(options, "fp", "%zu", &fp);
+    strmap_get_fmt(options, "ra", "%zu", &ra);
+    strmap_get_fmt(options, "arg1", "%zu", &arg1);
+    strmap_get_fmt(options, "arg2", "%zu", &arg2);
+    strmap_get_fmt(options, "arg3", "%zu", &arg3);
+    cpu_register_set(&regs, cpu_register_pc, pc);
+    cpu_register_set(&regs, cpu_register_sp, sp);
+    cpu_register_set(&regs, cpu_register_fp, fp);
+    cpu_register_set(&regs, cpu_register_ra, ra);
+    cpu_register_set(&regs, cpu_register_arg1, arg1);
+    cpu_register_set(&regs, cpu_register_arg2, arg2);
+    cpu_register_set(&regs, cpu_register_arg3, arg3);
 
-    if (!(ipc = bus_first_connection(&memtrace->agent))) {
-        CONSOLE("memtrace is not connected to target process");
-        return;
-    }
-
-    // Forward command
-    bus_connection_write_request(ipc, "coredump", NULL);
-
-    // Read reply
-    while (bus_connection_readline(ipc, line, sizeof(line))) {
-        if (!strcmp(line, "[cmd_done]\n")) {
-            break;
-        }
-        else {
-            CONSOLE_RAW("%s", line);
-        }
-    }
-
-    // Wait for notification do_coredump
-    while (bus_connection_readline(ipc, line, sizeof(line))) {
-        if (sscanf(line, "notify do_coredump %d 0x%zx 0x%zx 0x%zx 0x%zx 0x%zx 0x%zx 0x%zx",
-            &tid, &pc, &sp, &fp, &ra, &arg1, &arg2, &arg3) == 8) {
-            cpu_register_set(&regs, cpu_register_pc, pc);
-            cpu_register_set(&regs, cpu_register_sp, sp);
-            cpu_register_set(&regs, cpu_register_fp, fp);
-            cpu_register_set(&regs, cpu_register_ra, ra);
-            cpu_register_set(&regs, cpu_register_arg1, arg1);
-            cpu_register_set(&regs, cpu_register_arg2, arg2);
-            cpu_register_set(&regs, cpu_register_arg3, arg3);
-            sp -= 4;
-            break;
-        }
-        else {
-            CONSOLE_RAW("%s", line);
-        }
-    }
-
-    CONSOLE("Do coredump for process %d", tid);
+    CONSOLE("Do coredump for process %zu", tid);
     memtrace_coredump(tid, &regs);
     CONSOLE("Do coredump done");
 
-    bus_connection_close(ipc);
-    connect_to_memtrace_agent(&memtrace->agent, memtrace->pid);
+    // Reply to NotifyDoCoredump request
+    return bus_connection_write_reply(connection, NULL);
 }
 
 static const console_cmd_t memtrace_console_commands[] = {
@@ -644,6 +652,9 @@ int main(int argc, char *argv[]) {
         CONSOLE("Failed to connect to memtrace-agent");
         goto error;
     }
+    memtrace.notify_do_coredump_topic.name = "NotifyDoCoredump";
+    memtrace.notify_do_coredump_topic.read = memtrace_notify_do_coredump;
+    bus_register_topic(&memtrace.agent, &memtrace.notify_do_coredump_topic);
     CONSOLE("Memtrace is connected to target process %d", memtrace.pid);
 
     // Establish connection to memtrace-server and add socket to event loop

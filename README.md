@@ -161,6 +161,8 @@ HEAP SUMMARY Wed Feb 23 16:32:08 2022
 
 
 ## 5. TODO
+- Add back monitor support
+- Add memory leak per 10min, per hour and per day.
 - Add MIPS support
 - Improve this README
 - Improve console support (move cursor)
