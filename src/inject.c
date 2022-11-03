@@ -129,7 +129,7 @@ static bool library_replace_function(int pid, library_t *target, library_t *inje
     return true;
 }
 
-size_t resolve_function_fromlib(elf_relocate_t *rela, library_t *lib) {
+static size_t resolve_function_fromlib(elf_relocate_t *rela, library_t *lib) {
     // Compute lib function offset
     elf_file_t *symtab = library_get_elf_section(lib, library_section_dynsym);
     elf_file_t *strtab = library_get_elf_section(lib, library_section_dynstr);
@@ -150,7 +150,7 @@ size_t resolve_function_fromlib(elf_relocate_t *rela, library_t *lib) {
     return library_absolute_address(lib, sym.offset);
 }
 
-int injecter_get_machine(injecter_t *injecter) {
+static int injecter_get_machine(injecter_t *injecter) {
     elf_t *elf = NULL;
     const elf_header_t *hdr = NULL;
 
@@ -163,6 +163,7 @@ int injecter_get_machine(injecter_t *injecter) {
     return hdr->e_machine;
 }
 
+// Refer to glibc/sysdeps/x86_64/dl-machine.h
 static size_t x86_64_relocate_value(injecter_t *injecter, elf_relocate_t *rela, size_t rela_addr) {
     size_t value = 0;
 
@@ -186,41 +187,6 @@ static size_t x86_64_relocate_value(injecter_t *injecter, elf_relocate_t *rela, 
             break;
         case R_X86_64_RELATIVE:
             return library_absolute_address(injecter->inject_lib, rela->addend);
-        case R_X86_64_NONE:
-        case R_X86_64_PC32:
-        case R_X86_64_GOT32:
-        case R_X86_64_PLT32:
-        case R_X86_64_COPY:
-        case R_X86_64_GOTPCREL:
-        case R_X86_64_32:
-        case R_X86_64_32S:
-        case R_X86_64_16:
-        case R_X86_64_PC16:
-        case R_X86_64_8:
-        case R_X86_64_PC8:
-        case R_X86_64_DTPMOD64:
-        case R_X86_64_DTPOFF64:
-        case R_X86_64_TPOFF64:
-        case R_X86_64_TLSGD:
-        case R_X86_64_TLSLD:
-        case R_X86_64_DTPOFF32:
-        case R_X86_64_GOTTPOFF:
-        case R_X86_64_TPOFF32:
-        case R_X86_64_PC64:
-        case R_X86_64_GOTOFF64:
-        case R_X86_64_GOTPC32:
-        case R_X86_64_GOT64:
-        case R_X86_64_GOTPCREL64:
-        case R_X86_64_GOTPC64:
-        case R_X86_64_GOTPLT64:
-        case R_X86_64_PLTOFF64:
-        case R_X86_64_SIZE32:
-        case R_X86_64_SIZE64:
-        case R_X86_64_GOTPC32_TLSDESC:
-        case R_X86_64_TLSDESC_CALL:
-        case R_X86_64_TLSDESC:
-        case R_X86_64_IRELATIVE:
-        case R_X86_64_RELATIVE64:
         default:
             CONSOLE("%x is not handled", rela->type);
             break;
@@ -253,134 +219,7 @@ static size_t arm_relocate_value(injecter_t *injecter, elf_relocate_t *rela, siz
             TRACE_WARNING("Function %s() was not resolved", rela->sym.name);
             break;
         case R_ARM_RELATIVE:
-            //ElfW(Addr) l_addr;		/* Difference between the address in the ELF
-            //file and the addresses in memory.  */
-            //
-            // in glibc$ vim sysdeps/arm/dl-machine :
-            //	*reloc_addr += map->l_addr;
-            value = ptrace(PTRACE_PEEKTEXT, injecter->pid, rela_addr, 0);
-            return library_absolute_address(injecter->inject_lib, value);
-        case R_ARM_NONE: break;
-        case R_ARM_PC24: break;
-        case R_ARM_REL32: break;
-        case R_ARM_PC13: break;
-        case R_ARM_ABS16: break;
-        case R_ARM_ABS12: break;
-        case R_ARM_THM_ABS5: break;
-        case R_ARM_ABS8: break;
-        case R_ARM_SBREL32: break;
-        case R_ARM_THM_PC22: break;
-        case R_ARM_THM_PC8: break;
-        case R_ARM_AMP_VCALL9: break;
-        case R_ARM_TLS_DESC: break;
-        case R_ARM_THM_SWI8: break;
-        case R_ARM_XPC25: break;
-        case R_ARM_THM_XPC22: break;
-        case R_ARM_TLS_DTPMOD32: break;
-        case R_ARM_TLS_DTPOFF32: break;
-        case R_ARM_TLS_TPOFF32: break;
-        case R_ARM_COPY: break;
-        case R_ARM_GOTOFF: break;
-        case R_ARM_GOTPC: break;
-        case R_ARM_GOT32: break;
-        case R_ARM_PLT32: break;
-        case R_ARM_CALL: break;
-        case R_ARM_JUMP24: break;
-        case R_ARM_THM_JUMP24: break;
-        case R_ARM_BASE_ABS: break;
-        case R_ARM_ALU_PCREL_7_0: break;
-        case R_ARM_ALU_PCREL_15_8: break;
-        case R_ARM_ALU_PCREL_23_15: break;
-        case R_ARM_LDR_SBREL_11_0: break;
-        case R_ARM_ALU_SBREL_19_12: break;
-        case R_ARM_ALU_SBREL_27_20: break;
-        case R_ARM_TARGET1: break;
-        case R_ARM_SBREL31: break;
-        case R_ARM_V4BX: break;
-        case R_ARM_TARGET2: break;
-        case R_ARM_PREL31: break;
-        case R_ARM_MOVW_ABS_NC: break;
-        case R_ARM_MOVT_ABS: break;
-        case R_ARM_MOVW_PREL_NC: break;
-        case R_ARM_MOVT_PREL: break;
-        case R_ARM_THM_MOVW_ABS_NC: break;
-        case R_ARM_THM_MOVT_ABS: break;
-        case R_ARM_THM_MOVW_PREL_NC: break;
-        case R_ARM_THM_MOVT_PREL: break;
-        case R_ARM_THM_JUMP19: break;
-        case R_ARM_THM_JUMP6: break;
-        case R_ARM_THM_ALU_PREL_11_0: break;
-        case R_ARM_THM_PC12: break;
-        case R_ARM_ABS32_NOI: break;
-        case R_ARM_REL32_NOI: break;
-        case R_ARM_ALU_PC_G0_NC: break;
-        case R_ARM_ALU_PC_G0: break;
-        case R_ARM_ALU_PC_G1_NC: break;
-        case R_ARM_ALU_PC_G1: break;
-        case R_ARM_ALU_PC_G2: break;
-        case R_ARM_LDR_PC_G1: break;
-        case R_ARM_LDR_PC_G2: break;
-        case R_ARM_LDRS_PC_G0: break;
-        case R_ARM_LDRS_PC_G1: break;
-        case R_ARM_LDRS_PC_G2: break;
-        case R_ARM_LDC_PC_G0: break;
-        case R_ARM_LDC_PC_G1: break;
-        case R_ARM_LDC_PC_G2: break;
-        case R_ARM_ALU_SB_G0_NC: break;
-        case R_ARM_ALU_SB_G0: break;
-        case R_ARM_ALU_SB_G1_NC: break;
-        case R_ARM_ALU_SB_G1: break;
-        case R_ARM_ALU_SB_G2: break;
-        case R_ARM_LDR_SB_G0: break;
-        case R_ARM_LDR_SB_G1: break;
-        case R_ARM_LDR_SB_G2: break;
-        case R_ARM_LDRS_SB_G0: break;
-        case R_ARM_LDRS_SB_G1: break;
-        case R_ARM_LDRS_SB_G2: break;
-        case R_ARM_LDC_SB_G0: break;
-        case R_ARM_LDC_SB_G1: break;
-        case R_ARM_LDC_SB_G2: break;
-        case R_ARM_MOVW_BREL_NC: break;
-        case R_ARM_MOVT_BREL: break;
-        case R_ARM_MOVW_BREL: break;
-        case R_ARM_THM_MOVW_BREL_NC: break;
-        case R_ARM_THM_MOVT_BREL: break;
-        case R_ARM_THM_MOVW_BREL: break;
-        case R_ARM_TLS_GOTDESC: break;
-        case R_ARM_TLS_CALL: break;
-        case R_ARM_TLS_DESCSEQ: break;
-        case R_ARM_THM_TLS_CALL: break;
-        case R_ARM_PLT32_ABS: break;
-        case R_ARM_GOT_ABS: break;
-        case R_ARM_GOT_PREL: break;
-        case R_ARM_GOT_BREL12: break;
-        case R_ARM_GOTOFF12: break;
-        case R_ARM_GOTRELAX: break;
-        case R_ARM_GNU_VTENTRY: break;
-        case R_ARM_GNU_VTINHERIT: break;
-        case R_ARM_THM_PC11: break;
-        case R_ARM_THM_PC9: break;
-        case R_ARM_TLS_GD32: break;
-        case R_ARM_TLS_LDM32: break;
-        case R_ARM_TLS_LDO32: break;
-        case R_ARM_TLS_IE32: break;
-        case R_ARM_TLS_LE32: break;
-        case R_ARM_TLS_LDO12: break;
-        case R_ARM_TLS_LE12: break;
-        case R_ARM_TLS_IE12GP: break;
-        case R_ARM_ME_TOO: break;
-        case R_ARM_THM_TLS_DESCSEQ16: break;
-        case R_ARM_THM_TLS_DESCSEQ32: break;
-        case R_ARM_THM_GOT_BREL12: break;
-        case R_ARM_IRELATIVE: break;
-        case R_ARM_RXPC25: break;
-        case R_ARM_RSBREL32: break;
-        case R_ARM_THM_RPC22: break;
-        case R_ARM_RREL32: break;
-        case R_ARM_RABS22: break;
-        case R_ARM_RPC24: break;
-        case R_ARM_RBASE: break;
-        case R_ARM_NUM: break;
+            return library_absolute_address(injecter->inject_lib, rela->addend);
         default: break;
     }
 
@@ -413,14 +252,7 @@ static size_t mips_relocate_value(injecter_t *injecter, elf_relocate_t *rela, si
             TRACE_WARNING("Function %s() was not resolved", rela->sym.name);
             break;
         case R_MIPS_REL32:
-            //ElfW(Addr) l_addr;		/* Difference between the address in the ELF
-            //file and the addresses in memory.  */
-            //
-            // in glibc$ vim sysdeps/arm/dl-machine :
-            //	*reloc_addr += map->l_addr;
-            value = ptrace(PTRACE_PEEKTEXT, injecter->pid, rela_addr, 0);
-            return library_absolute_address(injecter->inject_lib, value);
-        case R_MIPS_NONE: break;
+            return library_absolute_address(injecter->inject_lib, rela->addend);
         default: break;
     }
 
@@ -458,7 +290,10 @@ bool resolve_function(elf_relocate_t *rela, void *userdata) {
     }
 
     rela_addr = library_absolute_address(injecter->inject_lib, rela->offset);
-
+    if (rela->sh_type == sh_type_rel) {
+        // for sh_type_rel, addend must be read from relocation address
+        rela->addend = ptrace(PTRACE_PEEKTEXT, injecter->pid, rela_addr, 0);
+    }
     if (!(rela_value = relocate_value(injecter, rela, rela_addr))) {
         TRACE_ERROR("Failed to get %s() relocation value", rela->sym.name);
         return true;
