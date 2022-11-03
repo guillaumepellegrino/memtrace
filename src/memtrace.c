@@ -33,6 +33,7 @@
 #include <sys/user.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/timerfd.h>
 #include <sys/epoll.h>
 #include "evlp.h"
 #include "bus.h"
@@ -44,7 +45,10 @@
 #include "log.h"
 
 typedef struct {
+    evlp_t *evlp;
     evlp_handler_t stdin_handler;
+    evlp_handler_t monitor_handler;
+    int monitorfd;
     console_t console;
     bus_t server;
     bus_t agent;
@@ -218,6 +222,76 @@ static void memtrace_console_forward(console_t *console, int argc, char *argv[])
     }
 }
 
+static void memtrace_console_monitor(console_t *console, int argc, char *argv[]) {
+    memtrace_t *memtrace = container_of(console, memtrace_t, console);
+    const char *short_options = "+i:sh";
+    const struct option long_options[] = {
+        {"interval",    required_argument,  0, 'i'},
+        {"stop",        no_argument,        0, 's'},
+        {"help",        no_argument,        0, 'h'},
+        {0},
+    };
+    int opt = -1;
+    struct itimerspec itimer = {
+        .it_interval.tv_sec = 3,
+    };
+    static bool is_running = false;
+
+    optind = 1;
+    while ((opt = getopt_long(argc, argv, short_options, long_options, NULL)) != -1) {
+        switch (opt) {
+            case 'i':
+                itimer.it_interval.tv_sec = atoi(optarg);
+                itimer.it_value.tv_nsec = itimer.it_interval.tv_sec ? 1 : 0;
+                break;
+            case 's':
+                itimer.it_value.tv_sec = 0;
+                break;
+            case 'h':
+            default:
+                CONSOLE("Usage: monitor [OPTION]..");
+                CONSOLE("Toggle ON/OFF the monitoring the memory usage");
+                CONSOLE("  -h, --help             Display this help");
+                CONSOLE("  -i, --interval=VALUE   Start monitoring at the specified interval value in seconds");
+                CONSOLE("  -s, --stop             Stop monitoring");
+                return;
+        }
+    }
+
+    if (argc == 1) {
+        // Toggle ON/OFF when no argument is provided
+        itimer.it_value.tv_nsec = is_running ? 0 : 1;
+    }
+
+    timerfd_settime(memtrace->monitorfd, 0, &itimer, NULL);
+    is_running = itimer.it_value.tv_nsec;
+}
+
+static void monitor_handler(evlp_handler_t *self, int events) {
+    char line[4096];
+    memtrace_t *memtrace = container_of(self, memtrace_t, monitor_handler);
+    bus_connection_t *ipc = NULL;
+    uint64_t value = 0;
+
+    if (read(memtrace->monitorfd, &value, sizeof(value)) < 0) {
+        TRACE_ERROR("read timer error: %m");
+        sleep(1);
+        return;
+    }
+
+    if (!(ipc = bus_first_connection(&memtrace->agent))) {
+        return;
+    }
+
+    bus_connection_write_request(ipc, "status", NULL);
+    while (bus_connection_readline(ipc, line, sizeof(line))) {
+        if (!strcmp(line, "[cmd_done]\n")) {
+            break;
+        }
+        CONSOLE_RAW("%s", line);
+    }
+}
+
 static void memtrace_console_report(console_t *console, int argc, char *argv[]) {
     char line[4096];
     strmap_t options = {0};
@@ -265,7 +339,7 @@ static void memtrace_console_report(console_t *console, int argc, char *argv[]) 
     strmap_cleanup(&options);
 }
 
-void memtrace_coredump(int pid, cpu_registers_t *regs) {
+static void memtrace_coredump(int pid, cpu_registers_t *regs) {
     char memfile[64];
     DIR *threads = NULL;
     int tid = -1;
@@ -317,7 +391,7 @@ error:
 
 }
 
-void memtrace_console_coredump(console_t *console, int argc, char *argv[]) {
+static void memtrace_console_coredump(console_t *console, int argc, char *argv[]) {
     memtrace_t *memtrace = container_of(console, memtrace_t, console);
     bus_connection_t *ipc = NULL;
     strmap_t options = {0};
@@ -349,7 +423,7 @@ error:
     strmap_cleanup(&options);
 }
 
-bool memtrace_notify_do_coredump(bus_t *bus, bus_connection_t *connection, bus_topic_t *topic, strmap_t *options, FILE *file) {
+static bool memtrace_notify_do_coredump(bus_t *bus, bus_connection_t *connection, bus_topic_t *topic, strmap_t *options, FILE *file) {
     cpu_registers_t regs = {0};
     size_t tid = 0;
     size_t pc = 0;
@@ -388,7 +462,7 @@ static const console_cmd_t memtrace_console_commands[] = {
     {.name = "help",        .help = "Display this help", .handler = console_cmd_help},
     {.name = "quit",        .help = "Quit memtrace and show report", .handler = memtrace_console_quit},
     {.name = "status",      .help = "Show memtrace status", .handler = memtrace_console_forward},
-    {.name = "monitor",     .help = "Monitor memory allocations", .handler = NULL},
+    {.name = "monitor",     .help = "Monitor memory allocations", .handler = memtrace_console_monitor},
     {.name = "report",      .help = "Show memtrace report", .handler = memtrace_console_report},
     {.name = "coredump",    .help = "Generate a coredump", .handler = memtrace_console_coredump},
     {.name = "clear",       .help = "Clear memory statistics", .handler = memtrace_console_forward},
@@ -555,7 +629,6 @@ int main(int argc, char *argv[]) {
     int rt = 1;
     int opt = -1;
     bool do_coredump = false;
-    evlp_t *evlp = NULL;
     const char *libname = exe;
     const char *hostname = NULL;
     const char *port = "3002";
@@ -564,6 +637,7 @@ int main(int argc, char *argv[]) {
     int memtrace_server_pid = -1;
     memtrace_t memtrace = {
         .stdin_handler = {.fn = stdin_handler},
+        .monitor_handler = {.fn = monitor_handler},
         .pid = -1,
     };
 
@@ -632,7 +706,9 @@ int main(int argc, char *argv[]) {
     }
 
     // Create event loop
-    evlp = evlp_create();
+    memtrace.evlp = evlp_create();
+    assert((memtrace.monitorfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC)) >= 0);
+    assert(evlp_add_handler(memtrace.evlp, &memtrace.monitor_handler, memtrace.monitorfd, EPOLLIN));
 
     // Inject memtrace-agent library in target process
     if (!library_is_loaded(memtrace.pid, libname)) {
@@ -647,7 +723,7 @@ int main(int argc, char *argv[]) {
     }
 
     // Establish ipc connection to memtrace-agent
-    bus_initialize(&memtrace.agent, evlp, "memtrace", "memtrace.agent");
+    bus_initialize(&memtrace.agent, memtrace.evlp, "memtrace", "memtrace.agent");
     if (!connect_to_memtrace_agent(&memtrace.agent, memtrace.pid)) {
         CONSOLE("Failed to connect to memtrace-agent");
         goto error;
@@ -659,7 +735,7 @@ int main(int argc, char *argv[]) {
 
     // Establish connection to memtrace-server and add socket to event loop
     if (hostname && client) {
-        bus_initialize(&memtrace.server, evlp, "memtrace", "memtrace-server");
+        bus_initialize(&memtrace.server, memtrace.evlp, "memtrace", "memtrace-server");
         if (!bus_tcp_connect(&memtrace.server, hostname, port)) {
             TRACE_ERROR("Failed to connect to %s:%s", hostname, port);
             goto error;
@@ -667,7 +743,7 @@ int main(int argc, char *argv[]) {
         bus_wait4connect(&memtrace.server);
     }
     else if (hostname) {
-        bus_initialize(&memtrace.server, evlp, "memtrace", "memtrace-server");
+        bus_initialize(&memtrace.server, memtrace.evlp, "memtrace", "memtrace-server");
         if (!bus_tcp_listen(&memtrace.server, hostname, port)) {
             TRACE_ERROR("Failed to listen on %s:%s", hostname, port);
             goto error;
@@ -675,7 +751,7 @@ int main(int argc, char *argv[]) {
         bus_wait4connect(&memtrace.server);
     }
     else if (multicast) {
-        bus_initialize(&memtrace.server, evlp, "memtrace", "memtrace-server");
+        bus_initialize(&memtrace.server, memtrace.evlp, "memtrace", "memtrace-server");
         if (!bus_tcp_autoconnect(&memtrace.server)) {
             TRACE_ERROR("Failed to discover memtrace-server");
             goto error;
@@ -684,7 +760,7 @@ int main(int argc, char *argv[]) {
     }
     else if (!is_cross_compiled()) {
         CONSOLE("Run memtrace-server locally");
-        bus_initialize(&memtrace.server, evlp, "memtrace", "memtrace-server");
+        bus_initialize(&memtrace.server, memtrace.evlp, "memtrace", "memtrace-server");
         memtrace_server_pid = local_memtrace_server(&memtrace.server);
         bus_wait4connect(&memtrace.server);
     }
@@ -709,19 +785,20 @@ int main(int argc, char *argv[]) {
         CONSOLE("Enter 'help' for listing possible commands");
     }
     console_initiliaze(&memtrace.console, memtrace_console_commands);
-    evlp_add_handler(evlp, &memtrace.stdin_handler, 0, EPOLLIN);
+    evlp_add_handler(memtrace.evlp, &memtrace.stdin_handler, 0, EPOLLIN);
 
     // Enter event loop
-    evlp_main(evlp);
+    evlp_main(memtrace.evlp);
     rt = 0;
 
 error:
+    close(memtrace.monitorfd);
     strlist_cleanup(&memtrace.commands);
     console_cleanup(&memtrace.console);
     bus_cleanup(&memtrace.server);
     bus_cleanup(&memtrace.agent);
-    if (evlp) {
-        evlp_destroy(evlp);
+    if (memtrace.evlp) {
+        evlp_destroy(memtrace.evlp);
     }
     if (memtrace_server_pid > 0) {
         kill(memtrace_server_pid, SIGKILL);

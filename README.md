@@ -161,8 +161,10 @@ HEAP SUMMARY Wed Feb 23 16:32:08 2022
 
 
 ## 5. TODO
-- Add back monitor support
 - Add memory leak per 10min, per hour and per day.
 - Add MIPS support
+- Add support for IFUNC
+- Should we load pthread library ?
+- Send coredump notification in a dedicated socket to avoid concurrency issues. (One socket for request, one socket for notification).
 - Improve this README
 - Improve console support (move cursor)
