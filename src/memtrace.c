@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-
+#define _GNU_SOURCE
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -55,6 +55,7 @@ typedef struct {
     strlist_t commands;
     int pid;
     bus_topic_t notify_do_coredump_topic;
+    char *coredump_path;
 } memtrace_t;
 
 __attribute__((aligned)) char g_buff[G_BUFF_SIZE];
@@ -294,19 +295,38 @@ static void monitor_handler(evlp_handler_t *self, int events) {
 
 static void memtrace_console_report(console_t *console, int argc, char *argv[]) {
     char line[4096];
+    const char *short_options = "+c:h";
+    const struct option long_options[] = {
+        {"count",       required_argument,  0, 'c'},
+        {"help",        no_argument,        0, 'h'},
+        {0},
+    };
+    int opt = -1;
     strmap_t options = {0};
     memtrace_t *memtrace = container_of(console, memtrace_t, console);
     bus_connection_t *ipc = NULL;
     bus_connection_t *server = NULL;
     bus_connection_t *in = NULL;
 
+    optind = 1;
+    while ((opt = getopt_long(argc, argv, short_options, long_options, NULL)) != -1) {
+        switch (opt) {
+            case 'c':
+                strmap_add(&options, "count", optarg);
+                break;
+            case 'h':
+            default:
+                CONSOLE("Usage: report [OPTION]..");
+                CONSOLE("Generate a memory usage report");
+                CONSOLE("  -h, --help             Display this help");
+                CONSOLE("  -c, --count=VALUE      Count of memory contexts to display (default:10)");
+                return;
+        }
+    }
+
     if (!(ipc = bus_first_connection(&memtrace->agent))) {
         CONSOLE("memtrace is not connected to target process");
         return;
-    }
-
-    if (argc > 1) {
-        strmap_add(&options, "count", argv[1]);
     }
     bus_connection_write_request(ipc, "report", &options);
 
@@ -339,7 +359,7 @@ static void memtrace_console_report(console_t *console, int argc, char *argv[]) 
     strmap_cleanup(&options);
 }
 
-static void memtrace_coredump(int pid, cpu_registers_t *regs) {
+static void memtrace_coredump(const char *filename, int pid, cpu_registers_t *regs) {
     char memfile[64];
     DIR *threads = NULL;
     int tid = -1;
@@ -358,8 +378,11 @@ static void memtrace_coredump(int pid, cpu_registers_t *regs) {
         CONSOLE("memtrace attached to pid:%d/tid:%d", pid, tid);
     }
 
-    if (!(core = fopen("memtrace.core", "w"))) {
-        TRACE_ERROR("Failed to open %s: %m", "memtrace.core");
+    if (!filename) {
+        filename = "core";
+    }
+    if (!(core = fopen(filename, "w"))) {
+        TRACE_ERROR("Failed to open %s: %m", filename);
         goto error;
     }
 
@@ -369,7 +392,7 @@ static void memtrace_coredump(int pid, cpu_registers_t *regs) {
         goto error;
     }
 
-    fprintf(stderr, "Writing coredump\n");
+    fprintf(stderr, "Writing coredump to %s\n", filename);
     coredump_write(pid, memfd, core, regs);
     fprintf(stderr, "Writing coredump done\n");
 
@@ -392,11 +415,40 @@ error:
 }
 
 static void memtrace_console_coredump(console_t *console, int argc, char *argv[]) {
+    const char *short_options = "+c:f:h";
+    const struct option long_options[] = {
+        {"context",     required_argument,  0, 'c'},
+        {"file",        required_argument,  0, 'f'},
+        {"help",        no_argument,        0, 'h'},
+        {0},
+    };
+    int opt = -1;
     memtrace_t *memtrace = container_of(console, memtrace_t, console);
     bus_connection_t *ipc = NULL;
     strmap_t options = {0};
     int retval = 0;
     const char *descr = NULL;
+
+    optind = 1;
+    while ((opt = getopt_long(argc, argv, short_options, long_options, NULL)) != -1) {
+        switch (opt) {
+            case 'c':
+                strmap_add(&options, "context", optarg);
+                break;
+            case 'f':
+                free(memtrace->coredump_path);
+                memtrace->coredump_path = strdup(optarg);
+                break;
+            case 'h':
+            default:
+                CONSOLE("Usage: coredump [OPTION]..");
+                CONSOLE("Mark a memory context for coredump generation");
+                CONSOLE("  -h, --help             Display this help");
+                CONSOLE("  -c, --context=VALUE    Mark the specified memory context for coredump generation (default:core.%d)", memtrace->pid);
+                CONSOLE("  -f, --file=PATH        Write the coredump to the specified path");
+                goto error;
+        }
+    }
 
     if (!(ipc = bus_first_connection(&memtrace->agent))) {
         CONSOLE("memtrace is not connected to target process");
@@ -404,9 +456,6 @@ static void memtrace_console_coredump(console_t *console, int argc, char *argv[]
     }
 
     // Write coredump request and read reply
-    if (argc > 1) {
-        strmap_add(&options, "context", argv[1]);
-    }
     bus_connection_write_request(ipc, "coredump", &options);
     bus_connection_read_reply(ipc, &options);
     strmap_get_fmt(&options, "retval", "%d", &retval);
@@ -424,6 +473,7 @@ error:
 }
 
 static bool memtrace_notify_do_coredump(bus_t *bus, bus_connection_t *connection, bus_topic_t *topic, strmap_t *options, FILE *file) {
+    memtrace_t *memtrace = container_of(topic, memtrace_t, notify_do_coredump_topic);
     cpu_registers_t regs = {0};
     size_t tid = 0;
     size_t pc = 0;
@@ -451,7 +501,7 @@ static bool memtrace_notify_do_coredump(bus_t *bus, bus_connection_t *connection
     cpu_register_set(&regs, cpu_register_arg3, arg3);
 
     CONSOLE("Do coredump for process %zu", tid);
-    memtrace_coredump(tid, &regs);
+    memtrace_coredump(memtrace->coredump_path, tid, &regs);
     CONSOLE("Do coredump done");
 
     // Reply to NotifyDoCoredump request
@@ -462,9 +512,9 @@ static const console_cmd_t memtrace_console_commands[] = {
     {.name = "help",        .help = "Display this help", .handler = console_cmd_help},
     {.name = "quit",        .help = "Quit memtrace and show report", .handler = memtrace_console_quit},
     {.name = "status",      .help = "Show memtrace status", .handler = memtrace_console_forward},
-    {.name = "monitor",     .help = "Monitor memory allocations", .handler = memtrace_console_monitor},
-    {.name = "report",      .help = "Show memtrace report", .handler = memtrace_console_report},
-    {.name = "coredump",    .help = "Generate a coredump", .handler = memtrace_console_coredump},
+    {.name = "monitor",     .help = "Monitor memory allocations. monitor --help for more details.", .handler = memtrace_console_monitor},
+    {.name = "report",      .help = "Show memtrace report. report --help for more details.", .handler = memtrace_console_report},
+    {.name = "coredump",    .help = "Generate a coredump. coredump --help for more details.", .handler = memtrace_console_coredump},
     {.name = "clear",       .help = "Clear memory statistics", .handler = memtrace_console_forward},
     {0},
 };
@@ -699,8 +749,9 @@ int main(int argc, char *argv[]) {
         help();
         goto error;
     }
+    assert(asprintf(&memtrace.coredump_path, "core.%d", memtrace.pid) > 0);
     if (do_coredump) {
-        memtrace_coredump(memtrace.pid, NULL);
+        memtrace_coredump(memtrace.coredump_path, memtrace.pid, NULL);
         rt = 0;
         goto error;
     }
@@ -792,6 +843,7 @@ int main(int argc, char *argv[]) {
     rt = 0;
 
 error:
+    free(memtrace.coredump_path);
     close(memtrace.monitorfd);
     strlist_cleanup(&memtrace.commands);
     console_cleanup(&memtrace.console);
