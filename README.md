@@ -162,6 +162,7 @@ HEAP SUMMARY Wed Feb 23 16:32:08 2022
 
 ## 5. TODO
 - Add memory leak per 10min, per hour and per day.
+- Large calstack
 - Add MIPS support
 - Add support for IFUNC
 - Should we load pthread library ?

@@ -24,6 +24,16 @@
 #include "bus.h"
 
 typedef struct {
+    ssize_t bytes;
+    ssize_t count;
+} sample_t;
+
+typedef struct {
+    size_t wridx;
+    sample_t values[11];
+} sample_circbuf_t;
+
+typedef struct {
     size_t alloc_count;
     size_t alloc_size;
     size_t free_count;
@@ -31,6 +41,7 @@ typedef struct {
     size_t byte_inuse;
     size_t count_inuse;
     size_t block_inuse;
+    sample_circbuf_t lasthour;
 } stats_t;
 
 typedef struct {
@@ -49,6 +60,8 @@ typedef struct {
     bus_topic_t report_topic;
     bus_topic_t clear_topic;
     bus_topic_t coredump_topic;
+    evlp_handler_t stats_lasthour_handler;
+    int stats_lasthour_timerfd;
 } agent_t;
 
 bool agent_initialize(agent_t *agent);

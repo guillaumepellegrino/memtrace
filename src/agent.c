@@ -32,6 +32,8 @@
 #include <sys/un.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <sys/timerfd.h>
+#include <sys/epoll.h>
 #include <pthread.h>
 #include "agent.h"
 #include "agent_hooks.h"
@@ -59,6 +61,37 @@ typedef struct {
     void *ptr;
     block_t *block;
 } allocation_t;
+
+static inline void sample_circbuf_append(sample_circbuf_t *circbuf, sample_t value) {
+    circbuf->values[circbuf->wridx] = value;
+    circbuf->wridx += 1;
+    circbuf->wridx %= countof(circbuf->values);
+}
+
+static inline size_t sample_circbuf_first_idx(sample_circbuf_t *circbuf) {
+    return circbuf->wridx;
+}
+
+static inline size_t sample_circbuf_last_idx(sample_circbuf_t *circbuf) {
+    size_t idx = circbuf->wridx;
+    return (idx != 0) ? (idx - 1) : (countof(circbuf->values) - 1);
+}
+
+static inline sample_t sample_circbuf_first(sample_circbuf_t *circbuf) {
+    return circbuf->values[sample_circbuf_first_idx(circbuf)];
+}
+
+static inline sample_t sample_circbuf_last(sample_circbuf_t *circbuf) {
+    return circbuf->values[sample_circbuf_last_idx(circbuf)];
+}
+
+static inline sample_t sample_circbuf_last_sub_first(sample_circbuf_t *circbuf) {
+    sample_t last = sample_circbuf_last(circbuf);
+    sample_t first = sample_circbuf_first(circbuf);
+    last.bytes -= first.bytes;
+    last.count -= first.count;
+    return last;
+}
 
 static uint32_t allocations_maps_hash(hashmap_t *hashmap, void *key) {
     size_t addr = (size_t) key;
@@ -174,12 +207,14 @@ static void ipc_socket_close(int ipc) {
 static bool agent_status(bus_t *bus, bus_connection_t *connection, bus_topic_t *topic, strmap_t *options, FILE *fp) {
     bool lock = hooks_lock();
     agent_t *agent = container_of(topic, agent_t, status_topic);
+    sample_t lasthour = sample_circbuf_last_sub_first(&agent->stats.lasthour);
     //time_t now = time(NULL);
     fprintf(fp, "HEAP SUMMARY\n"/*, asctime(localtime(&now))*/);
     fprintf(fp, "    in use: %zu allocs, %zu bytes in %zu contexts\n",
         agent->stats.count_inuse, agent->stats.byte_inuse, agent->stats.block_inuse);
     fprintf(fp, "    total heap usage: %zu allocs, %zu frees, %zu bytes allocated\n",
         agent->stats.alloc_count, agent->stats.free_count, agent->stats.alloc_size);
+    fprintf(fp, "    memory leaked since last hour: %zd allocs, %zd bytes\n", lasthour.count, lasthour.bytes);
     fprintf(fp, "[cmd_done]\n");
     fflush(fp);
     hooks_unlock(lock);
@@ -312,7 +347,29 @@ error:
     return true;
 }
 
-void *ipc_accept_loop(void *arg) {
+void agent_stats_lasthour_handler(evlp_handler_t *self, int events) {
+    agent_t *agent = container_of(self, agent_t, stats_lasthour_handler);
+    uint64_t timestamp = 0;
+    sample_t value = {
+        .bytes = agent->stats.byte_inuse,
+        .count = agent->stats.count_inuse,
+    };
+    bool lock = false;
+
+    if (read(agent->stats_lasthour_timerfd, &timestamp, sizeof(timestamp)) < 0) {
+        TRACE_ERROR("read timer error: %m");
+        return;
+    }
+
+    lock = hooks_lock();
+
+    TRACE_WARNING("Stats LastHour Update");
+    sample_circbuf_append(&agent->stats.lasthour, value);
+
+    hooks_unlock(lock);
+}
+
+static void *ipc_accept_loop(void *arg) {
     agent_t *agent = arg;
 
     signal(SIGPIPE, SIG_IGN);
@@ -378,11 +435,20 @@ bool agent_initialize(agent_t *agent) {
     agent->coredump_topic.name = "coredump";
     agent->coredump_topic.read = agent_coredump;
     bus_register_topic(&agent->bus, &agent->coredump_topic);
-
+    agent->stats_lasthour_handler.fn = agent_stats_lasthour_handler;
+    assert((agent->stats_lasthour_timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC)) >= 0);
+    assert(evlp_add_handler(agent->evlp, &agent->stats_lasthour_handler, agent->stats_lasthour_timerfd, EPOLLIN));
+    struct itimerspec itimer = {
+        .it_interval.tv_sec = 60*60/10,
+        .it_value.tv_sec = 60*60/10,
+    };
+    timerfd_settime(agent->stats_lasthour_timerfd, 0, &itimer, NULL);
     return true;
 }
 
 void agent_cleanup(agent_t *agent) {
+    evlp_remove_handler(agent->evlp, agent->stats_lasthour_timerfd);
+    close(agent->stats_lasthour_timerfd);
     bus_cleanup(&agent->bus);
     evlp_destroy(agent->evlp);
     libraries_destroy(agent->libraries);
@@ -485,3 +551,4 @@ void agent_dealloc(agent_t *agent, void *ptr) {
         hashmap_iterator_destroy(&allocation->it);
     }
 }
+

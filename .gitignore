@@ -6,6 +6,6 @@
 build-*
 memtrace
 memtrace-server
-memtrace.core
+core*
 dummy
 dummy2
