@@ -42,12 +42,13 @@ typedef enum {
     cpu_register_arg6,
     cpu_register_arg7,
     cpu_register_retval,
-    cpu_register_syscall_exit_stop,
 } cpu_register_name_t;
 
 struct _cpu_registers {
-#ifdef __x86_64__
+#if defined(__x86_64__)
     struct user_regs_struct raw;
+#elif defined(__mips__)
+    struct user raw;
 #else
     struct user_regs raw;
 #endif

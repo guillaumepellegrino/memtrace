@@ -20,6 +20,11 @@ CFLAGS+=
 ARCH_OBJECT=arm.o
 endif
 
+ifneq (,$(findstring mips,$(MACHINE)))
+CFLAGS+=
+ARCH_OBJECT=mips.o
+endif
+
 all: $(TARGETS)
 
 $(BUILD)/:

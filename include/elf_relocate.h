@@ -19,7 +19,10 @@
 #ifndef ELF_RELOCATE_H
 #define ELF_RELOCATE_H
 
+#include "elf_main.h"
+
 typedef struct {
+    sh_type_t sh_type;
     uint64_t offset;
     uint64_t info;
     uint64_t addend;

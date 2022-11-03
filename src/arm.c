@@ -62,7 +62,6 @@ static size_t *arm_cpu_register_reference(cpu_registers_t *registers, cpu_regist
         case cpu_register_arg6:     return (size_t *) &registers->raw.uregs[5];
         case cpu_register_arg7:     return (size_t *) &registers->raw.uregs[6];
         case cpu_register_retval:   return (size_t *) &registers->raw.uregs[0];
-        case cpu_register_syscall_exit_stop: return (size_t *) &registers->raw.uregs[12];
         default: return NULL;
     }
 }

@@ -61,7 +61,6 @@ static size_t *x86_cpu_register_reference(cpu_registers_t *registers, cpu_regist
         case cpu_register_arg5:     return (size_t *) &registers->raw.r8;
         case cpu_register_arg6:     return (size_t *) &registers->raw.r9;
         case cpu_register_retval:   return (size_t *) &registers->raw.rax;
-        case cpu_register_syscall_exit_stop: return (size_t *) &registers->extra[0];
         default: return NULL;
     }
 }

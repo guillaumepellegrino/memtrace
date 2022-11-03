@@ -389,7 +389,45 @@ static size_t arm_relocate_value(injecter_t *injecter, elf_relocate_t *rela, siz
     return 0;
 }
 
+// Refer to glibc/sysdeps/mips/dl-machine.h
+static size_t mips_relocate_value(injecter_t *injecter, elf_relocate_t *rela, size_t rela_addr) {
+    size_t value = 0;
 
+    switch (rela->type) {
+        case R_MIPS_16:
+        case R_MIPS_32:
+        case R_MIPS_GLOB_DAT:
+        case R_MIPS_JUMP_SLOT:
+            if (rela->sym.offset) {
+                return library_absolute_address(injecter->inject_lib, rela->sym.offset);
+            }
+            if ((value = resolve_function_fromlib(rela, injecter->c_lib))) {
+                return value;
+            }
+            if (injecter->pthread_lib && (value = resolve_function_fromlib(rela, injecter->pthread_lib))) {
+                return value;
+            }
+            if ((value = resolve_function_fromlib(rela, injecter->program_lib))) {
+                return value;
+            }
+            TRACE_WARNING("Function %s() was not resolved", rela->sym.name);
+            break;
+        case R_MIPS_REL32:
+            //ElfW(Addr) l_addr;		/* Difference between the address in the ELF
+            //file and the addresses in memory.  */
+            //
+            // in glibc$ vim sysdeps/arm/dl-machine :
+            //	*reloc_addr += map->l_addr;
+            value = ptrace(PTRACE_PEEKTEXT, injecter->pid, rela_addr, 0);
+            return library_absolute_address(injecter->inject_lib, value);
+        case R_MIPS_NONE: break;
+        default: break;
+    }
+
+    CONSOLE("Unsupported relocation type: %d", rela->type);
+
+    return 0;
+}
 
 static size_t relocate_value(injecter_t *injecter, elf_relocate_t *rela, size_t rela_addr) {
     switch (injecter_get_machine(injecter)) {
@@ -397,6 +435,8 @@ static size_t relocate_value(injecter_t *injecter, elf_relocate_t *rela, size_t 
             return x86_64_relocate_value(injecter, rela, rela_addr);
         case EM_ARM:
             return arm_relocate_value(injecter, rela, rela_addr);
+        case EM_MIPS:
+            return mips_relocate_value(injecter, rela, rela_addr);
         case EM_NONE:
         default:
             CONSOLE("Unsupported Architecture");

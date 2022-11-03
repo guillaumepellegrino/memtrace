@@ -16,7 +16,6 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#include "elf_main.h"
 #include "elf_file.h"
 #include "elf_sym.h"
 #include "elf_relocate.h"
@@ -62,6 +61,7 @@ static uint64_t rela_get_reloc_symindex(elf_t *elf, uint64_t reloc_info) {
 static bool rela_read(elf_t *elf, elf_file_t *rela_file, elf_file_t *symtab, elf_file_t *strtab, elf_relocate_handler_t handler, void *userdata) {
     while (!elf_file_eof(rela_file)) {
         elf_relocate_t rela;
+        rela.sh_type = sh_type_rela;
         rela.offset = elf_file_read_addr(rela_file);
         rela.info = elf_file_read_addr(rela_file);
         rela.addend = elf_file_read_addr(rela_file);
@@ -87,6 +87,7 @@ static uint64_t rel_get_reloc_symindex(elf_t *elf, uint64_t reloc_info) {
 static bool rel_read(elf_t *elf, elf_file_t *rela_file, elf_file_t *symtab, elf_file_t *strtab, elf_relocate_handler_t handler, void *userdata) {
     while (!elf_file_eof(rela_file)) {
         elf_relocate_t rela;
+        rela.sh_type = sh_type_rel;
         rela.offset = elf_file_read_addr(rela_file);
         rela.info = elf_file_read_addr(rela_file);
         rela.type = rel_get_reloc_type(elf, rela.info);
