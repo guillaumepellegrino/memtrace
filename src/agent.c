@@ -51,8 +51,10 @@ typedef struct {
     ssize_t count;
     ssize_t size;
     void **callstack;
+    void **large_callstack;
     size_t number;
     bus_connection_t *do_coredump;
+    bool do_large_callstack;
 } block_t;
 
 typedef struct {
@@ -163,6 +165,7 @@ static void blocks_maps_destroy(hashmap_t *hashmap, void *key, hashmap_iterator_
     block_t *block = container_of(it, block_t, it);
     agent->stats.block_inuse -= 1;
     free(block->callstack);
+    free(block->large_callstack);
     free(block);
 }
 
@@ -228,20 +231,24 @@ static bool agent_report(bus_t *bus, bus_connection_t *connection, bus_topic_t *
     size_t i = 0;
     size_t max = 10;
     hashmap_iterator_t *it = NULL;
+    sample_t lasthour = sample_circbuf_last_sub_first(&agent->stats.lasthour);
 
     strmap_get_fmt(options, "count", "%zu", &max);
 
     hashmap_qsort(&agent->blocks, blocks_map_compar);
     hashmap_for_each(it, &agent->blocks) {
         block_t *block = container_of(it, block_t, it);
+        void *callstack = block->large_callstack ? block->large_callstack : block->callstack;
+        size_t callstack_size = block->large_callstack ? agent->large_callstack_size : agent->callstack_size;
 
         if (max > 0 && i >= max) {
             break;
         }
 
+
         fprintf(fp, "Memory allocation context n°%zu\n", i);
         fprintf(fp, "%zd allocs, %zd bytes were not free\n", block->count, block->size);
-        libraries_backtrace_print(agent->libraries, block->callstack, agent->callstack_size, fp);
+        libraries_backtrace_print(agent->libraries, callstack, callstack_size, fp);
         fprintf(fp, "\n");
 
         i++;
@@ -252,6 +259,7 @@ static bool agent_report(bus_t *bus, bus_connection_t *connection, bus_topic_t *
         agent->stats.count_inuse, agent->stats.byte_inuse, agent->stats.block_inuse);
     fprintf(fp, "    total heap usage: %zu allocs, %zu frees, %zu bytes allocated\n",
         agent->stats.alloc_count, agent->stats.free_count, agent->stats.alloc_size);
+    fprintf(fp, "    memory leaked since last hour: %zd allocs, %zd bytes\n", lasthour.count, lasthour.bytes);
     fprintf(fp, "[cmd_done]\n");
     fflush(fp);
     hooks_unlock(lock);
@@ -279,7 +287,7 @@ static bool agent_clear(bus_t *bus, bus_connection_t *connection, bus_topic_t *t
     return true;
 }
 
-bus_connection_t *block_get_coredump_connection(block_t *block, bus_t *bus) {
+static bus_connection_t *block_get_coredump_connection(block_t *block, bus_t *bus) {
     bus_connection_t *connection = NULL;
 
     if (!block->do_coredump) {
@@ -347,7 +355,7 @@ error:
     return true;
 }
 
-void agent_stats_lasthour_handler(evlp_handler_t *self, int events) {
+static void agent_stats_lasthour_handler(evlp_handler_t *self, int events) {
     agent_t *agent = container_of(self, agent_t, stats_lasthour_handler);
     uint64_t timestamp = 0;
     sample_t value = {
@@ -366,6 +374,41 @@ void agent_stats_lasthour_handler(evlp_handler_t *self, int events) {
     TRACE_WARNING("Stats LastHour Update");
     sample_circbuf_append(&agent->stats.lasthour, value);
 
+    hooks_unlock(lock);
+}
+
+/**
+ * Mark the first 10x blocks for a Large Callstack.
+ */
+static void agent_mark_blocks_for_large_callstack(agent_t *agent) {
+    size_t i = 0;
+    hashmap_iterator_t *it = NULL;
+
+    hashmap_qsort(&agent->blocks, blocks_map_compar);
+    hashmap_for_each(it, &agent->blocks) {
+        block_t *block = container_of(it, block_t, it);
+
+        if (i >= 10) {
+            break;
+        }
+
+        block->do_large_callstack = true;
+        i++;
+    }
+}
+
+static void agent_periodic_job_handler(evlp_handler_t *self, int events) {
+    agent_t *agent = container_of(self, agent_t, periodic_job_handler);
+    uint64_t timestamp = 0;
+    bool lock = false;
+
+    if (read(agent->periodic_job_timerfd, &timestamp, sizeof(timestamp)) < 0) {
+        TRACE_ERROR("read timer error: %m");
+        return;
+    }
+
+    lock = hooks_lock();
+    agent_mark_blocks_for_large_callstack(agent);
     hooks_unlock(lock);
 }
 
@@ -404,6 +447,7 @@ bool agent_initialize(agent_t *agent) {
         .destroy    = blocks_maps_destroy,
     };
     agent->callstack_size = 10;
+    agent->large_callstack_size = 50;
     hashmap_initialize(&agent->allocations, &allocations_maps_cfg);
     hashmap_initialize(&agent->blocks, &blocks_maps_cfg);
 
@@ -435,14 +479,30 @@ bool agent_initialize(agent_t *agent) {
     agent->coredump_topic.name = "coredump";
     agent->coredump_topic.read = agent_coredump;
     bus_register_topic(&agent->bus, &agent->coredump_topic);
+
     agent->stats_lasthour_handler.fn = agent_stats_lasthour_handler;
     assert((agent->stats_lasthour_timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC)) >= 0);
     assert(evlp_add_handler(agent->evlp, &agent->stats_lasthour_handler, agent->stats_lasthour_timerfd, EPOLLIN));
-    struct itimerspec itimer = {
-        .it_interval.tv_sec = 60*60/10,
-        .it_value.tv_sec = 60*60/10,
-    };
-    timerfd_settime(agent->stats_lasthour_timerfd, 0, &itimer, NULL);
+    {
+        struct itimerspec itimer = {
+            .it_interval.tv_sec = 60*60/10,
+            .it_value.tv_sec = 60*60/10,
+        };
+        timerfd_settime(agent->stats_lasthour_timerfd, 0, &itimer, NULL);
+    }
+
+    agent->periodic_job_handler.fn = agent_periodic_job_handler;
+    assert((agent->periodic_job_timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC)) >= 0);
+    assert(evlp_add_handler(agent->evlp, &agent->periodic_job_handler, agent->periodic_job_timerfd, EPOLLIN));
+    {
+        struct itimerspec itimer = {
+            .it_interval.tv_sec = 5,
+            .it_value.tv_sec = 5,
+        };
+        timerfd_settime(agent->periodic_job_timerfd, 0, &itimer, NULL);
+    }
+
+
     return true;
 }
 
@@ -497,7 +557,6 @@ void agent_alloc(agent_t *agent, cpu_registers_t *regs, size_t size, void *newpt
     assert((callstack = calloc(agent->callstack_size, sizeof(size_t))));
     libraries_backtrace(agent->libraries, regs, callstack, agent->callstack_size);
 
-
     //if (agent->dump_all) {
     //    libraries_backtrace_print(agent->libraries, callstack, agent->callstack_size, stdout);
     //}
@@ -508,6 +567,11 @@ void agent_alloc(agent_t *agent, cpu_registers_t *regs, size_t size, void *newpt
 
         if ((connection = block_get_coredump_connection(block, &agent->bus))) {
             agent_notify_do_coredump(block, connection, regs);
+        }
+
+        if (block->do_large_callstack && !block->large_callstack) {
+            assert((block->large_callstack = calloc(agent->large_callstack_size, sizeof(size_t))));
+            libraries_backtrace(agent->libraries, regs, block->large_callstack, agent->large_callstack_size);
         }
     }
     else {

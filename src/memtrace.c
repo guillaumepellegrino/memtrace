@@ -608,7 +608,7 @@ static bool is_cross_compiled() {
     return strlen(SYSROOT) > 1;
 }
 
-int local_memtrace_server(bus_t *bus) {
+static int local_memtrace_server(bus_t *bus) {
     char socketarg[32];
     int pid = -1;
     int sockets[2] = {-1, -1};
@@ -644,11 +644,12 @@ static void help() {
     CONSOLE("Usage: memtrace [OPTION]..");
     CONSOLE("A cross-debugging tool to trace memory allocations for debugging memory leaks");
     CONSOLE("Options: ");
-    CONSOLE("  -L, --library=PATH   Library to inject in target process");
+    CONSOLE("  -p, --pid=VALUE      PID of the target process. MANDATORY.");
+    CONSOLE("  -L, --library=PATH   Library to inject in the target process. By default, memtrace inject itself.");
     if (is_cross_compiled()) {
-        CONSOLE("  -m, --multicast ");
-        CONSOLE("  -c, --connect ");
-        CONSOLE("  -l, --listen ");
+        CONSOLE("  -m, --multicast      Auto-discover memtrace-server with multicast and connect to it");
+        CONSOLE("  -c, --connect=HOST:PORT TCP connect to memtrace-server on the specified host and port");
+        CONSOLE("  -l, --listen=HOST:PORT TCP listen on the specified host and port and wait for memtrace-server to connect");
     }
     CONSOLE("  -x, --command        Execute memtrace command and exit");
     CONSOLE("  -d, --debug          Enable debug logs");

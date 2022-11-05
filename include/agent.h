@@ -49,6 +49,7 @@ typedef struct {
     int pid;
     libraries_t *libraries;
     size_t callstack_size;
+    size_t large_callstack_size;
     hashmap_t allocations;
     hashmap_t blocks;
     stats_t stats;
@@ -62,6 +63,8 @@ typedef struct {
     bus_topic_t coredump_topic;
     evlp_handler_t stats_lasthour_handler;
     int stats_lasthour_timerfd;
+    evlp_handler_t periodic_job_handler;
+    int periodic_job_timerfd;
 } agent_t;
 
 bool agent_initialize(agent_t *agent);
