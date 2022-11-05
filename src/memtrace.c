@@ -63,25 +63,6 @@ __attribute__((aligned)) char g_buff[G_BUFF_SIZE];
 #define process_for_each_thread(tid, dir) \
     for (tid = process_first_thread(dir); tid > 0; tid = process_next_thread(dir))
 
-static const char *toolchain_path() {
-    static char toolchain[256];
-    char *sep = NULL;
-
-    snprintf(toolchain, sizeof(toolchain), "%s", COMPILER);
-
-    if ((sep = strrchr(toolchain, '/'))) {
-        sep = toolchain;
-        if ((sep = strrchr(sep, '-'))) {
-            *sep = 0;
-        }
-    }
-    else {
-        toolchain[0] = 0;
-    }
-
-    return toolchain;
-}
-
 static DIR *process_threads(int pid) {
     char task_path[128];
     DIR *threads = NULL;
@@ -333,9 +314,7 @@ static void memtrace_console_report(console_t *console, int argc, char *argv[]) 
     // Are we connected to memtrace-server ?
     if ((server = bus_first_connection(&memtrace->server))) {
         // Forward report to memtrace-server for decodding addresses to line and functions
-        strmap_add(&options, "sysroot", SYSROOT);
-        strmap_add(&options, "toolchain", toolchain_path());
-        bus_connection_write_request(server, "report", &options);
+        bus_connection_write_request(server, "report", NULL);
         while (bus_connection_readline(ipc, line, sizeof(line))) {
             bus_connection_printf(server, "%s", line);
             if (!strcmp(line, "[cmd_done]\n")) {

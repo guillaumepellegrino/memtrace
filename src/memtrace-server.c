@@ -147,80 +147,130 @@ static char *target2host_path(const char *sysroot, strlist_t *files, strlist_t *
     return NULL;
 }
 
-static bool server_report_parseline(memtrace_server_t *server, bus_connection_t *connection, addr2line_t *addr2line, char *line, const char *sysroot) {
-    const char topic[] = "[addr]";
+static char *get_topic(const char *line, const char *topic) {
+    size_t topiclen = strlen(topic);
+    char *value = NULL;
+    char *sep = NULL;
+
+    if (!strncmp(line, topic, topiclen)) {
+        value = strdup(line + topiclen);
+        if ((sep = strchr(value, '\n'))) {
+            *sep = 0;
+        }
+    }
+
+    return value;
+}
+
+static bool server_report_parse_addr(memtrace_server_t *server, FILE *out, addr2line_t *addr2line, char *addrstr, const char *sysroot) {
     char *sep = NULL;
     const char *tgtpath = NULL;
     char *hostpath = NULL;
     size_t address = 0;
 
-    if (strncmp(line, topic, strlen(topic)) != 0) {
-        bus_connection_printf(connection, "%s", line);
-        goto exit;
-    }
-    if ((sep = strstr(line, " | "))) {
-        *sep = 0;
-    }
-
-    tgtpath = line + strlen(topic);
-    if ((sep = strchr(line, '+'))) {
+    tgtpath = addrstr;
+    if ((sep = strchr(addrstr, '+'))) {
         *sep = 0;
         sscanf(sep+1, "0x%zx", &address);
     }
 
     if (!(hostpath = target2host_path(sysroot, &server->files, &server->directories, &server->acls, tgtpath))) {
         TRACE_ERROR("%s: not found", tgtpath);
-        bus_connection_printf(connection, "%s", line);
+        fprintf(out, "%s", addrstr);
         goto exit;
     }
-    addr2line_print(addr2line, hostpath, address, bus_connection_writer(connection));
+    addr2line_print(addr2line, hostpath, address, out);
 
 exit:
     free(hostpath);
     return true;
 }
 
-static bool server_report_cmd(bus_t *bus, bus_connection_t *connection, bus_topic_t *topic, strmap_t *options, FILE *fp) {
+static void server_parse_report(memtrace_server_t *server, FILE *in, FILE *out) {
     char line[4096];
-    memtrace_server_t *server = container_of(bus, memtrace_server_t, bus);
-    bool rt = false;
-    const char *sysroot = NULL;
-    const char *toolchain = NULL;
-    char *binary= NULL;
+    char *cmd_done = NULL;
+    char *sysroot = NULL;
+    char *toolchain = NULL;
+    char *binary = NULL;
     addr2line_t addr2line = {0};
 
-    if (!(sysroot = strmap_get(options, "sysroot"))) {
-        TRACE_ERROR("Missing sysroot option");
-        goto error;
+    while (fgets(line, sizeof(line), in)) {
+        bool show2user = true;
+        if ((cmd_done = get_topic(line, "[cmd_done]"))) {
+            break;
+        }
+        if (!sysroot) {
+            if ((sysroot = get_topic(line, "[sysroot]"))) {
+                if (!host_path_is_allowed(sysroot, &server->acls)) {
+                    TRACE_ERROR("sysroot path '%s' is not allowed by ACLs", sysroot);
+                    free(sysroot);
+                    sysroot = NULL;
+                }
+                show2user = false;
+            }
+        }
+        if (!toolchain) {
+            if ((toolchain = get_topic(line, "[toolchain]"))) {
+                if (!host_path_is_allowed(toolchain, &server->acls)) {
+                    TRACE_ERROR("toolchain path '%s' is not allowed by ACLs", toolchain);
+                    free(toolchain);
+                    toolchain = NULL;
+                }
+                if (toolchain) {
+                    assert(asprintf(&binary, "%saddr2line", toolchain) > 0);
+                    addr2line_initialize(&addr2line, binary);
+                }
+                show2user = false;
+            }
+        }
+        if (sysroot && toolchain) {
+            char *addr = NULL;
+            if ((addr = get_topic(line, "[addr]"))) {
+                server_report_parse_addr(server, out, &addr2line, addr, sysroot);
+                free(addr);
+                show2user = false;
+            }
+        }
+        if (show2user) {
+            fputs(line, out);
+        }
     }
-    if (!(toolchain = strmap_get(options, "toolchain"))) {
-        TRACE_ERROR("Missing toolchain option");
-        goto error;
-    }
-    assert(asprintf(&binary, "%saddr2line", toolchain) > 0);
-    addr2line_initialize(&addr2line, binary);
-    if (!host_path_is_allowed(sysroot, &server->acls)) {
-        TRACE_ERROR("sysroot path '%s' is not allowed by ACLs", sysroot);
-        goto error;
-    }
-    if (!host_path_is_allowed(toolchain, &server->acls)) {
-        TRACE_ERROR("toolchain path '%s' is not allowed by ACLs", toolchain);
+
+    free(cmd_done);
+    free(sysroot);
+    free(toolchain);
+    free(binary);
+    addr2line_cleanup(&addr2line);
+}
+
+static bool server_report_cmd(bus_t *bus, bus_connection_t *connection, bus_topic_t *topic, strmap_t *options, FILE *fp) {
+    memtrace_server_t *server = container_of(bus, memtrace_server_t, bus);
+    FILE *in = bus_connection_reader(connection);
+    FILE *out = bus_connection_writer(connection);
+    server_parse_report(server, in, out);
+    fprintf(out, "[cmd_done]\n");
+    fflush(out);
+    return true;
+}
+
+static bool server_parse_offline_report(memtrace_server_t *server, const char *report_path) {
+    FILE *in = NULL;
+    bool rt = false;
+
+    in = !strcmp(report_path, "-") ? stdin : fopen(report_path, "r");
+    if (!in) {
+        TRACE_ERROR("Failed to open %s: %m", report_path);
         goto error;
     }
 
-    while (bus_connection_readline(connection, line, sizeof(line))) {
-        server_report_parseline(server, connection, &addr2line, line, sysroot);
-        if (!strcmp(line, "[cmd_done]\n")) {
-            break;
-        }
-    }
-    bus_connection_printf(connection, "[cmd_done]", line);
-    bus_connection_flush(connection);
+    server_parse_report(server, in, stdout);
+    fflush(stdout);
     rt = true;
 
 error:
-    addr2line_cleanup(&addr2line);
-    free(binary);
+    if (in && in != stdin) {
+        fclose(in);
+    }
     return rt;
 }
 
@@ -234,6 +284,7 @@ static void help() {
     CONSOLE("   -l, --listen=HOST[:PORT]    Listen on the specified HOST");
     CONSOLE("   -p, --port=VALUE            Use the specified port");
     CONSOLE("   -a, --acl=PATH              Add this directory to ACL");
+    CONSOLE("   -r, --report=PATH           Decode symbols from offline report");
     CONSOLE("   -d, --debug                 Enable debug logs");
     CONSOLE("   -h, --help                  Display this help");
     CONSOLE("   -V, --version               Display the version");
@@ -244,12 +295,13 @@ static void version() {
 }
 
 int main(int argc, char *argv[]) {
-    const char *short_options = "+c:l:a:s:dhv";
+    const char *short_options = "+c:l:a:s:r:dhv";
     const struct option long_options[] = {
         {"connect",     required_argument,  0, 'c'},
         {"listen",      required_argument,  0, 'l'},
         {"acl",         required_argument,  0, 'a'},
         {"socket",      required_argument,  0, 's'},
+        {"report",      required_argument,  0, 's'},
         {"debug",       no_argument,        0, 'd'},
         {"help",        no_argument,        0, 'h'},
         {"version",     no_argument,        0, 'v'},
@@ -261,6 +313,7 @@ int main(int argc, char *argv[]) {
     const char *port = "3002";
     bool client = false;
     int ipc_socket = -1;
+    const char *report_path = NULL;
     memtrace_server_t server = {0};
 
     strlist_insert(&server.directories, "");
@@ -290,6 +343,9 @@ int main(int argc, char *argv[]) {
                 break;
             case 's':
                 ipc_socket = atoi(optarg);
+                break;
+            case 'r':
+                report_path = optarg;
                 break;
             case 'd':
                 log_more_verbose();
@@ -328,6 +384,11 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    if (report_path) {
+        server_parse_offline_report(&server, report_path);
+        goto exit;
+    }
+
     server.evlp = evlp_create();
     bus_initialize(&server.bus, server.evlp, "memtrace-server", "memtrace");
 
@@ -354,11 +415,14 @@ int main(int argc, char *argv[]) {
     }
     evlp_main(server.evlp);
 
+exit:
     strlist_cleanup(&server.directories);
     strlist_cleanup(&server.files);
     strlist_cleanup(&server.acls);
     bus_cleanup(&server.bus);
-    evlp_destroy(server.evlp);
+    if(server.evlp) {
+        evlp_destroy(server.evlp);
+    }
 
     return 0;
 }

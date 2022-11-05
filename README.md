@@ -165,7 +165,6 @@ HEAP SUMMARY Wed Feb 23 16:32:08 2022
 - GDB callstack ?
 - Add MIPS support
 - Send coredump notification in a dedicated socket to avoid concurrency issues. (One socket for request, one socket for notification).
-- Add the possibility for memtrack-server to analyze offline report
 - Improve this README
 - Improve console support (move cursor)
 - Add support for IFUNC

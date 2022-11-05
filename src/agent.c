@@ -95,6 +95,25 @@ static inline sample_t sample_circbuf_last_sub_first(sample_circbuf_t *circbuf) 
     return last;
 }
 
+static const char *toolchain_path() {
+    static char toolchain[256];
+    char *sep = NULL;
+
+    snprintf(toolchain, sizeof(toolchain), "%s", COMPILER);
+
+    if ((sep = strrchr(toolchain, '/'))) {
+        sep = toolchain;
+        if ((sep = strrchr(sep, '-'))) {
+            *sep = 0;
+        }
+    }
+    else {
+        toolchain[0] = 0;
+    }
+
+    return toolchain;
+}
+
 static uint32_t allocations_maps_hash(hashmap_t *hashmap, void *key) {
     size_t addr = (size_t) key;
     return addr >> 2;
@@ -234,6 +253,9 @@ static bool agent_report(bus_t *bus, bus_connection_t *connection, bus_topic_t *
     sample_t lasthour = sample_circbuf_last_sub_first(&agent->stats.lasthour);
 
     strmap_get_fmt(options, "count", "%zu", &max);
+
+    fprintf(fp, "[sysroot]%s\n", SYSROOT);
+    fprintf(fp, "[toolchain]%s\n", toolchain_path());
 
     hashmap_qsort(&agent->blocks, blocks_map_compar);
     hashmap_for_each(it, &agent->blocks) {
