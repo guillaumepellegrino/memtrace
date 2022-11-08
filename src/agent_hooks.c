@@ -147,14 +147,12 @@ void *realloc_hook(void *ptr, size_t size) {
 
     try_initialize();
     locked = hooks_lock();
+    if (locked && ptr) {
+        agent_dealloc(&g_agent, ptr);
+    }
     newptr = realloc(ptr, size);
-    if (locked) {
-        if (ptr) {
-            agent_dealloc(&g_agent, ptr);
-        }
-        if (newptr) {
-            agent_alloc(&g_agent, &regs, size, newptr);
-        }
+    if (locked && newptr) {
+        agent_alloc(&g_agent, &regs, size, newptr);
     }
     hooks_unlock(locked);
 
@@ -188,14 +186,12 @@ void *reallocarray_hook(void *ptr, size_t nmemb, size_t size) {
     try_initialize();
     locked = hooks_lock();
     // reallocarray() may not exist in old c library
+    if (locked && ptr) {
+        agent_dealloc(&g_agent, ptr);
+    }
     newptr = realloc(ptr, nmemb * size);
-    if (locked) {
-        if (ptr) {
-            agent_dealloc(&g_agent, ptr);
-        }
-        if (newptr) {
-            agent_alloc(&g_agent, &regs, (nmemb*size), newptr);
-        }
+    if (locked && newptr) {
+        agent_alloc(&g_agent, &regs, (nmemb*size), newptr);
     }
     hooks_unlock(locked);
 
