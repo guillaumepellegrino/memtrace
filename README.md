@@ -161,6 +161,7 @@ HEAP SUMMARY Wed Feb 23 16:32:08 2022
 
 
 ## 5. TODO
+- memtrace hang when can not connect to agent ipc socket
 - Should we load pthread library ?
 - GDB callstack ?
 - Add MIPS support

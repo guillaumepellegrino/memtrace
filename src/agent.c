@@ -16,8 +16,6 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#define _GNU_SOURCE
-#define _DEFAULT_SOURCE
 #include <stddef.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -104,7 +102,7 @@ static const char *toolchain_path() {
     if ((sep = strrchr(toolchain, '/'))) {
         sep = toolchain;
         if ((sep = strrchr(sep, '-'))) {
-            *sep = 0;
+            sep[1] = 0;
         }
     }
     else {

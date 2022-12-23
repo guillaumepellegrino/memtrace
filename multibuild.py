@@ -14,7 +14,7 @@ def main():
         for key in document:
             toolchain = document[key]
             print("Build for {} with {}".format(key, toolchain))
-            os.system("BUILDTGT=build-{} CC={} make all -j13".format(key, toolchain))
+            os.system("O=build-{} CC={} make all -j13".format(key, toolchain))
 
 if __name__ == "__main__":
     main()

@@ -1,15 +1,18 @@
 MACHINE?=$(shell $(CC) -dumpmachine)
 BUILDTGT?=build-$(MACHINE)
-BUILD?=$(BUILDTGT)
-CC?=cc
+O?=$(BUILDTGT)
+CROSS_COMPILE?=
+CC?=$(CROSS_COMPILE)cc
 CFLAGS+=-Wall -Wextra -Wno-unused-parameter -Werror -g -O2 -fPIC -pthread \
+	-D_DEFAULT_SOURCE -D_GNU_SOURCE \
 	-Iinclude \
 	-DVERSION=\"$(shell git describe --all)\" \
 	-DSYSROOT=\"$(shell $(CC) -print-sysroot)\" \
 	-DCOMPILER=\"$(CC)\"
 LDFLAGS+=-pthread
+DESTDIR?=/
 
-TARGETS=$(addprefix $(BUILD)/,memtrace dummy)
+TARGETS=$(addprefix $(O)/,memtrace libmemtrace-agent.so dummy)
 
 ifneq (,$(findstring x86_64,$(MACHINE)))
 ARCH_OBJECT=x86_64.o
@@ -27,26 +30,34 @@ endif
 
 all: $(TARGETS)
 
-$(BUILD)/:
-	mkdir -p $(BUILD)/
-
-$(BUILD)/memtrace: $(addprefix $(BUILD)/,memtrace.o agent.o agent_hooks.o evlp.o bus.o net.o strlist.o strmap.o inject.o syscall.o ptrace.o hashmap.o libraries.o log.o elf.o elf_file.o elf_sym.o elf_relocate.o console.o coredump.o libcext.o $(ARCH_OBJECT))
-	$(CC) -o $(@) $(^) $(LDFLAGS)
-
 install:
+	install -m 755 -d $(DESTDIR)/usr/bin
+	install -m 755 -d $(DESTDIR)/usr/lib
+	install -m 755 $(O)/memtrace $(DESTDIR)/usr/bin
+	install -m 755 $(O)/dummy $(DESTDIR)/usr/bin
+	install -m 755 $(O)/libmemtrace-agent.so $(DESTDIR)/usr/lib
 
-$(BUILD)/dummy: $(BUILD)/dummy.o
+$(O)/:
+	mkdir -p $(O)/
+
+$(O)/memtrace: $(addprefix $(O)/,memtrace.o evlp.o bus.o net.o strlist.o strmap.o inject.o syscall.o ptrace.o hashmap.o libraries.o log.o elf.o elf_file.o elf_sym.o elf_relocate.o console.o coredump.o libcext.o $(ARCH_OBJECT))
 	$(CC) -o $(@) $(^) $(LDFLAGS)
 
--include $(willdcard $(BUILD)/*.d)
+$(O)/libmemtrace-agent.so: $(addprefix $(O)/,agent.o agent_hooks.o evlp.o bus.o net.o strlist.o strmap.o inject.o syscall.o ptrace.o hashmap.o libraries.o log.o elf.o elf_file.o elf_sym.o elf_relocate.o console.o libcext.o $(ARCH_OBJECT))
+	$(CC) -shared -o $(@) $(^) $(LDFLAGS)
 
-$(BUILD)/%.o: src/%.c | $(BUILD)/
+$(O)/dummy: $(O)/dummy.o
+	$(CC) -o $(@) $(^) $(LDFLAGS)
+
+-include $(willdcard $(O)/*.d)
+
+$(O)/%.o: src/%.c | $(O)/
 	$(CC) -c -MD $(CFLAGS) $(<) -o $(@)
 
-$(BUILD)/libcext.o: src/libcext.c | $(BUILD)/
+$(O)/libcext.o: src/libcext.c | $(O)/
 	$(CC) -c -MD $(CFLAGS) -fno-tree-pre $(<) -o $(@)
 
 clean:
-	rm -rf $(BUILD)/
+	rm -rf $(O)/
 
 .PHONY: all clean

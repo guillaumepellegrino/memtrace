@@ -16,7 +16,6 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#define _GNU_SOURCE
 #include <stddef.h>
 #include <stdbool.h>
 #include <stdint.h>

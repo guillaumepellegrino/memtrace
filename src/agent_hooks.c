@@ -16,8 +16,6 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#define _GNU_SOURCE
-#define _DEFAULT_SOURCE
 #include <stddef.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -37,6 +35,7 @@
 #define stack_pointer_address() (size_t) __builtin_frame_address(0)
 #define return_address()        (size_t) __builtin_return_address(0)
 
+__attribute__((aligned)) char g_buff[G_BUFF_SIZE];
 static pthread_mutex_t init_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t global_lock = PTHREAD_MUTEX_INITIALIZER;
 static bool global_lock_init = false;
