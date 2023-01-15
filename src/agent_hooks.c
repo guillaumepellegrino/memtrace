@@ -65,6 +65,7 @@ static void try_initialize() {
     pthread_mutex_unlock(&init_lock);
 
     // initialize agent
+    fprintf(stderr, "[memtrace-agent] Initialize\n");
     if (agent_initialize(&g_agent)) {
         atexit(cleanup);
     }

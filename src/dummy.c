@@ -82,13 +82,14 @@ int main(int argc, char *argv[]) {
         fflush(stdout);
         */
 
-        //char *toto = alloc_toto();
-        //printf("strdup() -> %s (%p)\n", toto, toto);
-        time_t now = time(NULL);
-        printf("sleep() IN @%s", asctime(localtime(&now)));
+        char *toto = alloc_toto();
+        printf("strdup() -> %s (%p)\n", toto, toto);
+        free(toto);
+        //time_t now = time(NULL);
+        //printf("sleep() IN @%s", asctime(localtime(&now)));
         sleep(1);
-        now = time(NULL);
-        printf("sleep() OUT @%s", asctime(localtime(&now)));
+        //now = time(NULL);
+        //printf("sleep() OUT @%s", asctime(localtime(&now)));
         loop++;
     }
 

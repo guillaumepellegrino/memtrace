@@ -60,6 +60,7 @@ struct _arch {
     bool (*cpu_registers_get)(cpu_registers_t *regs, int pid);
     bool (*cpu_registers_set)(cpu_registers_t *regs, int pid);
     size_t *(*cpu_register_reference)(cpu_registers_t *regs, cpu_register_name_t name);
+    const size_t syscall_size;
 };
 extern arch_t arch;
 

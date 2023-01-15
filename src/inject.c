@@ -493,6 +493,7 @@ bool injecter_load_library(injecter_t *injecter, const char *libname) {
     elf_t *elf = NULL;
     const program_header_t *ph = NULL;
     FILE *fp = NULL;
+    syscall_ctx_t syscall = {0};
 
     assert(injecter);
     assert(libname);
@@ -507,30 +508,37 @@ bool injecter_load_library(injecter_t *injecter, const char *libname) {
         return false;
     }
 
+    snprintf(memfile, sizeof(memfile), "/proc/%d/mem", injecter->pid);
+    if ((memfd = open(memfile, O_RDWR)) < 0) {
+        TRACE_ERROR("Failed to open %s: %m", memfile);
+        return false;
+    }
+
     // Sanity check
     CONSOLE("Waiting for target process to perform a system call to hijack it");
-    if (!syscall_init(injecter->pid)) {
+    if (!syscall_init(&syscall, injecter->pid, memfd)) {
         TRACE_ERROR("Failed to init syscall");
         return false;
     }
-    if (syscall_getpid(injecter->pid) != injecter->pid) {
-        TRACE_ERROR("Failed to inject syscall in target process");
-        return false;
-    }
-    if (syscall_getpid(injecter->pid) != injecter->pid) {
-        TRACE_ERROR("Failed to inject syscall in target process");
-        return false;
-    }
-    if (syscall_getpid(injecter->pid) != injecter->pid) {
-        TRACE_ERROR("Failed to inject syscall in target process");
-        return false;
-    }
 
-    //CONSOLE("DEBUG ERROR");
-    //return false;
-
+    if (syscall_getpid(&syscall) != injecter->pid) {
+        TRACE_ERROR("Failed to inject syscall in target process");
+        return false;
+    }
+    if (syscall_getpid(&syscall) != injecter->pid) {
+        TRACE_ERROR("Failed to inject syscall in target process");
+        return false;
+    }
+    if (syscall_getpid(&syscall) != injecter->pid) {
+        TRACE_ERROR("Failed to inject syscall in target process");
+        return false;
+    }
+/*
+    CONSOLE("DEBUG ERROR");
+    return false;
+*/
     // Allocate memory for writing string
-    injecter->straddr = syscall_mmap(injecter->pid,
+    injecter->straddr = syscall_mmap(&syscall,
         0, 4096, PROT_READ, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
 
     if (!injecter->straddr) {
@@ -538,12 +546,6 @@ bool injecter_load_library(injecter_t *injecter, const char *libname) {
         return false;
     }
     CONSOLE("Memory mapped at %p to store library name", injecter->straddr);
-
-    snprintf(memfile, sizeof(memfile), "/proc/%d/mem", injecter->pid);
-    if ((memfd = open(memfile, O_RDWR)) < 0) {
-        TRACE_ERROR("Failed to open %s: %m", memfile);
-        return false;
-    }
 
     // Write library name in target memory
     if (lseek64(memfd, (size_t)injecter->straddr, SEEK_SET) < 0) {
@@ -554,7 +556,7 @@ bool injecter_load_library(injecter_t *injecter, const char *libname) {
         TRACE_ERROR("Failed write(memfd): %m");
         return false;
     }
-    int fd = syscall_open(injecter->pid, injecter->straddr, O_RDONLY, 0);
+    int fd = syscall_open(&syscall, injecter->straddr, O_RDONLY, 0);
     if (fd < 0) {
         TRACE_ERROR("Failed to open %s inside pid %d", injecter->inject_libname, injecter->pid);
         return false;
@@ -592,7 +594,7 @@ bool injecter_load_library(injecter_t *injecter, const char *libname) {
         size_t mapoffset = ph->p_offset - elf_pageoffset(base_addr + ph->p_vaddr);
 
         CONSOLE("Load program at 0x%zx, offset: %zx, size: %zx", mapaddr, mapoffset, mapsize);
-        if (syscall_mmap(injecter->pid,
+        if (syscall_mmap(&syscall,
             (void *) mapaddr, mapsize, prot, MAP_PRIVATE|MAP_FIXED, fd, mapoffset) != (void *) mapaddr)
         {
             TRACE_ERROR("Failed to map memory");

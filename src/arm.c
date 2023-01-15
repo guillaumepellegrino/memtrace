@@ -70,4 +70,5 @@ arch_t arch = {
     .cpu_registers_get = arm_cpu_registers_get,
     .cpu_registers_set = arm_cpu_registers_set,
     .cpu_register_reference = arm_cpu_register_reference,
+    .syscall_size = 2,
 };

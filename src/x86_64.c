@@ -45,7 +45,6 @@ static bool x86_cpu_registers_set(cpu_registers_t *regs, int pid) {
     return true;
 }
 
-
 static size_t *x86_cpu_register_reference(cpu_registers_t *registers, cpu_register_name_t name) {
     switch (name) {
         case cpu_register_pc:       return (size_t *) &registers->raw.rip;
@@ -69,4 +68,5 @@ arch_t arch = {
     .cpu_registers_get = x86_cpu_registers_get,
     .cpu_registers_set = x86_cpu_registers_set,
     .cpu_register_reference = x86_cpu_register_reference,
+    .syscall_size = 2,
 };
