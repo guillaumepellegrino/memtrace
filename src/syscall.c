@@ -30,20 +30,7 @@
 #include "arch.h"
 #include "log.h"
 
-/*
-static bool is_syscall_instr(syscall_ctx_t *ctx) {
-    cpu_registers_t regs = {0};
-    size_t pc = 0;
-    size_t instr = 0;
-
-    cpu_registers_get(&regs, ctx->pid);
-    pc = cpu_register_get(&regs, cpu_register_pc);
-    instr = ptrace(PTRACE_PEEKTEXT, ctx->pid, (pc - arch.syscall_size), 0);
-
-    return (instr & SYSCALL_MASK) == ctx->syscall_instr;
-}
-*/
-
+#if 0
 static bool memfd_read(int memfd, void *buf, size_t count, off64_t offset) {
     if (lseek64(memfd, offset, SEEK_SET) < 0) {
         TRACE_ERROR("Failed lseek %p: %m", offset);
@@ -118,23 +105,21 @@ static bool syscall_trace(syscall_ctx_t *ctx) {
 
     return true;
 }
+#endif
 
 /**
- * We do not want to interrupt the current syscall.
- * Thus, we wait for current syscall to finish.
- * After that, we should be able to insert some system calls
- * without breaking the current execution flow.
+ * We wait to enter a SYSCALL instruction for initialization.
+ * We can then alterate the registers to hijack the syscall.
  */
 bool syscall_init(syscall_ctx_t *ctx, int pid, int memfd) {
     cpu_registers_t syscall_regs = {0};
-    size_t pc = 0;
     int status = 0;
 
     ctx->pid = pid;
     ctx->memfd = memfd;
 
-    // Enter a SYSCALL instruction
-    TRACE_CPUREG(pid, "[INIT] Resume execution ...");
+    // Resume execution and wait for SYSCALL-Enter event
+    //TRACE_CPUREG(pid, "[INIT] Resume execution ...");
     if (ptrace(PTRACE_SYSCALL, pid, 0, 0) != 0) {
         TRACE_ERROR("Failed STEP: %m");
         goto error;
@@ -144,56 +129,33 @@ bool syscall_init(syscall_ctx_t *ctx, int pid, int memfd) {
         goto error;
     }
     cpu_registers_get(&syscall_regs, pid);
-    pc = cpu_register_get(&syscall_regs, cpu_register_pc);
-    pc &= ~1; // arm specific
-    if (!memfd_read(memfd, &ctx->syscall_instr, arch.syscall_size, (pc - arch.syscall_size))) {
-        TRACE_ERROR("Failed to read syscall instruction");
-        goto error;
-    }
 
-    TRACE_CPUREG(pid, "[INIT] Paused:Enter SYSCALL");
-
-    // Exit SYSCALL instruction
-    TRACE_CPUREG(pid, "[INIT] Resume execution ...");
-    if (ptrace(PTRACE_SYSCALL, pid, 0, 0) != 0) {
-        TRACE_ERROR("Failed STEP: %m");
-        goto error;
-    }
-    if (waitpid(pid, &status, 0) < 0) {
-        TRACE_ERROR("waitpid(%d) failed: %m", pid);
-        goto error;
-    }
-    TRACE_CPUREG(pid, "[INIT] Paused: Exit SYSCALL");
-
-    if (!syscall_trace(ctx)) {
-        goto error;
-    }
+    //TRACE_CPUREG(pid, "[INIT] Paused:Enter SYSCALL");
 
 error:
     return true;
 }
+
+/**
+ * When syscall_hijack() is called, we assume are already entering a SYSCALL.
+ *
+ * We can thus:
+ * - Save current registers to restore them later
+ * - Alterate the registers to hijack the syscall
+ * - Resume execution and wait for the SYSCALL-Exit event.
+ * - Rewind back from one instruction and restore the original instructions.
+ * - Resume execution and wait for the SYSCALL-Enter event.
+ */
 static bool syscall_hijack(syscall_ctx_t *ctx, size_t syscall, size_t arg1, size_t arg2, size_t arg3, size_t arg4, size_t arg5, size_t arg6, size_t *ret) {
     cpu_registers_t regs = {0};
     cpu_registers_t save_regs = {0};
     size_t pc = 0;
-    size_t save_instr = 0;
     int status = 0;
 
-    // Save current instruction and registers
-    // arm specific code to be moved in HAL.
+    // Save current registers
     cpu_registers_get(&regs, ctx->pid);
     save_regs = regs;
-    pc = cpu_register_get(&regs, cpu_register_pc) & ~1;
-    if (!memfd_read(ctx->memfd, &save_instr, arch.syscall_size, pc)) {
-        TRACE_ERROR("Failed to save currrent instruction");
-        return false;
-    }
 
-    // Set Syscall instruction
-    if (!memfd_write(ctx->memfd, &ctx->syscall_instr, arch.syscall_size, pc+2)) {
-        TRACE_ERROR("Failed to set syscall instruction");
-        return false;
-    }
     // Set registers for SYSCALL instruction
     cpu_register_set(&regs, cpu_register_syscall, syscall);
     cpu_register_set(&regs, cpu_register_arg1, arg1);
@@ -207,20 +169,8 @@ static bool syscall_hijack(syscall_ctx_t *ctx, size_t syscall, size_t arg1, size
         return false;
     }
 
-    // Enter SYSCALL
-    TRACE_CPUREG(ctx->pid, "[HIJACK] Resume execution ...");
-    if (ptrace(PTRACE_SYSCALL, ctx->pid, 0, 0) != 0) {
-        TRACE_ERROR("Failed STEP: %m");
-        return false;
-    }
-    if (waitpid(ctx->pid, &status, 0) < 0) {
-        TRACE_ERROR("waitpid(%d) failed: %m", ctx->pid);
-        return false;
-    }
-    TRACE_CPUREG(ctx->pid, "[HIJACK] Paused:Enter SYSCALL");
-
-    // Exit SYSCALL
-    TRACE_CPUREG(ctx->pid, "[HIJACK] Resume execution ...");
+    // Resume execution and wait for SYSCALL-Exit event
+    //TRACE_CPUREG(ctx->pid, "[HIJACK] Resume execution ...");
     if (ptrace(PTRACE_SYSCALL, ctx->pid, 0, 0) != 0) {
         TRACE_ERROR("Failed STEP: %m");
         return false;
@@ -233,14 +183,25 @@ static bool syscall_hijack(syscall_ctx_t *ctx, size_t syscall, size_t arg1, size
     if (ret) {
         *ret = cpu_register_get(&regs, cpu_register_retval);
     }
-    TRACE_CPUREG(ctx->pid, "[HIJACK] Paused:Exit SYSCALL");
+    //TRACE_CPUREG(ctx->pid, "[HIJACK] Paused:Exit SYSCALL");
 
-    // Restored saved instruction and registers
-    if (!memfd_write(ctx->memfd, &save_instr, arch.syscall_size, pc)) {
-        TRACE_ERROR("Failed to restore saved instruction");
+    // Rewind to syscall instruction
+    // and restore registers
+    pc = cpu_register_get(&save_regs, cpu_register_pc);
+    cpu_register_set(&save_regs, cpu_register_pc, (pc - arch.syscall_size));
+    cpu_registers_set(&save_regs, ctx->pid);
+
+    // Resume execution and wait for SYSCALL-Enter event
+    //TRACE_CPUREG(ctx->pid, "[INIT] Resume execution ...");
+    if (ptrace(PTRACE_SYSCALL, ctx->pid, 0, 0) != 0) {
+        TRACE_ERROR("Failed STEP: %m");
         return false;
     }
-    cpu_registers_set(&save_regs, ctx->pid);
+    if (waitpid(ctx->pid, &status, 0) < 0) {
+        TRACE_ERROR("waitpid(%d) failed: %m", ctx->pid);
+        return false;
+    }
+    //TRACE_CPUREG(ctx->pid, "[INIT] Paused:Enter SYSCALL");
 
     return true;
 }
