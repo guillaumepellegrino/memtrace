@@ -37,7 +37,24 @@ struct _evlp {
     bool run;
     evlp_handler_t sighandler;
     int sfd;
+    sigset_t sigmask;
 };
+
+static bool signal_exit = false;
+
+static const char *signal_name(int sig) {
+    switch (sig) {
+        case SIGINT: return "SIGINT";
+        case SIGQUIT: return "SIGQUIT";
+        case SIGTERM: return "SIGTERM";
+        default: return "Unknown signal";
+    }
+}
+
+static void signal_exit_handler(int sig) {
+    TRACE_WARNING("%s received. Exit application", signal_name(sig));
+    signal_exit = true;
+}
 
 static void evlp_signal_handler(evlp_handler_t *self, int events) {
     evlp_t *evlp = container_of(self, evlp_t, sighandler);
@@ -48,20 +65,7 @@ static void evlp_signal_handler(evlp_handler_t *self, int events) {
         goto error;
     }
 
-    switch (fdsi.ssi_signo) {
-        case SIGINT:
-            TRACE_WARNING("SIGINT received. Exit event loop");
-            break;
-        case SIGQUIT:
-            TRACE_WARNING("SIGQUIT received. Exit event loop");
-            break;
-        case SIGTERM:
-            TRACE_WARNING("SIGTERM received. Exit event loop");
-            break;
-        default:
-            TRACE_ERROR("Unknown signal %d received. Exit event loop", fdsi.ssi_signo);
-            break;
-    }
+    TRACE_WARNING("%s received. Exit event loop", signal_name(fdsi.ssi_signo));
 
 error:
     evlp->run = false;
@@ -69,19 +73,17 @@ error:
 
 evlp_t *evlp_create() {
     evlp_t *evlp = NULL;
-    sigset_t mask = {0};
 
     assert((evlp = calloc(1, sizeof(evlp_t))));
     assert((evlp->epfd = epoll_create1(EPOLL_CLOEXEC)) > 0);
 
-    sigemptyset(&mask);
-    sigaddset(&mask, SIGINT);
-    sigaddset(&mask, SIGQUIT);
-    sigaddset(&mask, SIGTERM);
+    sigemptyset(&evlp->sigmask);
+    sigaddset(&evlp->sigmask, SIGINT);
+    sigaddset(&evlp->sigmask, SIGQUIT);
+    sigaddset(&evlp->sigmask, SIGTERM);
 
-    assert(sigprocmask(SIG_BLOCK, &mask, NULL) == 0);
     evlp->sighandler.fn = evlp_signal_handler;
-    assert((evlp->sfd = signalfd(-1, &mask, SFD_CLOEXEC)) >= 0);
+    assert((evlp->sfd = signalfd(-1, &evlp->sigmask, SFD_CLOEXEC)) >= 0);
     assert(evlp_add_handler(evlp, &evlp->sighandler, evlp->sfd, EPOLLIN));
 
     return evlp;
@@ -120,19 +122,24 @@ void evlp_remove_handler(evlp_t *evlp, int fd) {
 
 bool evlp_main(evlp_t *evlp) {
     struct epoll_event event = {0};
+    sigset_t oldmask = {0};
 
     assert(evlp);
 
     evlp->run = true;
-    while (evlp->run) {
+    while (!signal_exit && evlp->run) {
         int cnt = 0;
+
+        assert(pthread_sigmask(SIG_BLOCK, &evlp->sigmask, &oldmask) == 0);
         if ((cnt = epoll_wait(evlp->epfd, &event, 1, -1)) < 0) {
             if (errno != EINTR) {
+                assert(pthread_sigmask(SIG_UNBLOCK, &oldmask, NULL) == 0);
                 TRACE_ERROR("epoll_wait() error: %m");
                 return false;
             }
         }
-        if (cnt > 0) {
+        assert(pthread_sigmask(SIG_UNBLOCK, &oldmask, NULL) == 0);
+        if (!signal_exit && cnt > 0) {
             evlp_handler_t *handler = event.data.ptr;
             handler->fn(handler, event.events);
         }
@@ -144,4 +151,14 @@ bool evlp_main(evlp_t *evlp) {
 void evlp_stop(evlp_t *evlp) {
     assert(evlp);
     evlp->run = false;
+}
+
+void evlp_exit_onsignal() {
+    const struct sigaction action = {
+        .sa_handler = signal_exit_handler,
+    };
+
+    assert(sigaction(SIGINT, &action, NULL) == 0);
+    assert(sigaction(SIGQUIT, &action, NULL) == 0);
+    assert(sigaction(SIGTERM, &action, NULL) == 0);
 }

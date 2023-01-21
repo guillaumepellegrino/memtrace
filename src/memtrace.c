@@ -155,7 +155,10 @@ static bool connect_to_memtrace_agent(bus_t *bus, int pid) {
             CONSOLE("memtrace agent is not yet ready");
             CONSOLE("Waiting for target process to perform at least one memory allocation");
         }
-        usleep(200*1000);
+        if (usleep(200*1000) != 0) {
+            TRACE_ERROR("usleep(): %m");
+            break;
+        }
     }
 
     if ((s = socket(AF_UNIX, SOCK_STREAM|SOCK_CLOEXEC, 0)) < 0) {
@@ -717,6 +720,7 @@ int main(int argc, char *argv[]) {
     }
 
     signal(SIGPIPE, SIG_IGN);
+    evlp_exit_onsignal();
 
     if (memtrace.pid <= 0) {
         CONSOLE("PID not provided");

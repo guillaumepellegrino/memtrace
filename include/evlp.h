@@ -27,5 +27,6 @@ bool evlp_add_handler(evlp_t *evlp, evlp_handler_t *handler, int fd, int events)
 void evlp_remove_handler(evlp_t *evlp, int fd);
 bool evlp_main(evlp_t *evlp);
 void evlp_stop(evlp_t *evlp);
+void evlp_exit_onsignal();
 
 #endif

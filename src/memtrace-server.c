@@ -362,6 +362,7 @@ int main(int argc, char *argv[]) {
     }
 
     signal(SIGPIPE, SIG_IGN);
+    evlp_exit_onsignal();
     log_set_header("[memtrace-server]");
 
     for (i = optind; i < argc; i++) {
