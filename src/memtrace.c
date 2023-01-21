@@ -657,11 +657,10 @@ int main(int argc, char *argv[]) {
         {"version",     no_argument,        0, 'v'},
         {0},
     };
-    char exe[256] = {0};
     int rt = 1;
     int opt = -1;
     bool do_coredump = false;
-    const char *libname = exe;
+    const char *libname = "/usr/lib/libmemtrace-agent.so";
     const char *hostname = NULL;
     const char *port = "3002";
     bool client = false;
@@ -672,11 +671,6 @@ int main(int argc, char *argv[]) {
         .monitor_handler = {.fn = monitor_handler},
         .pid = -1,
     };
-
-    if (readlink("/proc/self/exe", exe, sizeof(exe)) < 0) {
-        TRACE_ERROR("readlink error: %m");
-        goto error;
-    }
 
     while ((opt = getopt_long(argc, argv, short_options, long_options, NULL)) != -1) {
         switch (opt) {
