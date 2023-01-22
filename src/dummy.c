@@ -68,19 +68,22 @@ int main(int argc, char *argv[]) {
     signal(SIGINT, sigint_handler);
     signal(SIGTERM, sigint_handler);
 
+    printf("main() is @%p\n", (void *)main);
+    printf("alloc_toto() is @%p\n", (void *)alloc_toto);
+    printf("strdup() is @%p\n", (void *)strdup);
+    printf("malloc() is @%p\n", (void *)malloc);
+
     while (!exit_loop) {
-        /*
         int *num = calloc(1, sizeof(num));
         if (num) {
             *num = getmagicnumber(loop);
-            //printf("magic number = %d (%p)\n", *num, num);
+            printf("magic number = %d (%p)\n", *num, num);
             free(num);
         }
         else {
             printf("num is NULL\n");
         }
         fflush(stdout);
-        */
 
         char *toto = alloc_toto();
         printf("strdup() -> %s (%p)\n", toto, toto);

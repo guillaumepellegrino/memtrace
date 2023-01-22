@@ -464,6 +464,7 @@ elf_file_t *library_get_elf_section(library_t *library, library_section_t sectio
     };
 
     if (section >= library_section_end) {
+        TRACE_ERROR("Invalid section %d", section);
         return NULL;
     }
 

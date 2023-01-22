@@ -40,6 +40,7 @@
 #include "libraries.h"
 #include "console.h"
 #include "coredump.h"
+#include "elf_main.h"
 #include "arch.h"
 #include "log.h"
 
@@ -621,6 +622,17 @@ static int local_memtrace_server(bus_t *bus) {
     return -1;
 }
 
+static int elf_dump(const char *name) {
+    elf_t *elf = elf_open(name);
+    if (!elf) {
+        TRACE_ERROR("Failed to open %s", name);
+        return 1;
+    }
+    elf_print(elf);
+    elf_close(elf);
+    return 0;
+}
+
 static void help() {
     CONSOLE("Usage: memtrace [OPTION]..");
     CONSOLE("A cross-debugging tool to trace memory allocations for debugging memory leaks");
@@ -643,7 +655,7 @@ static void version() {
 }
 
 int main(int argc, char *argv[]) {
-    const char *short_options = "+p:L:Cmc:l:x:dhv";
+    const char *short_options = "+p:L:Cmc:l:x:e:dhv";
     const struct option long_options[] = {
         {"pid",         required_argument,  0, 'p'},
         {"library",     required_argument,  0, 'L'},
@@ -652,6 +664,7 @@ int main(int argc, char *argv[]) {
         {"connect",     required_argument,  0, 'c'},
         {"listen",      required_argument,  0, 'l'},
         {"command",     required_argument,  0, 'x'},
+        {"elfdump",     required_argument,  0, 'e'},
         {"debug",       no_argument,        0, 'd'},
         {"help",        no_argument,        0, 'h'},
         {"version",     no_argument,        0, 'v'},
@@ -701,6 +714,8 @@ int main(int argc, char *argv[]) {
             case 'd':
                 log_more_verbose();
                 break;
+            case 'e':
+                return elf_dump(optarg);
             case 'h':
                 help();
                 goto error;
