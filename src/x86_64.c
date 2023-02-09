@@ -68,5 +68,5 @@ arch_t arch = {
     .cpu_registers_get = x86_cpu_registers_get,
     .cpu_registers_set = x86_cpu_registers_set,
     .cpu_register_reference = x86_cpu_register_reference,
-    .syscall_size = 2,
+    .syscall_size = 1,
 };
