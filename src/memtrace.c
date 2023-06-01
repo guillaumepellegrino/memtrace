@@ -25,6 +25,7 @@
 #include <getopt.h>
 #include <fcntl.h>
 #include <dirent.h>
+#include <libgen.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/ptrace.h>
@@ -58,6 +59,7 @@ typedef struct {
     char *coredump_path;
 } memtrace_t;
 
+static const char *default_lib =  "/usr/lib/libmemtrace-agent.so";
 __attribute__((aligned)) char g_buff[G_BUFF_SIZE];
 
 #define process_for_each_thread(tid, dir) \
@@ -633,6 +635,38 @@ static int elf_dump(const char *name) {
     return 0;
 }
 
+// Find where is located libmemtrace-agent.so
+static char *find_libmemtrace_agent() {
+    struct stat stbuf;
+    char *buff = NULL;
+
+    // Check default library
+    CONSOLE("Try to find %s", default_lib);
+    if (stat(default_lib, &stbuf) == 0) {
+        return strdup(default_lib);
+    }
+
+    // Check executable directory
+    if (readlink("/proc/self/exe", g_buff, sizeof(g_buff)) > 0) {
+        assert(asprintf(&buff, "%s/libmemtrace-agent.so", dirname(g_buff)) > 0);
+        CONSOLE("Try to find %s", buff);
+        if (stat(buff, &stbuf) == 0) {
+            return buff;
+        }
+    }
+
+    // Check current dir
+    if (getcwd(g_buff, sizeof(g_buff))) {
+        assert(asprintf(&buff, "%s/libmemtrace-agent.so", g_buff) > 0);
+        CONSOLE("Try to find %s", buff);
+        if (stat(buff, &stbuf) == 0) {
+            return buff;
+        }
+    }
+
+    return NULL;
+}
+
 static void help() {
     CONSOLE("Usage: memtrace [OPTION]..");
     CONSOLE("A cross-debugging tool to trace memory allocations for debugging memory leaks");
@@ -673,7 +707,7 @@ int main(int argc, char *argv[]) {
     int rt = 1;
     int opt = -1;
     bool do_coredump = false;
-    const char *libname = "/usr/lib/libmemtrace-agent.so";
+    char *libname = NULL;
     const char *hostname = NULL;
     const char *port = "3002";
     bool client = false;
@@ -685,13 +719,14 @@ int main(int argc, char *argv[]) {
         .pid = -1,
     };
 
+
     while ((opt = getopt_long(argc, argv, short_options, long_options, NULL)) != -1) {
         switch (opt) {
             case 'p':
                 memtrace.pid = atoi(optarg);
                 break;
             case 'L':
-                libname = optarg;
+                libname = strdup(optarg);
                 break;
             case 'C':
                 do_coredump = true;
@@ -736,11 +771,15 @@ int main(int argc, char *argv[]) {
         help();
         goto error;
     }
+
     if (!libname) {
-        CONSOLE("Library name not provided");
-        help();
+        libname = find_libmemtrace_agent();
+    }
+    if (!libname) {
+        CONSOLE("Could not find memtrace agent");
         goto error;
     }
+    CONSOLE("Memtrace agent is %s", libname);
     assert(asprintf(&memtrace.coredump_path, "core.%d", memtrace.pid) > 0);
     if (do_coredump) {
         memtrace_coredump(memtrace.coredump_path, memtrace.pid, NULL);
@@ -835,6 +874,7 @@ int main(int argc, char *argv[]) {
     rt = 0;
 
 error:
+    free(libname);
     free(memtrace.coredump_path);
     close(memtrace.monitorfd);
     strlist_cleanup(&memtrace.commands);
