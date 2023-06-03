@@ -224,12 +224,13 @@ static void ipc_socket_close(int ipc) {
     unlink(bindaddr.sun_path);
 }
 
-static bool agent_status(bus_t *bus, bus_connection_t *connection, bus_topic_t *topic, strmap_t *options, FILE *fp) {
-    bool lock = hooks_lock();
-    agent_t *agent = container_of(topic, agent_t, status_topic);
+static void agent_status_unlocked(agent_t *agent, FILE *fp) {
+    char date[30] = {0};
     sample_t lasthour = sample_circbuf_last_sub_first(&agent->stats.lasthour);
-    //time_t now = time(NULL);
-    fprintf(fp, "HEAP SUMMARY\n"/*, asctime(localtime(&now))*/);
+    time_t now = time(NULL);
+    asctime_r(localtime(&now), date);
+
+    fprintf(fp, "HEAP SUMMARY %s\n", date);
     fprintf(fp, "    in use: %zu allocs, %zu bytes in %zu contexts\n",
         agent->stats.count_inuse, agent->stats.byte_inuse, agent->stats.block_inuse);
     fprintf(fp, "    total heap usage: %zu allocs, %zu frees, %zu bytes allocated\n",
@@ -237,8 +238,13 @@ static bool agent_status(bus_t *bus, bus_connection_t *connection, bus_topic_t *
     fprintf(fp, "    memory leaked since last hour: %zd allocs, %zd bytes\n", lasthour.count, lasthour.bytes);
     fprintf(fp, "[cmd_done]\n");
     fflush(fp);
-    hooks_unlock(lock);
+}
 
+static bool agent_status(bus_t *bus, bus_connection_t *connection, bus_topic_t *topic, strmap_t *options, FILE *fp) {
+    bool lock = hooks_lock();
+    agent_t *agent = container_of(topic, agent_t, status_topic);
+    agent_status_unlocked(agent, fp);
+    hooks_unlock(lock);
     return true;
 }
 
@@ -248,7 +254,6 @@ static bool agent_report(bus_t *bus, bus_connection_t *connection, bus_topic_t *
     size_t i = 0;
     size_t max = 10;
     hashmap_iterator_t *it = NULL;
-    sample_t lasthour = sample_circbuf_last_sub_first(&agent->stats.lasthour);
 
     strmap_get_fmt(options, "count", "%zu", &max);
 
@@ -274,14 +279,7 @@ static bool agent_report(bus_t *bus, bus_connection_t *connection, bus_topic_t *
         i++;
     }
 
-    fprintf(fp, "HEAP SUMMARY\n"/*, asctime(localtime(&now))*/);
-    fprintf(fp, "    in use: %zu allocs, %zu bytes in %zu contexts\n",
-        agent->stats.count_inuse, agent->stats.byte_inuse, agent->stats.block_inuse);
-    fprintf(fp, "    total heap usage: %zu allocs, %zu frees, %zu bytes allocated\n",
-        agent->stats.alloc_count, agent->stats.free_count, agent->stats.alloc_size);
-    fprintf(fp, "    memory leaked since last hour: %zd allocs, %zd bytes\n", lasthour.count, lasthour.bytes);
-    fprintf(fp, "[cmd_done]\n");
-    fflush(fp);
+    agent_status_unlocked(agent, fp);
     hooks_unlock(lock);
 
     return true;
