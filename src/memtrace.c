@@ -192,6 +192,50 @@ static void memtrace_stop_evlp() {
     kill(getpid(), SIGINT);
 }
 
+static bool memtrace_report(memtrace_t *memtrace, int count, FILE *fp) {
+    char line[4096];
+    strmap_t options = {0};
+    bus_connection_t *ipc = NULL;
+    bus_connection_t *server = NULL;
+    bus_connection_t *in = NULL;
+
+    if (!(ipc = bus_first_connection(&memtrace->agent))) {
+        CONSOLE("memtrace is not connected to target process");
+        return false;
+    }
+    if (count) {
+        strmap_add_fmt(&options, "count", "%d", count);
+    }
+    bus_connection_write_request(ipc, "report", &options);
+
+    // Are we connected to memtrace-server ?
+    if ((server = bus_first_connection(&memtrace->server))) {
+        // Forward report to memtrace-server for decodding addresses to line and functions
+        bus_connection_write_request(server, "report", NULL);
+        while (bus_connection_readline(ipc, line, sizeof(line))) {
+            bus_connection_printf(server, "%s", line);
+            if (!strcmp(line, "[cmd_done]\n")) {
+                break;
+            }
+        }
+        bus_connection_flush(server);
+    }
+
+    // Read report and dump it on console
+    in = server ? server : ipc;
+    while (bus_connection_readline(in, line, sizeof(line))) {
+        if (!strcmp(line, "[cmd_done]\n")) {
+            break;
+        }
+        else {
+            fputs(line, fp);
+        }
+    }
+
+    strmap_cleanup(&options);
+    return true;
+}
+
 static void memtrace_console_quit(console_t *console, int argc, char *argv[]) {
     memtrace_stop_evlp();
 }
@@ -362,34 +406,21 @@ static void monitor_handler(memtrace_t *memtrace, int events) {
 }
 
 static void logreport_handler(memtrace_t *memtrace, int events) {
-    char line[4096];
-    bus_connection_t *ipc = NULL;
     FILE *fp = NULL;
-    strmap_t options = {0};
 
-    if (!(ipc = bus_first_connection(&memtrace->agent))) {
-        TRACE_ERROR("not connected to agent");
-        memtrace_stop_evlp();
-        goto error;
-    }
     if (!(fp = fopen(memtrace->logfile, "a"))) {
         TRACE_ERROR("Failed to open %s: %m", memtrace->logfile);
         memtrace_stop_evlp();
         goto error;
     }
 
-    CONSOLE("Writing report to %s", memtrace->logfile);
-    strmap_add_fmt(&options, "count", "%d", memtrace->logcount);
-    bus_connection_write_request(ipc, "report", &options);
-    while (bus_connection_readline(ipc, line, sizeof(line))) {
-        if (!strcmp(line, "[cmd_done]\n")) {
-            break;
-        }
-        fputs(line, fp);
+    if (!memtrace_report(memtrace, memtrace->logcount, fp)) {
+        TRACE_ERROR("Exit event loop");
+        memtrace_stop_evlp();
+        goto error;
     }
 
 error:
-    strmap_cleanup(&options);
     if (fp) {
         fclose(fp);
     }
@@ -414,7 +445,6 @@ static void timerfd_handler(evlp_handler_t *self, int events) {
 }
 
 static void memtrace_console_report(console_t *console, int argc, char *argv[]) {
-    char line[4096];
     const char *short_options = "+c:h";
     const struct option long_options[] = {
         {"count",       required_argument,  0, 'c'},
@@ -422,17 +452,14 @@ static void memtrace_console_report(console_t *console, int argc, char *argv[]) 
         {0},
     };
     int opt = -1;
-    strmap_t options = {0};
+    int count = 10;
     memtrace_t *memtrace = container_of(console, memtrace_t, console);
-    bus_connection_t *ipc = NULL;
-    bus_connection_t *server = NULL;
-    bus_connection_t *in = NULL;
 
     optind = 1;
     while ((opt = getopt_long(argc, argv, short_options, long_options, NULL)) != -1) {
         switch (opt) {
             case 'c':
-                strmap_add(&options, "count", optarg);
+                count = atoi(optarg);
                 break;
             case 'h':
             default:
@@ -443,38 +470,7 @@ static void memtrace_console_report(console_t *console, int argc, char *argv[]) 
                 return;
         }
     }
-
-    if (!(ipc = bus_first_connection(&memtrace->agent))) {
-        CONSOLE("memtrace is not connected to target process");
-        return;
-    }
-    bus_connection_write_request(ipc, "report", &options);
-
-    // Are we connected to memtrace-server ?
-    if ((server = bus_first_connection(&memtrace->server))) {
-        // Forward report to memtrace-server for decodding addresses to line and functions
-        bus_connection_write_request(server, "report", NULL);
-        while (bus_connection_readline(ipc, line, sizeof(line))) {
-            bus_connection_printf(server, "%s", line);
-            if (!strcmp(line, "[cmd_done]\n")) {
-                break;
-            }
-        }
-        bus_connection_flush(server);
-    }
-
-    // Read report and dump it on console
-    in = server ? server : ipc;
-    while (bus_connection_readline(in, line, sizeof(line))) {
-        if (!strcmp(line, "[cmd_done]\n")) {
-            break;
-        }
-        else {
-            CONSOLE_RAW("%s", line);
-        }
-    }
-
-    strmap_cleanup(&options);
+    memtrace_report(memtrace, count, stderr);
 }
 
 static void memtrace_coredump(const char *filename, int pid, cpu_registers_t *regs) {
