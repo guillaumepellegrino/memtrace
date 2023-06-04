@@ -253,22 +253,40 @@ static bool server_report_cmd(bus_t *bus, bus_connection_t *connection, bus_topi
 }
 
 static bool server_parse_offline_report(memtrace_server_t *server, const char *report_path) {
+    char *output_path = NULL;
     FILE *in = NULL;
+    FILE *out = NULL;
     bool rt = false;
 
-    in = !strcmp(report_path, "-") ? stdin : fopen(report_path, "r");
-    if (!in) {
-        TRACE_ERROR("Failed to open %s: %m", report_path);
-        goto error;
+    if (!strcmp(report_path, "-")) {
+        in = stdin;
+        out = stdout;
+    }
+    else {
+        assert(asprintf(&output_path, "%s.decoded", report_path) > 0);
+        in = fopen(report_path, "r");
+        out = fopen(output_path, "w");
+        if (!in) {
+            TRACE_ERROR("Failed to open %s: %m", report_path);
+            goto error;
+        }
+        if (!out) {
+            TRACE_ERROR("Failed to open %s: %m", output_path);
+            goto error;
+        }
     }
 
-    server_parse_report(server, in, stdout);
-    fflush(stdout);
+    server_parse_report(server, in, out);
+    fflush(out);
     rt = true;
 
 error:
+    free(output_path);
     if (in && in != stdin) {
         fclose(in);
+    }
+    if (out && out != stdout) {
+        fclose(out);
     }
     return rt;
 }
