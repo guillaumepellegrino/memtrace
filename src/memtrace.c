@@ -48,8 +48,10 @@
 typedef struct {
     evlp_t *evlp;
     evlp_handler_t stdin_handler;
-    evlp_handler_t monitor_handler;
-    int monitorfd;
+    evlp_handler_t timerfd_handler;
+    int timerfd;
+    char *logfile;
+    int logcount;
     console_t console;
     bus_t server;
     bus_t agent;
@@ -220,6 +222,8 @@ static void memtrace_console_monitor(console_t *console, int argc, char *argv[])
     };
     int opt = -1;
     struct itimerspec itimer = {
+        .it_value.tv_sec = 0,
+        .it_value.tv_nsec = 1,
         .it_interval.tv_sec = 3,
     };
     static bool is_running = false;
@@ -233,11 +237,12 @@ static void memtrace_console_monitor(console_t *console, int argc, char *argv[])
                 break;
             case 's':
                 itimer.it_value.tv_sec = 0;
+                itimer.it_value.tv_nsec = 0;
                 break;
             case 'h':
             default:
                 CONSOLE("Usage: monitor [OPTION]..");
-                CONSOLE("Toggle ON/OFF the monitoring the memory usage");
+                CONSOLE("Toggle ON/OFF the monitoring of the process");
                 CONSOLE("  -h, --help             Display this help");
                 CONSOLE("  -i, --interval=VALUE   Start monitoring at the specified interval value in seconds");
                 CONSOLE("  -s, --stop             Stop monitoring");
@@ -250,23 +255,85 @@ static void memtrace_console_monitor(console_t *console, int argc, char *argv[])
         itimer.it_value.tv_nsec = is_running ? 0 : 1;
     }
 
-    timerfd_settime(memtrace->monitorfd, 0, &itimer, NULL);
+    timerfd_settime(memtrace->timerfd, 0, &itimer, NULL);
     is_running = itimer.it_value.tv_nsec;
 }
 
-static void monitor_handler(evlp_handler_t *self, int events) {
-    char line[4096];
-    memtrace_t *memtrace = container_of(self, memtrace_t, monitor_handler);
-    bus_connection_t *ipc = NULL;
-    uint64_t value = 0;
+static void memtrace_console_logreport(console_t *console, int argc, char *argv[]) {
+    const char *short_options = "+f:i:c:sh";
+    const struct option long_options[] = {
+        {"file",        required_argument,  0, 'f'},
+        {"interval",    required_argument,  0, 'i'},
+        {"count",       required_argument,  0, 'c'},
+        {"help",        no_argument,        0, 'h'},
+        {0},
+    };
+    int opt = -1;
+    memtrace_t *memtrace = container_of(console, memtrace_t, console);
+    struct stat stbuf;
+    bool ext = stat("/ext", &stbuf) == 0;
+    struct itimerspec itimer = {
+        .it_value.tv_sec = 0,
+        .it_value.tv_nsec = 1,
+        .it_interval.tv_sec = 600,
+    };
+    free(memtrace->logfile);
+    memtrace->logfile = NULL;
+    memtrace->logcount = 10;
 
-    if (read(memtrace->monitorfd, &value, sizeof(value)) < 0) {
-        TRACE_ERROR("read timer error: %m");
-        sleep(1);
-        return;
+    optind = 1;
+    while ((opt = getopt_long(argc, argv, short_options, long_options, NULL)) != -1) {
+        switch (opt) {
+            case 'f':
+                free(memtrace->logfile);
+                memtrace->logfile = strdup(optarg);
+                break;
+            case 'i':
+                itimer.it_interval.tv_sec = atoi(optarg);
+                break;
+            case 'c':
+                memtrace->logcount = atoi(optarg);
+                break;
+            case 'h':
+            default:
+                CONSOLE("Usage: log [OPTION]..");
+                CONSOLE("Log reports at a regular interval in specified file.");
+                CONSOLE("  -h, --help             Display this help");
+                CONSOLE("  -f, --file=PATH        Write the monitoring logs to the specified file (default: %s/memtrace-$pid.log)",
+                    (ext ? "/ext" : "/tmp"));
+                CONSOLE("  -i, --interval=VALUE   Start monitoring at the specified interval value in seconds");
+                CONSOLE("  -c, --count=VALUE      Count of print memory context in each report");
+                return;
+        }
     }
 
+    if (!memtrace->logfile) {
+        assert(asprintf(&memtrace->logfile, "%s/memtrace-%d.log",
+            (ext ? "/ext" : "/tmp"), memtrace->pid) > 0);
+    }
+
+    FILE *fp = fopen(memtrace->logfile, "w");
+    if (!fp) {
+        CONSOLE("Failed to create %s: %m", memtrace->logfile);
+        return;
+    }
+    fprintf(fp, "memtrace report logs for pid %d\n", memtrace->pid);
+    fclose(fp);
+
+    CONSOLE("memtrace logs report every %ds in %s\n",
+        (int)itimer.it_interval.tv_sec,
+        memtrace->logfile);
+
+    timerfd_settime(memtrace->timerfd, 0, &itimer, NULL);
+}
+
+
+static void monitor_handler(memtrace_t *memtrace, int events) {
+    char line[4096];
+    bus_connection_t *ipc = NULL;
+
     if (!(ipc = bus_first_connection(&memtrace->agent))) {
+        TRACE_ERROR("not connected to agent");
         return;
     }
 
@@ -276,6 +343,56 @@ static void monitor_handler(evlp_handler_t *self, int events) {
             break;
         }
         CONSOLE_RAW("%s", line);
+    }
+}
+
+static void logreport_handler(memtrace_t *memtrace, int events) {
+    char line[4096];
+    bus_connection_t *ipc = NULL;
+    FILE *fp = NULL;
+    strmap_t options = {0};
+
+    if (!(ipc = bus_first_connection(&memtrace->agent))) {
+        TRACE_ERROR("not connected to agent");
+        goto error;
+    }
+    if (!(fp = fopen(memtrace->logfile, "a"))) {
+        TRACE_ERROR("Failed to open %s: %m", memtrace->logfile);
+        goto error;
+    }
+
+    CONSOLE("Writing report to %s", memtrace->logfile);
+    strmap_add_fmt(&options, "count", "%d", memtrace->logcount);
+    bus_connection_write_request(ipc, "report", &options);
+    while (bus_connection_readline(ipc, line, sizeof(line))) {
+        if (!strcmp(line, "[cmd_done]\n")) {
+            break;
+        }
+        fputs(line, fp);
+    }
+
+error:
+    strmap_cleanup(&options);
+    if (fp) {
+        fclose(fp);
+    }
+}
+
+static void timerfd_handler(evlp_handler_t *self, int events) {
+    memtrace_t *memtrace = container_of(self, memtrace_t, timerfd_handler);
+
+    uint64_t value = 0;
+    if (read(memtrace->timerfd, &value, sizeof(value)) < 0) {
+        TRACE_ERROR("read timer error: %m");
+        sleep(1);
+        return;
+    }
+
+    if (memtrace->logfile) {
+        logreport_handler(memtrace, events);
+    }
+    else {
+        monitor_handler(memtrace, events);
     }
 }
 
@@ -498,6 +615,7 @@ static const console_cmd_t memtrace_console_commands[] = {
     {.name = "status",      .help = "Show memtrace status", .handler = memtrace_console_forward},
     {.name = "monitor",     .help = "Monitor memory allocations. monitor --help for more details.", .handler = memtrace_console_monitor},
     {.name = "report",      .help = "Show memtrace report. report --help for more details.", .handler = memtrace_console_report},
+    {.name = "logreport",   .help = "Log reports at a regular interval in specified file. log --help for more details.", .handler = memtrace_console_logreport},
     {.name = "coredump",    .help = "Generate a coredump. coredump --help for more details.", .handler = memtrace_console_coredump},
     {.name = "clear",       .help = "Clear memory statistics", .handler = memtrace_console_forward},
     {0},
@@ -715,7 +833,7 @@ int main(int argc, char *argv[]) {
     int memtrace_server_pid = -1;
     memtrace_t memtrace = {
         .stdin_handler = {.fn = stdin_handler},
-        .monitor_handler = {.fn = monitor_handler},
+        .timerfd_handler = {.fn = timerfd_handler},
         .pid = -1,
     };
 
@@ -789,8 +907,8 @@ int main(int argc, char *argv[]) {
 
     // Create event loop
     memtrace.evlp = evlp_create();
-    assert((memtrace.monitorfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC)) >= 0);
-    assert(evlp_add_handler(memtrace.evlp, &memtrace.monitor_handler, memtrace.monitorfd, EPOLLIN));
+    assert((memtrace.timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC)) >= 0);
+    assert(evlp_add_handler(memtrace.evlp, &memtrace.timerfd_handler, memtrace.timerfd, EPOLLIN));
 
     // Inject memtrace-agent library in target process
     if (!library_is_loaded(memtrace.pid, libname)) {
@@ -876,7 +994,8 @@ int main(int argc, char *argv[]) {
 error:
     free(libname);
     free(memtrace.coredump_path);
-    close(memtrace.monitorfd);
+    free(memtrace.logfile);
+    close(memtrace.timerfd);
     strlist_cleanup(&memtrace.commands);
     console_cleanup(&memtrace.console);
     bus_cleanup(&memtrace.server);

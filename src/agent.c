@@ -257,6 +257,7 @@ static bool agent_report(bus_t *bus, bus_connection_t *connection, bus_topic_t *
 
     strmap_get_fmt(options, "count", "%zu", &max);
 
+    fprintf(fp, "memtrace report:\n");
     fprintf(fp, "[sysroot]%s\n", SYSROOT);
     fprintf(fp, "[toolchain]%s\n", toolchain_path());
 
