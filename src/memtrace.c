@@ -187,9 +187,13 @@ error:
     return rt;
 }
 
-static void memtrace_console_quit(console_t *console, int argc, char *argv[]) {
+static void memtrace_stop_evlp() {
     // gently ask the event loop to exit
     kill(getpid(), SIGINT);
+}
+
+static void memtrace_console_quit(console_t *console, int argc, char *argv[]) {
+    memtrace_stop_evlp();
 }
 
 static void memtrace_console_forward(console_t *console, int argc, char *argv[]) {
@@ -260,11 +264,11 @@ static void memtrace_console_monitor(console_t *console, int argc, char *argv[])
 }
 
 static void memtrace_console_logreport(console_t *console, int argc, char *argv[]) {
-    const char *short_options = "+f:i:c:sh";
+    const char *short_options = "+i:c:fsh";
     const struct option long_options[] = {
-        {"file",        required_argument,  0, 'f'},
         {"interval",    required_argument,  0, 'i'},
         {"count",       required_argument,  0, 'c'},
+        {"foreground",  no_argument,        0, 'f'},
         {"help",        no_argument,        0, 'h'},
         {0},
     };
@@ -272,42 +276,44 @@ static void memtrace_console_logreport(console_t *console, int argc, char *argv[
     memtrace_t *memtrace = container_of(console, memtrace_t, console);
     struct stat stbuf;
     bool ext = stat("/ext", &stbuf) == 0;
+    bool foreground = false;
     struct itimerspec itimer = {
         .it_value.tv_sec = 0,
         .it_value.tv_nsec = 1,
         .it_interval.tv_sec = 600,
     };
-    free(memtrace->logfile);
-    memtrace->logfile = NULL;
     memtrace->logcount = 10;
 
     optind = 1;
     while ((opt = getopt_long(argc, argv, short_options, long_options, NULL)) != -1) {
         switch (opt) {
-            case 'f':
-                free(memtrace->logfile);
-                memtrace->logfile = strdup(optarg);
-                break;
             case 'i':
                 itimer.it_interval.tv_sec = atoi(optarg);
                 break;
             case 'c':
                 memtrace->logcount = atoi(optarg);
                 break;
+            case 'f':
+                foreground = true;
+                break;
             case 'h':
             default:
-                CONSOLE("Usage: log [OPTION]..");
-                CONSOLE("Log reports at a regular interval in specified file.");
+                CONSOLE("Usage: log [OPTION].. [FILE]");
+                CONSOLE("Log reports at a regular interval to the specified file. (default is %s/memtrace-%d.log)",
+                    (ext ? "/ext" : "/tmp"), memtrace->pid);
                 CONSOLE("  -h, --help             Display this help");
-                CONSOLE("  -f, --file=PATH        Write the monitoring logs to the specified file (default: %s/memtrace-$pid.log)",
-                    (ext ? "/ext" : "/tmp"));
                 CONSOLE("  -i, --interval=VALUE   Start monitoring at the specified interval value in seconds");
                 CONSOLE("  -c, --count=VALUE      Count of print memory context in each report");
+                CONSOLE("  -f, --foreground       Keep memtrace in foreground");
                 return;
         }
     }
 
-    if (!memtrace->logfile) {
+    free(memtrace->logfile);
+    if (optind < argc) {
+        memtrace->logfile = strdup(argv[optind]);
+    }
+    else {
         assert(asprintf(&memtrace->logfile, "%s/memtrace-%d.log",
             (ext ? "/ext" : "/tmp"), memtrace->pid) > 0);
     }
@@ -323,6 +329,15 @@ static void memtrace_console_logreport(console_t *console, int argc, char *argv[
     CONSOLE("memtrace logs report every %ds in %s\n",
         (int)itimer.it_interval.tv_sec,
         memtrace->logfile);
+
+
+    if (!foreground) {
+        CONSOLE("Daemonize memtrace");
+        evlp_remove_handler(memtrace->evlp, 0);
+        if (daemon(1, 0) != 0) {
+            CONSOLE("Failed to daemonize: %m");
+        }
+    }
 
     timerfd_settime(memtrace->timerfd, 0, &itimer, NULL);
 }
@@ -354,10 +369,12 @@ static void logreport_handler(memtrace_t *memtrace, int events) {
 
     if (!(ipc = bus_first_connection(&memtrace->agent))) {
         TRACE_ERROR("not connected to agent");
+        memtrace_stop_evlp();
         goto error;
     }
     if (!(fp = fopen(memtrace->logfile, "a"))) {
         TRACE_ERROR("Failed to open %s: %m", memtrace->logfile);
+        memtrace_stop_evlp();
         goto error;
     }
 
@@ -702,7 +719,7 @@ error:
 static void stdin_handler(evlp_handler_t *self, int events) {
     memtrace_t *memtrace = container_of(self, memtrace_t, stdin_handler);
     if (!console_poll(&memtrace->console)) {
-        memtrace_console_quit(NULL, 0, NULL);
+        memtrace_stop_evlp();
     }
 }
 
