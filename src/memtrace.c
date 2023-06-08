@@ -145,7 +145,7 @@ static bool thread_attach(int tid) {
 }
 
 
-static DIR *process_attach(int pid) {
+static DIR *threads_attach(int pid) {
     DIR *threads = NULL;
     int tid = 0;
 
@@ -164,7 +164,7 @@ static DIR *process_attach(int pid) {
     return threads;
 }
 
-static void process_detach(DIR *threads) {
+static void threads_detach(DIR *threads) {
     int tid = 0;
 
     if (threads) {
@@ -175,6 +175,32 @@ static void process_detach(DIR *threads) {
         }
         closedir(threads);
     }
+}
+
+static bool threads_continue(DIR *threads) {
+    int tid = 0;
+    bool rt = true;
+
+    process_for_each_thread(tid, threads) {
+        if (ptrace(PTRACE_CONT, tid, NULL, NULL) != 0) {
+            TRACE_ERROR("ptrace(CONT, %d) failed: %m", tid);
+            rt = false;
+        }
+    }
+    return rt;
+}
+
+static int memfd_open(int pid) {
+    char memfile[64];
+    int memfd = -1;
+
+    snprintf(memfile, sizeof(memfile), "/proc/%d/mem", pid);
+    if ((memfd = open(memfile, O_RDONLY)) < 0) {
+        TRACE_ERROR("Failed to open /proc/%d/mem: %m", pid);
+        return -1;
+    }
+
+    return memfd;
 }
 
 static bool connect_to_memtrace_agent(bus_t *bus, int pid) {
@@ -511,7 +537,6 @@ static void memtrace_console_report(console_t *console, int argc, char *argv[]) 
 }
 
 static void memtrace_coredump(const char *filename, int pid, cpu_registers_t *regs) {
-    char memfile[64];
     int memfd = -1;
     FILE *core = NULL;
 
@@ -523,9 +548,7 @@ static void memtrace_coredump(const char *filename, int pid, cpu_registers_t *re
         goto error;
     }
 
-    snprintf(memfile, sizeof(memfile), "/proc/%d/mem", pid);
-    if ((memfd = open(memfile, O_RDONLY)) < 0) {
-        TRACE_ERROR("Failed to open %s: %m", "/proc/self/mem");
+    if ((memfd = memfd_open(pid)) < 0) {
         goto error;
     }
 
@@ -609,7 +632,6 @@ static void cpu_registers_print(cpu_registers_t *regs) {
         cpu_register_get(regs, cpu_register_ra));
 }
 
-
 static void memtrace_console_breakpoint(console_t *console, int argc, char *argv[]) {
     memtrace_t *memtrace = container_of(console, memtrace_t, console);
     DIR *threads = NULL;
@@ -618,8 +640,40 @@ static void memtrace_console_breakpoint(console_t *console, int argc, char *argv
     const char *symname = "calloc_hook";
     breakpoint_t *bp = NULL;
 
+    int opt = -1;
+    const char *short_options = "+cf:h";
+    const struct option long_options[] = {
+        {"file",        required_argument,  0, 'f'},
+        {"coredump",    required_argument,  0, 'c'},
+        {"help",        no_argument,        0, 'h'},
+        {0},
+    };
+    bool do_coredump = false;
+
+    optind = 1;
+    while ((opt = getopt_long(argc, argv, short_options, long_options, NULL)) != -1) {
+        switch (opt) {
+            case 'c':
+                do_coredump = true;
+                break;
+            case 'f':
+                break;
+            case 'h':
+            default:
+                CONSOLE("Usage: break [OPTION].. [function]");
+                CONSOLE("Set a breakpoint at the specified function");
+                CONSOLE("  -c, --coredump    Generate a coredump when breakpoint is hit");
+                CONSOLE("  -h, --help        Display this help");
+                goto error;
+        }
+    }
+
+    if (optind < argc) {
+        symname = argv[optind];
+    }
+
     CONSOLE("Attaching to %d", pid);
-    if (!(threads = process_attach(pid))) {
+    if (!(threads = threads_attach(pid))) {
         CONSOLE("Failed to get thread list from pid %d", pid);
         goto error;
     }
@@ -638,30 +692,28 @@ static void memtrace_console_breakpoint(console_t *console, int argc, char *argv
     bp = breakpoint_set(pid, sym.addr);
 
     // Continue execution until breakpoint is encountered
-    // FIXME: implement multithread support:
-    //  - threads_wait()
-    //  - threads_continue()
-    if (ptrace(PTRACE_CONT, pid, 0, 0) != 0) {
-        TRACE_ERROR("Failed STEP: %m");
+    if (!threads_continue(threads)) {
+        TRACE_ERROR("Failed to continue: %m");
         goto error;
     }
     int status = 0;
-    if (waitpid(pid, &status, 0) < 0) {
-        TRACE_ERROR("waitpid(%d) failed: %m", pid);
+    if (wait(&status) < 0) {
+        TRACE_ERROR("wait(%d) failed: %m", pid);
         goto error;
     }
     CONSOLE("Breakpoint encountered");
 
-    library_symbol_t sym_calloc = libraries_find_symbol(libraries, "calloc");
     cpu_registers_t regs = {0};
     cpu_registers_get(&regs, pid);
     cpu_registers_print(&regs);
 
-    cpu_register_set(&regs, cpu_register_pc, sym_calloc.addr);
-    
-    CONSOLE("%s at 0x%"PRIx64" (%s+0x%"PRIx64")",
-        sym_calloc.name, sym_calloc.addr, library_name(sym_calloc.library), sym_calloc.offset);
-    memtrace_coredump("/tmp/core", pid, &regs);
+    //library_symbol_t sym_calloc = libraries_find_symbol(libraries, "calloc");
+    //cpu_register_set(&regs, cpu_register_pc, sym_calloc.addr);
+    //CONSOLE("%s at 0x%"PRIx64" (%s+0x%"PRIx64")",
+    //    sym_calloc.name, sym_calloc.addr, library_name(sym_calloc.library), sym_calloc.offset);
+    if (do_coredump) {
+        memtrace_coredump("/tmp/core", pid, &regs);
+    }
 
 error:
     if (bp) {
@@ -672,7 +724,7 @@ error:
     }
     if (threads) {
         CONSOLE("Detaching from %d", pid);
-        process_detach(threads);
+        threads_detach(threads);
     }
 }
 
@@ -707,12 +759,12 @@ static bool memtrace_notify_do_coredump(bus_t *bus, bus_connection_t *connection
 
     CONSOLE("Do coredump for process %zu", tid);
 
-    if (!(threads = process_attach(tid))) {
+    if (!(threads = threads_attach(tid))) {
         CONSOLE("Failed to get thread list from pid %d", tid);
         return false;
     }
     memtrace_coredump(memtrace->coredump_path, tid, &regs);
-    process_detach(threads);
+    threads_detach(threads);
     CONSOLE("Do coredump done");
 
     // Reply to NotifyDoCoredump request
@@ -766,7 +818,7 @@ static bool inject_memtrace_agent(int pid, const char *libname) {
     DIR *threads = NULL;
     injecter_t *injecter = NULL;
 
-    if (!(threads = process_attach(pid))) {
+    if (!(threads = threads_attach(pid))) {
         CONSOLE("Failed to get thread list from pid %d", pid);
         goto error;
     }
@@ -792,7 +844,7 @@ error:
         injecter_destroy(injecter);
     }
     if (threads) {
-        process_detach(threads);
+        threads_detach(threads);
     }
     return rt;
 }
@@ -1000,12 +1052,12 @@ int main(int argc, char *argv[]) {
     assert(asprintf(&memtrace.coredump_path, "core.%d", memtrace.pid) > 0);
     if (do_coredump) {
         DIR *threads = NULL;
-        if (!(threads = process_attach(memtrace.pid))) {
+        if (!(threads = threads_attach(memtrace.pid))) {
             CONSOLE("Failed to get thread list from pid %d", memtrace.pid);
             return false;
         }
         memtrace_coredump(memtrace.coredump_path, memtrace.pid, NULL);
-        process_detach(threads);
+        threads_detach(threads);
         rt = 0;
         goto error;
     }
