@@ -35,6 +35,14 @@ typedef enum {
     library_section_end,
 } library_section_t;
 
+typedef struct {
+    const char *name;
+    uint64_t offset;
+    uint64_t addr;
+    uint16_t section_index;
+    library_t *library;
+} library_symbol_t;
+
 /** Create/Destroy/Update the library list by reading /proc/self/maps */
 libraries_t *libraries_create(int pid);
 void libraries_destroy(libraries_t *libraries);
@@ -53,7 +61,7 @@ library_t *libraries_find(libraries_t *libraries, size_t address);
 library_t *libraries_find_by_name(libraries_t *libraries, const char *regex);
 
 /** Return the library and symbol corresponding to this symbol name */
-elf_sym_t libraries_find_symbol(libraries_t *libraries, const char *name, library_t **plibrary);
+library_symbol_t libraries_find_symbol(libraries_t *libraries, const char *name);
 
 /** Return the library by index */
 library_t *libraries_get(libraries_t *libraries, size_t idx);

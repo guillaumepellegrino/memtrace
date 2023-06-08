@@ -512,14 +512,8 @@ static void memtrace_console_report(console_t *console, int argc, char *argv[]) 
 
 static void memtrace_coredump(const char *filename, int pid, cpu_registers_t *regs) {
     char memfile[64];
-    DIR *threads = NULL;
     int memfd = -1;
     FILE *core = NULL;
-
-    if (!(threads = process_attach(pid))) {
-        CONSOLE("Failed to get thread list from pid %d", pid);
-        goto error;
-    }
 
     if (!filename) {
         filename = "core";
@@ -545,9 +539,6 @@ error:
     }
     if (core) {
         fclose(core);
-    }
-    if (threads) {
-        process_detach(threads);
     }
 }
 
@@ -624,9 +615,7 @@ static void memtrace_console_breakpoint(console_t *console, int argc, char *argv
     DIR *threads = NULL;
     int pid = memtrace->pid;
     libraries_t *libraries = NULL;
-    library_t *library = NULL;
     const char *symname = "calloc_hook";
-    size_t breakpoint_addr = 0;
     breakpoint_t *bp = NULL;
 
     CONSOLE("Attaching to %d", pid);
@@ -638,18 +627,20 @@ static void memtrace_console_breakpoint(console_t *console, int argc, char *argv
         CONSOLE("Failed to open libraries");
         goto error;
     }
-    elf_sym_t sym = libraries_find_symbol(libraries, symname, &library);
+    library_symbol_t sym = libraries_find_symbol(libraries, symname);
     if (!sym.name) {
         CONSOLE("%s not found", symname);
         goto error;
     }
-    breakpoint_addr = library_absolute_address(library, sym.offset);
 
-    CONSOLE("Setting breakpoing on %s at 0x%zx (%s+0x%"PRIx64")",
-        sym.name, breakpoint_addr, library_name(library), sym.offset);
-    bp = breakpoint_set(pid, breakpoint_addr);
+    CONSOLE("Setting breakpoint on %s at 0x%"PRIx64" (%s+0x%"PRIx64")",
+        sym.name, sym.addr, library_name(sym.library), sym.offset);
+    bp = breakpoint_set(pid, sym.addr);
 
     // Continue execution until breakpoint is encountered
+    // FIXME: implement multithread support:
+    //  - threads_wait()
+    //  - threads_continue()
     if (ptrace(PTRACE_CONT, pid, 0, 0) != 0) {
         TRACE_ERROR("Failed STEP: %m");
         goto error;
@@ -661,9 +652,16 @@ static void memtrace_console_breakpoint(console_t *console, int argc, char *argv
     }
     CONSOLE("Breakpoint encountered");
 
+    library_symbol_t sym_calloc = libraries_find_symbol(libraries, "calloc");
     cpu_registers_t regs = {0};
     cpu_registers_get(&regs, pid);
     cpu_registers_print(&regs);
+
+    cpu_register_set(&regs, cpu_register_pc, sym_calloc.addr);
+    
+    CONSOLE("%s at 0x%"PRIx64" (%s+0x%"PRIx64")",
+        sym_calloc.name, sym_calloc.addr, library_name(sym_calloc.library), sym_calloc.offset);
+    memtrace_coredump("/tmp/core", pid, &regs);
 
 error:
     if (bp) {
@@ -680,6 +678,7 @@ error:
 
 static bool memtrace_notify_do_coredump(bus_t *bus, bus_connection_t *connection, bus_topic_t *topic, strmap_t *options, FILE *file) {
     memtrace_t *memtrace = container_of(topic, memtrace_t, notify_do_coredump_topic);
+    DIR *threads = NULL;
     cpu_registers_t regs = {0};
     size_t tid = 0;
     size_t pc = 0;
@@ -707,7 +706,13 @@ static bool memtrace_notify_do_coredump(bus_t *bus, bus_connection_t *connection
     cpu_register_set(&regs, cpu_register_arg3, arg3);
 
     CONSOLE("Do coredump for process %zu", tid);
+
+    if (!(threads = process_attach(tid))) {
+        CONSOLE("Failed to get thread list from pid %d", tid);
+        return false;
+    }
     memtrace_coredump(memtrace->coredump_path, tid, &regs);
+    process_detach(threads);
     CONSOLE("Do coredump done");
 
     // Reply to NotifyDoCoredump request
@@ -994,7 +999,13 @@ int main(int argc, char *argv[]) {
     memtrace.inject_libname = libname;
     assert(asprintf(&memtrace.coredump_path, "core.%d", memtrace.pid) > 0);
     if (do_coredump) {
+        DIR *threads = NULL;
+        if (!(threads = process_attach(memtrace.pid))) {
+            CONSOLE("Failed to get thread list from pid %d", memtrace.pid);
+            return false;
+        }
         memtrace_coredump(memtrace.coredump_path, memtrace.pid, NULL);
+        process_detach(threads);
         rt = 0;
         goto error;
     }
