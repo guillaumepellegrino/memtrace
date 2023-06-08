@@ -374,6 +374,53 @@ error:
     return true;
 }
 
+/**
+ * Read getcontext request and return the specified context
+ */
+static bool agent_getcontext(bus_t *bus, bus_connection_t *connection, bus_topic_t *topic, strmap_t *options, FILE *fp) {
+    agent_t *agent = container_of(topic, agent_t, getcontext_topic);
+    size_t i = 0;
+    size_t context_idx = 0;
+    hashmap_iterator_t *it = NULL;
+    block_t *block = NULL;
+    int retval = false;
+    const char *descr = "Success";
+    bool lock = hooks_lock();
+    char key[32];
+
+    strmap_get_fmt(options, "context", "%zu", &context_idx);
+
+    // Lookup for context by index
+    hashmap_qsort(&agent->blocks, blocks_map_compar);
+
+    hashmap_for_each(it, &agent->blocks) {
+        if (context_idx == i) {
+            block = container_of(it, block_t, it);
+            break;
+        }
+        i++;
+    }
+    if (!block) {
+        descr = "Memory allocation context not found";
+        goto error;
+    }
+
+    // Print callstack associated to context
+    for (i = 0; i < agent->callstack_size; i++) {
+        snprintf(key, sizeof(key), "%zu", i);
+        strmap_add_fmt(options, key, "%p", block->callstack[i]);
+    }
+    retval = true;
+
+error:
+    strmap_add_fmt(options, "retval", "%d", retval);
+    strmap_add(options, "descr", descr);
+    bus_connection_write_reply(connection, options);
+    hooks_unlock(lock);
+
+    return true;
+}
+
 static void agent_stats_lasthour_handler(evlp_handler_t *self, int events) {
     agent_t *agent = container_of(self, agent_t, stats_lasthour_handler);
     uint64_t timestamp = 0;
@@ -498,6 +545,9 @@ bool agent_initialize(agent_t *agent) {
     agent->coredump_topic.name = "coredump";
     agent->coredump_topic.read = agent_coredump;
     bus_register_topic(&agent->bus, &agent->coredump_topic);
+    agent->getcontext_topic.name = "getcontext";
+    agent->getcontext_topic.read = agent_getcontext;
+    bus_register_topic(&agent->bus, &agent->getcontext_topic);
 
     agent->stats_lasthour_handler.fn = agent_stats_lasthour_handler;
     assert((agent->stats_lasthour_timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC)) >= 0);

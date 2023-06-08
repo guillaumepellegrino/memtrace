@@ -606,6 +606,75 @@ static void memtrace_console_coredump(console_t *console, int argc, char *argv[]
         goto error;
     }
 
+    // Write getcontext request and read reply
+    CONSOLE("getcontext");
+    bus_connection_write_request(ipc, "getcontext", &options);
+    bus_connection_read_reply(ipc, &options);
+    strmap_get_fmt(&options, "retval", "%d", &retval);
+    if (!(descr = strmap_get(&options, "descr"))) {
+        descr = "Unknown error";
+    }
+    if (!retval) {
+        CONSOLE("Coredump error: %s", descr);
+        goto error;
+    }
+
+    CONSOLE("Coredump: %s", descr);
+
+    void *callstack[20] = {0};
+    size_t i = 0;
+    for (i = 0; i < countof(callstack); i++) {
+        char key[32];
+        snprintf(key, sizeof(key), "%zu", i);
+        strmap_get_fmt(&options, key, "%p", &callstack[i]);
+        CONSOLE("callstack: %p", callstack[i]);
+    }
+
+error:
+    strmap_cleanup(&options);
+}
+
+void memtrace_console_coredump_legacy(console_t *console, int argc, char *argv[]) {
+    const char *short_options = "+c:f:h";
+    const struct option long_options[] = {
+        {"context",     required_argument,  0, 'c'},
+        {"file",        required_argument,  0, 'f'},
+        {"help",        no_argument,        0, 'h'},
+        {0},
+    };
+    int opt = -1;
+    memtrace_t *memtrace = container_of(console, memtrace_t, console);
+    bus_connection_t *ipc = NULL;
+    strmap_t options = {0};
+    int retval = 0;
+    const char *descr = NULL;
+
+    optind = 1;
+    while ((opt = getopt_long(argc, argv, short_options, long_options, NULL)) != -1) {
+        switch (opt) {
+            case 'c':
+                strmap_add(&options, "context", optarg);
+                break;
+            case 'f':
+                free(memtrace->coredump_path);
+                memtrace->coredump_path = strdup(optarg);
+                break;
+            case 'h':
+            default:
+                CONSOLE("Usage: coredump [OPTION]..");
+                CONSOLE("Mark a memory context for coredump generation");
+                CONSOLE("  -h, --help             Display this help");
+                CONSOLE("  -c, --context=VALUE    Mark the specified memory context for coredump generation (default:core.%d)", memtrace->pid);
+                CONSOLE("  -f, --file=PATH        Write the coredump to the specified path");
+                goto error;
+        }
+    }
+
+    if (!(ipc = bus_first_connection(&memtrace->agent))) {
+        CONSOLE("memtrace is not connected to target process");
+        goto error;
+    }
+
     // Write coredump request and read reply
     bus_connection_write_request(ipc, "coredump", &options);
     bus_connection_read_reply(ipc, &options);
@@ -760,7 +829,7 @@ static bool memtrace_notify_do_coredump(bus_t *bus, bus_connection_t *connection
     CONSOLE("Do coredump for process %zu", tid);
 
     if (!(threads = threads_attach(tid))) {
-        CONSOLE("Failed to get thread list from pid %d", tid);
+        CONSOLE("Failed to get thread list from pid %zu", tid);
         return false;
     }
     memtrace_coredump(memtrace->coredump_path, tid, &regs);
