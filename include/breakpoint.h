@@ -25,12 +25,6 @@
 
 #include "types.h"
 
-struct _breakpoint {
-    int pid;
-    long addr;
-    long orig_instr;
-};
-
 breakpoint_t *breakpoint_set(int pid, long addr);
 void breakpoint_unset(breakpoint_t *bp);
 

@@ -18,6 +18,12 @@ typedef struct {
     long size;
 } breakpoint_instr_t;
 
+struct _breakpoint {
+    int pid;
+    long addr;
+    long orig_instr;
+};
+
 static long make_mask(long size) {
     long mask = 0;
     long i;
