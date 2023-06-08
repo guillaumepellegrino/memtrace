@@ -16,20 +16,22 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#ifndef ELF_SYM_H
-#define ELF_SYM_H
+#ifndef BREAKPOINT_H
+#define BREAKPOINT_H
+
+#ifndef BREAKPOINT_PRIVATE
+#define BREAKPOINT_PRIVATE __attribute__((deprecated))
+#endif
 
 #include "types.h"
 
-struct _elf_sym {
-    const char *name;
-    uint64_t offset;
-    uint16_t section_index;
+struct _breakpoint {
+    int pid;
+    long addr;
+    long orig_instr;
 };
 
-elf_sym_t elf_sym(elf_file_t *symtab, elf_file_t *strtab, uint64_t address);
-elf_sym_t elf_sym_from_idx(elf_file_t *symtab, elf_file_t *strtab, uint32_t idx);
-elf_sym_t elf_sym_from_name(elf_file_t *symtab, elf_file_t *strtab, const char *name);
-elf_sym_t elf_sym_from_addr(elf_file_t *symtab, elf_file_t *strtab, size_t addr);
+breakpoint_t *breakpoint_set(int pid, long addr);
+void breakpoint_unset(breakpoint_t *bp);
 
 #endif

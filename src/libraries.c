@@ -330,6 +330,29 @@ library_t *libraries_find_by_name(libraries_t *libraries, const char *regex) {
     return NULL;
 }
 
+elf_sym_t libraries_find_symbol(libraries_t *libraries, const char *symname, library_t **plibrary) {
+    assert(libraries);
+    size_t i = 0;
+
+    for (i = 0; i < libraries_count(libraries); i++) {
+        library_t *library = libraries_get(libraries, i);
+        elf_file_t *symtab = library_get_elf_section(library, library_section_symtab);
+        elf_file_t *strtab = library_get_elf_section(library, library_section_strtab);
+        if (!symtab || !strtab) {
+            continue;
+        }
+        elf_sym_t sym = elf_sym_from_name(symtab, strtab, symname);
+        if (sym.name) {
+            if (plibrary) {
+                *plibrary = library;
+            }
+            return sym;
+        }
+    }
+
+    return (elf_sym_t) {0};
+}
+
 library_t *libraries_get(libraries_t *libraries, size_t idx) {
     assert(libraries);
     return (idx < libraries->count) ?

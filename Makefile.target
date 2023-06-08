@@ -40,7 +40,7 @@ install:
 $(O)/:
 	mkdir -p $(O)/
 
-$(O)/memtrace: $(addprefix $(O)/,memtrace.o evlp.o bus.o net.o strlist.o strmap.o inject.o syscall.o ptrace.o hashmap.o libraries.o log.o elf.o elf_file.o elf_sym.o elf_relocate.o console.o coredump.o libcext.o $(ARCH_OBJECT))
+$(O)/memtrace: $(addprefix $(O)/,memtrace.o evlp.o bus.o net.o strlist.o strmap.o inject.o syscall.o ptrace.o hashmap.o libraries.o log.o elf.o elf_file.o elf_sym.o elf_relocate.o console.o coredump.o libcext.o breakpoint.o $(ARCH_OBJECT))
 	$(CC) -o $(@) $(^) $(LDFLAGS)
 
 $(O)/libmemtrace-agent.so: $(addprefix $(O)/,agent.o agent_hooks.o evlp.o bus.o net.o strlist.o strmap.o inject.o syscall.o ptrace.o hashmap.o libraries.o log.o elf.o elf_file.o elf_sym.o elf_relocate.o console.o libcext.o $(ARCH_OBJECT))

@@ -52,6 +52,9 @@ library_t *libraries_find(libraries_t *libraries, size_t address);
 /** Return the library corresponding to this name */
 library_t *libraries_find_by_name(libraries_t *libraries, const char *regex);
 
+/** Return the library and symbol corresponding to this symbol name */
+elf_sym_t libraries_find_symbol(libraries_t *libraries, const char *name, library_t **plibrary);
+
 /** Return the library by index */
 library_t *libraries_get(libraries_t *libraries, size_t idx);
 
