@@ -7,6 +7,7 @@
 #include "breakpoint.h"
 #include "threads.h"
 #include "evlp.h"
+#include "ptrace.h"
 #include "arch.h"
 #include "log.h"
 
@@ -130,13 +131,22 @@ breakpoint_t *breakpoint_set(int pid, long breakpoint_addr) {
     return bp;
 }
 
-void breakpoint_unset(breakpoint_t *bp) {
+bool breakpoint_unset(breakpoint_t *bp) {
+    bool rt = true;
+
     if (bp && bp->pid > 0) {
         // Set back the original instruction
         if (ptrace(PTRACE_POKETEXT, bp->pid, bp->addr, bp->orig_instr) != 0) {
             TRACE_ERROR("ptrace(POKETEXT, %d) failed: %m", bp->pid);
+            rt = false;
         }
 
+        long instr = ptrace(PTRACE_PEEKTEXT, bp->pid, bp->addr);
+        CONSOLE("orig_instr=0x%lx", instr);
+        if (instr != bp->orig_instr) {
+            TRACE_ERROR("ptrace(POKETEXT, %d) failed: %m", bp->pid);
+            rt = false;
+        }
         /*
         // rewind back to this instruction if we are walking on it
         cpu_registers_t regs;
@@ -150,6 +160,8 @@ void breakpoint_unset(breakpoint_t *bp) {
         */
         free(bp);
     }
+
+    return rt;
 }
 
 int breakpoint_set_and_wait(int pid, DIR *threads, long addr) {
@@ -202,11 +214,8 @@ bool process_callstack_match(cpu_registers_t *regs, int memfd, void **callstack,
     }
     len /= sizeof(size_t);
 
-    //CONSOLE("callstack");
     for (i = 0; i < len; i++) {
         size_t pc = ((size_t *) g_buff)[i];
-        //CONSOLE("[%zd] 0x%zx", i, pc);
-
         if (pc == (size_t) callstack[j]) {
             j++;
 
@@ -219,7 +228,6 @@ bool process_callstack_match(cpu_registers_t *regs, int memfd, void **callstack,
         }
     }
 
-    CONSOLE("calllstack match count=%zu. size=%zu", j, size);
     return j >= 10;
 }
 
@@ -248,7 +256,7 @@ bool breakpoint_wait_until(int pid, DIR *threads, int memfd, long addr, void **c
             }
             if (!threads_continue(threads)) {
                 TRACE_ERROR("Failed to continue: %m");
-                //goto error;
+                goto error;
             }
             if ((tid = wait(&status)) < 0) {
                 TRACE_ERROR("wait(%d) failed: %m", pid);
@@ -264,32 +272,44 @@ bool breakpoint_wait_until(int pid, DIR *threads, int memfd, long addr, void **c
         // Stop others threads execution
         threads_for_each(it, threads) {
             if (it == tid) {
-                continue;
+                //continue;
             }
             if (ptrace(PTRACE_INTERRUPT, it, NULL, NULL) != 0) {
                 TRACE_ERROR("ptrace(INTERRUPT, %d) failed: %m", tid);
+                goto error;
             }
         }
-        breakpoint_unset(bp);
+        if (!breakpoint_unset(bp)) {
+            TRACE_ERROR("Failed to unset breakpoint for %d", tid);
+            bp = NULL;
+            goto error;
+        }
         bp = NULL;
 
         CONSOLE("%d is at 0x%lx", tid, pc);
 
         // Did we met the stop condition ?
         if (process_callstack_match(&regs, memfd, callstack, size)) {
-            CONSOLE("Callstack match !");
-            break;
+            //break;
         }
 
+        usleep(200*1000);
+
         // Walk on the breakpoint
+        if (!ptrace_step(tid)) {
+            TRACE_ERROR("Failed to step: %m", tid);
+            goto error;
+        }
+        /*
         if (ptrace(PTRACE_SINGLESTEP, tid, NULL, NULL) != 0) {
-            TRACE_ERROR("ptrace(CONT, %d) failed: %m", tid);
-            rt = false;
+            TRACE_ERROR("ptrace(SINGLESTEP, %d) failed: %m", tid);
+            goto error;
         }
         if ((tid = waitpid(tid, &status, 0)) < 0) {
             TRACE_ERROR("wait(%d) failed: %m", tid);
             goto error;
         }
+        */
         if (!cpu_registers_get(&regs, tid)) {
             TRACE_ERROR("Failed to get registers");
             goto error;

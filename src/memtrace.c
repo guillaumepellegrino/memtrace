@@ -565,7 +565,6 @@ static void memtrace_console_coredump(console_t *console, int argc, char *argv[]
     }
 
     // Write getcontext request and read reply
-    CONSOLE("getcontext");
     bus_connection_write_request(ipc, "getcontext", &options);
     bus_connection_read_reply(ipc, &options);
     strmap_get_fmt(&options, "retval", "%d", &retval);
@@ -577,15 +576,12 @@ static void memtrace_console_coredump(console_t *console, int argc, char *argv[]
         goto error;
     }
 
-    CONSOLE("Coredump: %s", descr);
-
     void *callstack[10] = {0};
     size_t i = 0;
     for (i = 0; i < countof(callstack); i++) {
         char key[32];
         snprintf(key, sizeof(key), "%zu", i);
         strmap_get_fmt(&options, key, "%p", &callstack[i]);
-        CONSOLE("callstack: %p", callstack[i]);
     }
 
     CONSOLE("Attaching to %d", pid);

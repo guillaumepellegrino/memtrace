@@ -26,7 +26,7 @@
 breakpoint_t *breakpoint_set(int pid, long addr);
 
 /** Unset the previously set breakpoint */
-void breakpoint_unset(breakpoint_t *bp);
+bool breakpoint_unset(breakpoint_t *bp);
 
 /**
  * Set a breakpoint at the specified address and
