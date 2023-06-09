@@ -162,3 +162,7 @@ void evlp_exit_onsignal() {
     assert(sigaction(SIGQUIT, &action, NULL) == 0);
     assert(sigaction(SIGTERM, &action, NULL) == 0);
 }
+
+bool evlp_stopped() {
+    return signal_exit;
+}

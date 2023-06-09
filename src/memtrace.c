@@ -39,6 +39,7 @@
 #include "evlp.h"
 #include "bus.h"
 #include "inject.h"
+#include "threads.h"
 #include "breakpoint.h"
 #include "libraries.h"
 #include "console.h"
@@ -66,129 +67,20 @@ typedef struct {
 } memtrace_t;
 
 static const char *default_lib =  "/usr/lib/libmemtrace-agent.so";
+static const struct {
+    const char *name;
+    const char *inject;
+} alloc_functions[] = {
+    {"malloc",          "malloc_hook"},
+    {"calloc",          "calloc_hook"},
+    {"calloc",          "calloc_hook"},
+    {"realloc",         "realloc_hook"},
+    {"reallocarray",    "reallocarray_hook"},
+    {"free",            "free_hook"},
+    {"fork",            "fork_hook"},
+};
+
 __attribute__((aligned)) char g_buff[G_BUFF_SIZE];
-
-#define process_for_each_thread(tid, dir) \
-    for (tid = process_first_thread(dir); tid > 0; tid = process_next_thread(dir))
-
-static DIR *process_threads(int pid) {
-    char task_path[128];
-    DIR *threads = NULL;
-
-    if (pid <= 0) {
-        TRACE_ERROR("pid was not provided");
-        return false;
-    }
-
-    snprintf(task_path, sizeof(task_path), "/proc/%d/task/", pid);
-
-    if (!(threads = opendir(task_path))) {
-        TRACE_ERROR("Failed to open %s: %m", task_path);
-        return NULL;
-    }
-
-    return threads;
-}
-
-static int process_next_thread(DIR *threads) {
-    struct dirent *task_entry = NULL;
-
-    if (!threads) {
-        return 0;
-    }
-
-    while ((task_entry = readdir(threads))) {
-        int tid = atoi(task_entry->d_name);
-        if (tid <= 0) {
-            continue;
-        }
-        return tid;
-    }
-
-    return 0;
-}
-
-static int process_first_thread(DIR *threads) {
-    if (!threads) {
-        return 0;
-    }
-
-    seekdir(threads, 0);
-
-    return process_next_thread(threads);
-}
-
-static bool thread_attach(int tid) {
-    int status = 0;
-
-    if (tid <= 0) {
-        TRACE_ERROR("tid was not provided");
-        return false;
-    }
-    if (ptrace(PTRACE_SEIZE, tid, 0, 0) != 0) {
-        TRACE_ERROR("ptrace(SEIZE, %d, 0, 0) failed: %m", tid);
-        return false;
-    }
-    if (ptrace(PTRACE_INTERRUPT, tid, 0, 0) != 0) {
-        TRACE_ERROR("ptrace(INTERRUPT, %d, 0, 0) failed: %m", tid);
-        return false;
-    }
-    if (waitpid(tid, &status, 0) < 0) {
-        TRACE_ERROR("waitpid(%d) failed: %m", tid);
-        return false;
-    }
-    if (ptrace(PTRACE_SETOPTIONS, tid, 0, PTRACE_O_TRACESYSGOOD) != 0) {
-        TRACE_ERROR("ptrace(SETOPTIONS, %d, 0, TRACESYSGOOD) failed: %m", tid);
-        return false;
-    }
-    return true;
-}
-
-
-static DIR *threads_attach(int pid) {
-    DIR *threads = NULL;
-    int tid = 0;
-
-    if (!(threads = process_threads(pid))) {
-        CONSOLE("Failed to get thread list from pid %d", pid);
-        return NULL;
-    }
-    process_for_each_thread(tid, threads) {
-        if (!thread_attach(tid)) {
-            TRACE_ERROR("Failed to attach to thread %d", tid);
-            closedir(threads);
-            return NULL;
-        }
-        CONSOLE("memtrace attached to pid:%d/tid:%d", pid, tid);
-    }
-    return threads;
-}
-
-static void threads_detach(DIR *threads) {
-    int tid = 0;
-
-    if (threads) {
-        process_for_each_thread(tid, threads) {
-            if (ptrace(PTRACE_DETACH, tid, NULL, NULL) != 0) {
-                TRACE_ERROR("ptrace(DETACH, %d) failed: %m", tid);
-            }
-        }
-        closedir(threads);
-    }
-}
-
-static bool threads_continue(DIR *threads) {
-    int tid = 0;
-    bool rt = true;
-
-    process_for_each_thread(tid, threads) {
-        if (ptrace(PTRACE_CONT, tid, NULL, NULL) != 0) {
-            TRACE_ERROR("ptrace(CONT, %d) failed: %m", tid);
-            rt = false;
-        }
-    }
-    return rt;
-}
 
 static int memfd_open(int pid) {
     char memfile[64];
@@ -565,75 +457,7 @@ error:
     }
 }
 
-static void memtrace_console_coredump(console_t *console, int argc, char *argv[]) {
-    const char *short_options = "+c:f:h";
-    const struct option long_options[] = {
-        {"context",     required_argument,  0, 'c'},
-        {"file",        required_argument,  0, 'f'},
-        {"help",        no_argument,        0, 'h'},
-        {0},
-    };
-    int opt = -1;
-    memtrace_t *memtrace = container_of(console, memtrace_t, console);
-    bus_connection_t *ipc = NULL;
-    strmap_t options = {0};
-    int retval = 0;
-    const char *descr = NULL;
-
-    optind = 1;
-    while ((opt = getopt_long(argc, argv, short_options, long_options, NULL)) != -1) {
-        switch (opt) {
-            case 'c':
-                strmap_add(&options, "context", optarg);
-                break;
-            case 'f':
-                free(memtrace->coredump_path);
-                memtrace->coredump_path = strdup(optarg);
-                break;
-            case 'h':
-            default:
-                CONSOLE("Usage: coredump [OPTION]..");
-                CONSOLE("Mark a memory context for coredump generation");
-                CONSOLE("  -h, --help             Display this help");
-                CONSOLE("  -c, --context=VALUE    Mark the specified memory context for coredump generation (default:core.%d)", memtrace->pid);
-                CONSOLE("  -f, --file=PATH        Write the coredump to the specified path");
-                goto error;
-        }
-    }
-
-    if (!(ipc = bus_first_connection(&memtrace->agent))) {
-        CONSOLE("memtrace is not connected to target process");
-        goto error;
-    }
-
-    // Write getcontext request and read reply
-    CONSOLE("getcontext");
-    bus_connection_write_request(ipc, "getcontext", &options);
-    bus_connection_read_reply(ipc, &options);
-    strmap_get_fmt(&options, "retval", "%d", &retval);
-    if (!(descr = strmap_get(&options, "descr"))) {
-        descr = "Unknown error";
-    }
-    if (!retval) {
-        CONSOLE("Coredump error: %s", descr);
-        goto error;
-    }
-
-    CONSOLE("Coredump: %s", descr);
-
-    void *callstack[20] = {0};
-    size_t i = 0;
-    for (i = 0; i < countof(callstack); i++) {
-        char key[32];
-        snprintf(key, sizeof(key), "%zu", i);
-        strmap_get_fmt(&options, key, "%p", &callstack[i]);
-        CONSOLE("callstack: %p", callstack[i]);
-    }
-
-error:
-    strmap_cleanup(&options);
-}
-
+/*
 void memtrace_console_coredump_legacy(console_t *console, int argc, char *argv[]) {
     const char *short_options = "+c:f:h";
     const struct option long_options[] = {
@@ -689,6 +513,140 @@ void memtrace_console_coredump_legacy(console_t *console, int argc, char *argv[]
     CONSOLE("Coredump: %s", descr);
 
 error:
+    strmap_cleanup(&options);
+}
+*/
+
+static void memtrace_console_coredump(console_t *console, int argc, char *argv[]) {
+    const char *short_options = "+c:f:h";
+    const struct option long_options[] = {
+        {"context",     required_argument,  0, 'c'},
+        {"file",        required_argument,  0, 'f'},
+        {"help",        no_argument,        0, 'h'},
+        {0},
+    };
+    int opt = -1;
+    memtrace_t *memtrace = container_of(console, memtrace_t, console);
+    bus_connection_t *ipc = NULL;
+    strmap_t options = {0};
+    int retval = 0;
+    const char *descr = NULL;
+
+    int pid = memtrace->pid;
+    DIR *threads = NULL;
+    libraries_t *libraries = NULL;
+    int memfd = -1;
+    size_t bp_addr = 0;
+
+    optind = 1;
+    while ((opt = getopt_long(argc, argv, short_options, long_options, NULL)) != -1) {
+        switch (opt) {
+            case 'c':
+                strmap_add(&options, "context", optarg);
+                break;
+            case 'f':
+                free(memtrace->coredump_path);
+                memtrace->coredump_path = strdup(optarg);
+                break;
+            case 'h':
+            default:
+                CONSOLE("Usage: coredump [OPTION]..");
+                CONSOLE("Mark a memory context for coredump generation");
+                CONSOLE("  -h, --help             Display this help");
+                CONSOLE("  -c, --context=VALUE    Mark the specified memory context for coredump generation (default:core.%d)", memtrace->pid);
+                CONSOLE("  -f, --file=PATH        Write the coredump to the specified path");
+                goto error;
+        }
+    }
+
+    if (!(ipc = bus_first_connection(&memtrace->agent))) {
+        CONSOLE("memtrace is not connected to target process");
+        goto error;
+    }
+
+    // Write getcontext request and read reply
+    CONSOLE("getcontext");
+    bus_connection_write_request(ipc, "getcontext", &options);
+    bus_connection_read_reply(ipc, &options);
+    strmap_get_fmt(&options, "retval", "%d", &retval);
+    if (!(descr = strmap_get(&options, "descr"))) {
+        descr = "Unknown error";
+    }
+    if (!retval) {
+        CONSOLE("Coredump error: %s", descr);
+        goto error;
+    }
+
+    CONSOLE("Coredump: %s", descr);
+
+    void *callstack[10] = {0};
+    size_t i = 0;
+    for (i = 0; i < countof(callstack); i++) {
+        char key[32];
+        snprintf(key, sizeof(key), "%zu", i);
+        strmap_get_fmt(&options, key, "%p", &callstack[i]);
+        CONSOLE("callstack: %p", callstack[i]);
+    }
+
+    CONSOLE("Attaching to %d", pid);
+    if (!(threads = threads_attach(pid))) {
+        CONSOLE("Failed to get thread list from pid %d", pid);
+        goto error;
+    }
+    if (!(libraries = libraries_create(pid))) {
+        CONSOLE("Failed to open libraries");
+        goto error;
+    }
+    if ((memfd = memfd_open(pid)) < 0) {
+        goto error;
+    }
+
+    // In order to have an exploitable callstack, we should put the breakpoint
+    // on {m,c,re}alloc_hook() insted of {m,c,re}alloc().
+    //
+    // Determine the breakpoint address fromt there.
+    library_symbol_t malloc_sym;
+    for (size_t i = 0; i < countof(alloc_functions); i++) {
+        library_symbol_t sym = libraries_find_symbol(libraries, alloc_functions[i].name);
+        malloc_sym = sym;
+        if (sym.name && sym.addr == (size_t) callstack[0]) {
+            library_symbol_t sym = libraries_find_symbol(libraries, alloc_functions[i].inject);
+            if (!sym.name) {
+                CONSOLE("Failed to find %s() in target process", alloc_functions[i].inject);
+                goto error;
+            }
+            CONSOLE("Setting breakpoint on %s at 0x%"PRIx64" (%s+0x%"PRIx64")",
+                sym.name, sym.addr, library_name(sym.library), sym.offset);
+            bp_addr = sym.addr;
+            break;
+        }
+    }
+    if (!bp_addr) {
+        CONSOLE("%p is not an allocation function", callstack[0]);
+        goto error;
+    }
+    if (!breakpoint_wait_until(pid, threads, memfd, bp_addr, callstack, sizeof(callstack))) {
+        CONSOLE("Breakpoint was not hit");
+        goto error;
+    }
+    CONSOLE("Breakpoint was hit !");
+    cpu_registers_t regs;
+    cpu_registers_get(&regs, pid);
+    cpu_register_set(&regs, cpu_register_pc, malloc_sym.addr);
+    memtrace_coredump("/tmp/core", pid, &regs);
+
+error:
+    if (memfd >= 0) {
+        close(memfd);
+    }
+    if (libraries) {
+        libraries_destroy(libraries);
+    }
+    if (threads) {
+        CONSOLE("Detaching from %d", pid);
+        threads_detach(threads);
+    }
+
     strmap_cleanup(&options);
 }
 
@@ -871,18 +829,6 @@ error:
 }
 
 static bool inject_memtrace_agent(int pid, const char *libname) {
-    static const struct {
-        const char *name;
-        const char *inject;
-    } replace_functions[] = {
-        {"malloc",          "malloc_hook"},
-        {"calloc",          "calloc_hook"},
-        {"calloc",          "calloc_hook"},
-        {"realloc",         "realloc_hook"},
-        {"reallocarray",    "reallocarray_hook"},
-        {"free",            "free_hook"},
-        {"fork",            "fork_hook"},
-    };
     bool rt = false;
     DIR *threads = NULL;
     injecter_t *injecter = NULL;
@@ -902,8 +848,8 @@ static bool inject_memtrace_agent(int pid, const char *libname) {
     }
 
     CONSOLE("[Replacing functions]");
-    for (size_t i = 0; i < sizeof(replace_functions)/sizeof(*replace_functions); i++) {
-        injecter_replace_function(injecter, replace_functions[i].name, replace_functions[i].inject);
+    for (size_t i = 0; i < countof(alloc_functions); i++) {
+        injecter_replace_function(injecter, alloc_functions[i].name, alloc_functions[i].inject);
     }
 
     rt = true;

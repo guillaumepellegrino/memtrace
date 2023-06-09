@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021 Guillaume Pellegrino
+ * Copyright (C) 2022 Guillaume Pellegrino
  * This file is part of memtrace <https://github.com/guillaumepellegrino/memtrace>.
  *
  * This program is free software: you can redistribute it and/or modify
@@ -15,23 +15,32 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
+#ifndef THREADS_H
+#define THREADS_H
 
-#ifndef BREAKPOINT_H
-#define BREAKPOINT_H
-
-#include "types.h"
+#include <errno.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+#include <getopt.h>
+#include <fcntl.h>
 #include <dirent.h>
+#include "types.h"
 
-/** Set a breakpoint at the specified address */
-breakpoint_t *breakpoint_set(int pid, long addr);
+#define threads_for_each(tid, dir) \
+    for (tid = threads_first(dir); tid > 0; tid = threads_next(dir))
 
-/** Unset the previously set breakpoint */
-void breakpoint_unset(breakpoint_t *bp);
+DIR *process_threads(int pid);
+int threads_next(DIR *threads);
+int threads_first(DIR *threads);
 
-/**
- * Set a breakpoint at the specified address and
- * wait for it to be hit until it matches the specified callstack.
- */
-bool breakpoint_wait_until(int pid, DIR *threads, int memfd, long addr, void **callstack, size_t size);
+DIR *threads_attach(int pid);
+void threads_detach(DIR *threads);
+bool threads_interrupt(DIR *threads);
+bool threads_continue(DIR *threads);
 
 #endif

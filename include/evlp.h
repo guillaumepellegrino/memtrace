@@ -28,5 +28,6 @@ void evlp_remove_handler(evlp_t *evlp, int fd);
 bool evlp_main(evlp_t *evlp);
 void evlp_stop(evlp_t *evlp);
 void evlp_exit_onsignal();
+bool evlp_stopped();
 
 #endif
