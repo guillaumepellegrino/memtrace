@@ -559,6 +559,11 @@ static void memtrace_console_coredump(console_t *console, int argc, char *argv[]
         }
     }
 
+    if (!arch.breakpoint_set) {
+        CONSOLE("coredump command is not implemented for this platform");
+        goto error;
+    }
+
     if (!(ipc = bus_first_connection(&memtrace->agent))) {
         CONSOLE("memtrace is not connected to target process");
         goto error;

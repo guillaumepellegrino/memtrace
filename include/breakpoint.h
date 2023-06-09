@@ -22,6 +22,12 @@
 #include "types.h"
 #include <dirent.h>
 
+struct _breakpoint {
+    int memfd;
+    long addr;
+    long orig_instr;
+};
+
 /** Set a breakpoint at the specified address */
 breakpoint_t *breakpoint_set(int memfd, long addr);
 

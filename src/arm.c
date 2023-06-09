@@ -20,8 +20,21 @@
 #include <asm/ptrace.h>
 #include <sys/user.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include "arch.h"
+#include "breakpoint.h"
 #include "log.h"
+
+typedef enum {
+    arm_cpu_mode_arm = 0,
+    arm_cpu_mode_thumb16,
+    arm_cpu_mode_thumb32,
+} arm_cpu_mode_t;
+
+typedef struct {
+    long opcode;
+    long size;
+} breakpoint_instr_t;
 
 static bool arm_cpu_registers_get(cpu_registers_t *regs, int pid) {
     if (ptrace(PTRACE_GETREGS, pid, NULL, &regs->raw) != 0) {
@@ -66,9 +79,99 @@ static size_t *arm_cpu_register_reference(cpu_registers_t *registers, cpu_regist
     }
 }
 
+//gdb implementation
+//calloc: 0xb6f338fd (0xb6ede000 + 0x558fd)
+//ptrace(PTRACE_PEEKTEXT, 12092, 0xb6f338fc, [0x201ea40]) = 0
+//ptrace(PTRACE_POKEDATA, 12092, 0xb6f338fc, 0xa000f7f0) = 0
+//
+//> - two-byte thumb breakpoint: 0xde01
+//> - four-byte thumb breakpoint: 0xa000f7f0
+//> - arm breakpoint: 0xe7f001f0
+static breakpoint_instr_t arm_breakpoint_instr(arm_cpu_mode_t cpu_mode) {
+    switch (cpu_mode) {
+        case arm_cpu_mode_arm:
+            return (breakpoint_instr_t) {
+                .opcode = 0xe7f001f0,
+                .size = 4,
+            };
+        case arm_cpu_mode_thumb32:
+            return (breakpoint_instr_t) {
+                .opcode = 0xa000f7f0,
+                .size = 4,
+            };
+        case arm_cpu_mode_thumb16:
+            return (breakpoint_instr_t) {
+                .opcode = 0xDE01,
+                .size = 2,
+            };
+        default:
+            abort();
+    }
+}
+
+static arm_cpu_mode_t arm_get_cpu_mode(long addr, long instr) {
+    if (!(addr & 0x01)) {
+        return arm_cpu_mode_arm;
+    }
+    if (addr & 0x02) {
+        // Instruction is not aligned on 4xbits => THUM16
+        return arm_cpu_mode_thumb16;
+    }
+    else {
+        // 16/32 bit Thumb Instruction Encoding
+        // Half Word 1 :
+        //      11100.xxxx: 16bits Thumb instruction
+        //      111xx.xxxx: 32bits Thumb-2 instruction
+        //      xxxxx.xxxx: 16bits Thumb instruction
+        long opcode = (instr & 0xF800) >> 11;
+        switch (opcode) {
+            case 0b11101:
+            case 0b11110:
+            case 0b11111:
+                return arm_cpu_mode_thumb32;
+            default:
+                return arm_cpu_mode_thumb16;
+        }
+    }
+}
+
+static breakpoint_t *arm_breakpoint_set(int memfd, long breakpoint_addr) {
+    breakpoint_t *bp = NULL;
+    long addr = breakpoint_addr & ~1;
+    long orig_instr = 0;
+
+    // Read original instruction
+    if (pread64(memfd, &orig_instr, sizeof(orig_instr), addr) < 0) {
+        TRACE_ERROR("pread64(0x%zx) failed: %m", addr);
+        return NULL;
+    }
+    arm_cpu_mode_t cpu_mode = arm_get_cpu_mode(addr, orig_instr);
+    breakpoint_instr_t instr = arm_breakpoint_instr(cpu_mode);
+
+    CONSOLE("Set breakpoint instr (0x%lX) at 0x%lX (old: 0x%lX)",
+        instr.opcode, addr, orig_instr);
+
+    // Read interuption instruction
+    if (pwrite64(memfd, &instr.opcode, instr.size, addr) < 0) {
+        TRACE_ERROR("pwrite64(0x%zx) failed: %m", addr);
+        return NULL;
+    }
+
+    if (!(bp = calloc(1, sizeof(breakpoint_t)))) {
+        return NULL;
+    }
+
+    bp->memfd = memfd;
+    bp->addr = addr;
+    bp->orig_instr = orig_instr;
+
+    return bp;
+}
+
 arch_t arch = {
     .cpu_registers_get = arm_cpu_registers_get,
     .cpu_registers_set = arm_cpu_registers_set,
     .cpu_register_reference = arm_cpu_register_reference,
+    .breakpoint_set = arm_breakpoint_set,
     .syscall_size = 2,
 };
