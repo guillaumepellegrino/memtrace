@@ -272,7 +272,7 @@ bool breakpoint_wait_until(int pid, DIR *threads, int memfd, long addr, void **c
         // Stop others threads execution
         threads_for_each(it, threads) {
             if (it == tid) {
-                //continue;
+                continue;
             }
             if (ptrace(PTRACE_INTERRUPT, it, NULL, NULL) != 0) {
                 TRACE_ERROR("ptrace(INTERRUPT, %d) failed: %m", tid);
