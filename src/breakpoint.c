@@ -172,7 +172,6 @@ bool breakpoint_wait_until(int pid, DIR *threads, int memfd, long addr, void **c
     while (!evlp_stopped()) {
         CONSOLE("Set breakpoint at 0x%lx", addr);
         int tid = -1;
-        int it = -1;
         int status = 0;
         cpu_registers_t regs;
         long pc;
@@ -207,20 +206,7 @@ bool breakpoint_wait_until(int pid, DIR *threads, int memfd, long addr, void **c
         } while (pc != bp->addr);
 
         // Stop others threads execution
-        threads_for_each(it, threads) {
-            if (it == tid) {
-                continue;
-            }
-            if (ptrace(PTRACE_INTERRUPT, it, NULL, NULL) != 0) {
-                TRACE_ERROR("ptrace(INTERRUPT, %d) failed: %m", it);
-                goto error;
-            }
-            if (waitpid(it, &status, 0) < 0) {
-                TRACE_ERROR("wait(%d) failed: %m", it);
-                goto error;
-            }
-            CONSOLE("waitpid(%d) done", it);
-        }
+        threads_interrupt_except(threads, tid);
         if (!breakpoint_unset(bp)) {
             TRACE_ERROR("Failed to unset breakpoint for %d", tid);
             bp = NULL;

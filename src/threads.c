@@ -111,16 +111,25 @@ void threads_detach(DIR *threads) {
     }
 }
 
-bool threads_interrupt(DIR *threads) {
+bool threads_interrupt_except(DIR *threads, int exception) {
     int tid = 0;
+    int status = 0;
     bool rt = true;
 
     threads_for_each(tid, threads) {
+        if (tid == exception) {
+            continue;
+        }
         if (ptrace(PTRACE_INTERRUPT, tid, NULL, NULL) != 0) {
             TRACE_ERROR("ptrace(INTERRUPT, %d) failed: %m", tid);
             rt = false;
         }
+        if (waitpid(tid, &status, 0) < 0) {
+            TRACE_ERROR("wait(%d) failed: %m", tid);
+            rt = false;
+        }
     }
+
     return rt;
 }
 
