@@ -87,7 +87,7 @@ static int memfd_open(int pid) {
     int memfd = -1;
 
     snprintf(memfile, sizeof(memfile), "/proc/%d/mem", pid);
-    if ((memfd = open(memfile, O_RDONLY)) < 0) {
+    if ((memfd = open(memfile, O_RDWR)) < 0) {
         TRACE_ERROR("Failed to open /proc/%d/mem: %m", pid);
         return -1;
     }
@@ -712,7 +712,7 @@ static void memtrace_console_breakpoint(console_t *console, int argc, char *argv
 
     CONSOLE("Setting breakpoint on %s at 0x%"PRIx64" (%s+0x%"PRIx64")",
         sym.name, sym.addr, library_name(sym.library), sym.offset);
-    bp = breakpoint_set(pid, sym.addr);
+    //bp = breakpoint_set(memfd, sym.addr);
 
     // Continue execution until breakpoint is encountered
     if (!threads_continue(threads)) {

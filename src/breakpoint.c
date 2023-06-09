@@ -23,19 +23,10 @@ typedef struct {
 } breakpoint_instr_t;
 
 struct _breakpoint {
-    int pid;
+    int memfd;
     long addr;
     long orig_instr;
 };
-
-static long make_mask(long size) {
-    long mask = 0;
-    long i;
-    for (i = 0; i < size; i++) {
-        mask |= 0xFF << (8L * i);
-    }
-    return mask;
-}
 
 //gdb implementation
 //calloc: 0xb6f338fd (0xb6ede000 + 0x558fd)
@@ -93,30 +84,25 @@ static arm_cpu_mode_t arm_get_cpu_mode(long addr, long instr) {
     }
 }
 
-breakpoint_t *breakpoint_set(int pid, long breakpoint_addr) {
+breakpoint_t *breakpoint_set(int memfd, long breakpoint_addr) {
     breakpoint_t *bp = NULL;
     long addr = breakpoint_addr & ~1;
     long orig_instr = 0;
 
-    // PEEKTEXT and POKETEXT MUST be word aligned
-    long offset = addr % sizeof(long);
-    addr = (addr / sizeof(long)) * sizeof(long);
-
     // Read original instruction
-    if ((orig_instr = ptrace(PTRACE_PEEKTEXT, pid, addr, 0)) == -1 && errno != 0) {
-        TRACE_ERROR("ptrace(PEEKTEXT, %d, 0x%zx) failed: %m", pid, addr);
+    if (pread64(memfd, &orig_instr, sizeof(orig_instr), addr) < 0) {
+        TRACE_ERROR("pread64(0x%zx) failed: %m", addr);
         return NULL;
     }
     arm_cpu_mode_t cpu_mode = arm_get_cpu_mode(addr, orig_instr);
     breakpoint_instr_t instr = arm_breakpoint_instr(cpu_mode);
-    long mask = make_mask(instr.size) << (8L * offset);
-    long INT = instr.opcode << (8L * offset);
-    long brk_instr = (orig_instr & ~mask) | INT;
 
-    CONSOLE("Set breakpoint instr (0x%lX) at 0x%lX (old: 0x%lX, new: 0x%lX)",
-        instr.opcode, addr, orig_instr, brk_instr);
-    if (ptrace(PTRACE_POKETEXT, pid, addr, brk_instr) == -1) {
-        TRACE_ERROR("ptrace(POKETEXT, %d, 0x%lx, 0x%lx) failed: %m", pid, addr, brk_instr);
+    CONSOLE("Set breakpoint instr (0x%lX) at 0x%lX (old: 0x%lX)",
+        instr.opcode, addr, orig_instr);
+
+    // Read interuption instruction
+    if (pwrite64(memfd, &instr.opcode, instr.size, addr) < 0) {
+        TRACE_ERROR("pwrite64(0x%zx) failed: %m", addr);
         return NULL;
     }
 
@@ -124,7 +110,7 @@ breakpoint_t *breakpoint_set(int pid, long breakpoint_addr) {
         return NULL;
     }
 
-    bp->pid = pid;
+    bp->memfd = memfd;
     bp->addr = addr;
     bp->orig_instr = orig_instr;
 
@@ -134,62 +120,16 @@ breakpoint_t *breakpoint_set(int pid, long breakpoint_addr) {
 bool breakpoint_unset(breakpoint_t *bp) {
     bool rt = true;
 
-    if (bp && bp->pid > 0) {
+    if (bp) {
         // Set back the original instruction
-        if (ptrace(PTRACE_POKETEXT, bp->pid, bp->addr, bp->orig_instr) != 0) {
-            TRACE_ERROR("ptrace(POKETEXT, %d) failed: %m", bp->pid);
+        if (pwrite64(bp->memfd, &bp->orig_instr, sizeof(bp->orig_instr), bp->addr) < 0) {
+            TRACE_ERROR("pwrite64(0x%zx) failed: %m", bp->addr);
             rt = false;
         }
-
-        /*
-        // rewind back to this instruction if we are walking on it
-        cpu_registers_t regs;
-        cpu_registers_get(&regs, bp->pid);
-        long addr = cpu_register_get(&regs, cpu_register_pc);
-        if (bp->addr == (addr - 2)) {
-            CONSOLE("Rewind to 
-            cpu_register_set(&regs, cpu_register_pc, bp->addr);
-            cpu_registers_set(&regs, bp->pid);
-        }
-        */
         free(bp);
     }
 
     return rt;
-}
-
-int breakpoint_set_and_wait(int pid, DIR *threads, long addr) {
-    breakpoint_t *bp = NULL;
-    int tid = -1;
-    int it = -1;
-
-    if (!(bp = breakpoint_set(pid, addr))) {
-        TRACE_ERROR("Failed to set breakpoint");
-        goto error;
-    }
-
-    // Continue execution until breakpoint is encountered
-    if (!threads_continue(threads)) {
-        TRACE_ERROR("Failed to continue: %m");
-        //goto error;
-    }
-    int status = 0;
-    if ((tid = wait(&status)) < 0) {
-        TRACE_ERROR("wait(%d) failed: %m", pid);
-        goto error;
-    }
-
-error:
-    threads_for_each(it, threads) {
-        if (it == tid) {
-            continue;
-        }
-        if (ptrace(PTRACE_INTERRUPT, it, NULL, NULL) != 0) {
-            TRACE_ERROR("ptrace(INTERRUPT, %d) failed: %m", tid);
-        }
-    }
-    breakpoint_unset(bp);
-    return tid;
 }
 
 bool process_callstack_match(cpu_registers_t *regs, int memfd, void **callstack, size_t size) {
@@ -238,7 +178,7 @@ bool breakpoint_wait_until(int pid, DIR *threads, int memfd, long addr, void **c
         long pc;
 
         // Set the breakpoint
-        if (!(bp = breakpoint_set(pid, addr))) {
+        if (!(bp = breakpoint_set(memfd, addr))) {
             TRACE_ERROR("Failed to set breakpoint");
             goto error;
         }
@@ -261,6 +201,9 @@ bool breakpoint_wait_until(int pid, DIR *threads, int memfd, long addr, void **c
                 goto error;
             }
             pc = cpu_register_get(&regs, cpu_register_pc);
+
+            // FIXME: pc comparison must be improved
+            // and is platform specific
         } while (pc != bp->addr);
 
         // Stop others threads execution

@@ -23,7 +23,7 @@
 #include <dirent.h>
 
 /** Set a breakpoint at the specified address */
-breakpoint_t *breakpoint_set(int pid, long addr);
+breakpoint_t *breakpoint_set(int memfd, long addr);
 
 /** Unset the previously set breakpoint */
 bool breakpoint_unset(breakpoint_t *bp);
