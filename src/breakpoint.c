@@ -141,12 +141,6 @@ bool breakpoint_unset(breakpoint_t *bp) {
             rt = false;
         }
 
-        long instr = ptrace(PTRACE_PEEKTEXT, bp->pid, bp->addr);
-        CONSOLE("orig_instr=0x%lx", instr);
-        if (instr != bp->orig_instr) {
-            TRACE_ERROR("ptrace(POKETEXT, %d) failed: %m", bp->pid);
-            rt = false;
-        }
         /*
         // rewind back to this instruction if we are walking on it
         cpu_registers_t regs;
@@ -275,9 +269,14 @@ bool breakpoint_wait_until(int pid, DIR *threads, int memfd, long addr, void **c
                 continue;
             }
             if (ptrace(PTRACE_INTERRUPT, it, NULL, NULL) != 0) {
-                TRACE_ERROR("ptrace(INTERRUPT, %d) failed: %m", tid);
+                TRACE_ERROR("ptrace(INTERRUPT, %d) failed: %m", it);
                 goto error;
             }
+            if (waitpid(it, &status, 0) < 0) {
+                TRACE_ERROR("wait(%d) failed: %m", it);
+                goto error;
+            }
+            CONSOLE("waitpid(%d) done", it);
         }
         if (!breakpoint_unset(bp)) {
             TRACE_ERROR("Failed to unset breakpoint for %d", tid);
@@ -293,23 +292,11 @@ bool breakpoint_wait_until(int pid, DIR *threads, int memfd, long addr, void **c
             //break;
         }
 
-        usleep(200*1000);
-
         // Walk on the breakpoint
         if (!ptrace_step(tid)) {
             TRACE_ERROR("Failed to step: %m", tid);
             goto error;
         }
-        /*
-        if (ptrace(PTRACE_SINGLESTEP, tid, NULL, NULL) != 0) {
-            TRACE_ERROR("ptrace(SINGLESTEP, %d) failed: %m", tid);
-            goto error;
-        }
-        if ((tid = waitpid(tid, &status, 0)) < 0) {
-            TRACE_ERROR("wait(%d) failed: %m", tid);
-            goto error;
-        }
-        */
         if (!cpu_registers_get(&regs, tid)) {
             TRACE_ERROR("Failed to get registers");
             goto error;
