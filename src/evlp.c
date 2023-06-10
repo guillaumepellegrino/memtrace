@@ -122,7 +122,7 @@ void evlp_remove_handler(evlp_t *evlp, int fd) {
 
 bool evlp_main(evlp_t *evlp) {
     struct epoll_event event = {0};
-    sigset_t oldmask = {0};
+    //sigset_t oldmask = {0};
 
     assert(evlp);
 
@@ -130,15 +130,15 @@ bool evlp_main(evlp_t *evlp) {
     while (!signal_exit && evlp->run) {
         int cnt = 0;
 
-        assert(pthread_sigmask(SIG_BLOCK, &evlp->sigmask, &oldmask) == 0);
+        //assert(pthread_sigmask(SIG_BLOCK, &evlp->sigmask, &oldmask) == 0);
         if ((cnt = epoll_wait(evlp->epfd, &event, 1, -1)) < 0) {
             if (errno != EINTR) {
-                assert(pthread_sigmask(SIG_UNBLOCK, &oldmask, NULL) == 0);
+                //assert(pthread_sigmask(SIG_UNBLOCK, &oldmask, NULL) == 0);
                 TRACE_ERROR("epoll_wait() error: %m");
                 return false;
             }
         }
-        assert(pthread_sigmask(SIG_UNBLOCK, &oldmask, NULL) == 0);
+        //assert(pthread_sigmask(SIG_UNBLOCK, &oldmask, NULL) == 0);
         if (!signal_exit && cnt > 0) {
             evlp_handler_t *handler = event.data.ptr;
             handler->fn(handler, event.events);
