@@ -148,7 +148,7 @@ static breakpoint_t *arm_breakpoint_set(int memfd, size_t breakpoint_addr) {
     arm_cpu_mode_t cpu_mode = arm_get_cpu_mode(addr, orig_instr);
     breakpoint_instr_t instr = arm_breakpoint_instr(cpu_mode);
 
-    CONSOLE("Set breakpoint instr (0x%lX) at 0x%zX (old: 0x%zX)",
+    TRACE_LOG("Set breakpoint instr (0x%lX) at 0x%zX (old: 0x%zX)",
         instr.opcode, addr, orig_instr);
 
     // Read interuption instruction

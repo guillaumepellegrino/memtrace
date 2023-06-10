@@ -68,7 +68,7 @@ bool breakpoint_wait_until(int pid, DIR *threads, int memfd, long addr, void **c
     breakpoint_t *bp = NULL;
 
     while (!evlp_stopped()) {
-        CONSOLE("Set breakpoint at 0x%lx", addr);
+        TRACE_LOG("Set breakpoint at 0x%lx", addr);
         int tid = -1;
         int status = 0;
         cpu_registers_t regs;
@@ -114,7 +114,7 @@ bool breakpoint_wait_until(int pid, DIR *threads, int memfd, long addr, void **c
         }
         bp = NULL;
 
-        CONSOLE("%d is at 0x%lx", tid, pc);
+        TRACE_LOG("%d is at 0x%lx", tid, pc);
 
         // Did we met the stop condition ?
         if (process_callstack_match(&regs, memfd, callstack, size)) {
@@ -126,12 +126,6 @@ bool breakpoint_wait_until(int pid, DIR *threads, int memfd, long addr, void **c
             TRACE_ERROR("Failed to step: %m", tid);
             goto error;
         }
-        if (!cpu_registers_get(&regs, tid)) {
-            TRACE_ERROR("Failed to get registers");
-            goto error;
-        }
-        pc = cpu_register_get(&regs, cpu_register_pc);
-        CONSOLE("%d singlestep at 0x%lx", tid, pc);
     }
 
     rt = true;
