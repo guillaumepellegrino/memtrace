@@ -1080,6 +1080,7 @@ int main(int argc, char *argv[]) {
 
     // Create event loop
     memtrace.evlp = evlp_create();
+    evlp_block_signals(memtrace.evlp, false);
     assert((memtrace.timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC)) >= 0);
     assert(evlp_add_handler(memtrace.evlp, &memtrace.timerfd_handler, memtrace.timerfd, EPOLLIN));
 
