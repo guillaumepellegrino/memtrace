@@ -24,12 +24,12 @@
 
 struct _breakpoint {
     int memfd;
-    long addr;
-    long orig_instr;
+    size_t addr;
+    size_t orig_instr;
 };
 
 /** Set a breakpoint at the specified address */
-breakpoint_t *breakpoint_set(int memfd, long addr);
+breakpoint_t *breakpoint_set(int memfd, size_t addr);
 
 /** Unset the previously set breakpoint */
 bool breakpoint_unset(breakpoint_t *bp);

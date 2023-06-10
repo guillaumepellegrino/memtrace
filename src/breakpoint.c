@@ -11,7 +11,7 @@
 #include "arch.h"
 #include "log.h"
 
-breakpoint_t *breakpoint_set(int memfd, long addr) {
+breakpoint_t *breakpoint_set(int memfd, size_t addr) {
     return arch.breakpoint_set(memfd, addr);
 }
 
@@ -81,10 +81,12 @@ bool breakpoint_wait_until(int pid, DIR *threads, int memfd, long addr, void **c
         }
 
         // Continue execution until breakpoint is encountered
+        /*
         do {
             if (evlp_stopped()) {
                 goto error;
             }
+            */
             if (!threads_continue(threads)) {
                 TRACE_ERROR("Failed to continue: %m");
                 goto error;
@@ -101,7 +103,7 @@ bool breakpoint_wait_until(int pid, DIR *threads, int memfd, long addr, void **c
 
             // FIXME: pc comparison must be improved
             // and is platform specific
-        } while (pc != bp->addr);
+        //} while (pc != bp->addr);
 
         // Stop others threads execution
         threads_interrupt_except(threads, tid);

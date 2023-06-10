@@ -135,10 +135,10 @@ static arm_cpu_mode_t arm_get_cpu_mode(long addr, long instr) {
     }
 }
 
-static breakpoint_t *arm_breakpoint_set(int memfd, long breakpoint_addr) {
+static breakpoint_t *arm_breakpoint_set(int memfd, size_t breakpoint_addr) {
     breakpoint_t *bp = NULL;
-    long addr = breakpoint_addr & ~1;
-    long orig_instr = 0;
+    size_t addr = breakpoint_addr & ~1;
+    size_t orig_instr = 0;
 
     // Read original instruction
     if (pread64(memfd, &orig_instr, sizeof(orig_instr), addr) < 0) {
@@ -148,7 +148,7 @@ static breakpoint_t *arm_breakpoint_set(int memfd, long breakpoint_addr) {
     arm_cpu_mode_t cpu_mode = arm_get_cpu_mode(addr, orig_instr);
     breakpoint_instr_t instr = arm_breakpoint_instr(cpu_mode);
 
-    CONSOLE("Set breakpoint instr (0x%lX) at 0x%lX (old: 0x%lX)",
+    CONSOLE("Set breakpoint instr (0x%lX) at 0x%zX (old: 0x%zX)",
         instr.opcode, addr, orig_instr);
 
     // Read interuption instruction
