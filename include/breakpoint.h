@@ -22,10 +22,31 @@
 #include "types.h"
 #include <dirent.h>
 
+typedef bool (*breakpoint_handler_t)(int tid, int memfd, cpu_registers_t *regs, void *userdata);
+
+/**
+ * Set a breakpoint at the specified address and
+ * wait for it to be hit.
+ */
+bool breakpoint_wait(int pid, DIR *threads, int memfd, long addr);
+
+/*
+ * Set a breakpoint at the specified address and
+ * log the callstack each time it is matched, forever
+ * or until stopped by CTRL+C.
+ */
+bool breakpoint_log_forever(int pid, DIR *threads, int memfd, long addr);
+
 /**
  * Set a breakpoint at the specified address and
  * wait for it to be hit until it matches the specified callstack.
  */
-bool breakpoint_wait_until(int pid, DIR *threads, int memfd, long addr, void **callstack, size_t size);
+bool breakpoint_wait_until_callstack_matched(int pid, DIR *threads, int memfd, long addr, void **callstack, size_t size);
+
+/**
+ * Set a breakpoint at the specified address and
+ * wait for it to be hit until the specified stop condition is met.
+ */
+bool breakpoint_wait_until(int pid, DIR *threads, int memfd, long addr, breakpoint_handler_t stop_condition, void *userdata);
 
 #endif

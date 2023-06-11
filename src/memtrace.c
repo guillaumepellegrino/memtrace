@@ -61,8 +61,6 @@ typedef struct {
     bus_t agent;
     strlist_t commands;
     int pid;
-    bus_topic_t notify_do_coredump_topic;
-    char *coredump_path;
     const char *inject_libname;
 } memtrace_t;
 
@@ -81,6 +79,12 @@ static const struct {
 };
 
 __attribute__((aligned)) char g_buff[G_BUFF_SIZE];
+
+static const char *defaultdir() {
+    struct stat stbuf;
+    bool ext = stat("/ext", &stbuf) == 0;
+    return ext ? "/ext" : "/tmp";
+}
 
 static int memfd_open(int pid) {
     char memfile[64];
@@ -273,8 +277,6 @@ static void memtrace_console_logreport(console_t *console, int argc, char *argv[
     };
     int opt = -1;
     memtrace_t *memtrace = container_of(console, memtrace_t, console);
-    struct stat stbuf;
-    bool ext = stat("/ext", &stbuf) == 0;
     bool foreground = false;
     struct itimerspec itimer = {
         .it_value.tv_sec = 0,
@@ -299,7 +301,7 @@ static void memtrace_console_logreport(console_t *console, int argc, char *argv[
             default:
                 CONSOLE("Usage: log [OPTION].. [FILE]");
                 CONSOLE("Log reports at a regular interval to the specified file. (default is %s/memtrace-%d.log)",
-                    (ext ? "/ext" : "/tmp"), memtrace->pid);
+                    defaultdir(), memtrace->pid);
                 CONSOLE("  -h, --help             Display this help");
                 CONSOLE("  -i, --interval=VALUE   Start monitoring at the specified interval value in seconds");
                 CONSOLE("  -c, --count=VALUE      Count of print memory context in each report");
@@ -314,7 +316,7 @@ static void memtrace_console_logreport(console_t *console, int argc, char *argv[
     }
     else {
         assert(asprintf(&memtrace->logfile, "%s/memtrace-%d.log",
-            (ext ? "/ext" : "/tmp"), memtrace->pid) > 0);
+            defaultdir(), memtrace->pid) > 0);
     }
 
     FILE *fp = fopen(memtrace->logfile, "w");
@@ -429,11 +431,13 @@ static void memtrace_console_report(console_t *console, int argc, char *argv[]) 
 }
 
 static void memtrace_coredump(const char *filename, int pid, cpu_registers_t *regs) {
+    char defaultfile[64];
     int memfd = -1;
     FILE *core = NULL;
 
     if (!filename) {
-        filename = "core";
+        snprintf(defaultfile, sizeof(defaultfile), "%s/memtrace-%d.core", defaultdir(), pid);
+        filename = defaultfile;
     }
     if (!(core = fopen(filename, "w"))) {
         TRACE_ERROR("Failed to open %s: %m", filename);
@@ -457,71 +461,12 @@ error:
     }
 }
 
-/*
-void memtrace_console_coredump_legacy(console_t *console, int argc, char *argv[]) {
-    const char *short_options = "+c:f:h";
-    const struct option long_options[] = {
-        {"context",     required_argument,  0, 'c'},
-        {"file",        required_argument,  0, 'f'},
-        {"help",        no_argument,        0, 'h'},
-        {0},
-    };
-    int opt = -1;
-    memtrace_t *memtrace = container_of(console, memtrace_t, console);
-    bus_connection_t *ipc = NULL;
-    strmap_t options = {0};
-    int retval = 0;
-    const char *descr = NULL;
-
-    optind = 1;
-    while ((opt = getopt_long(argc, argv, short_options, long_options, NULL)) != -1) {
-        switch (opt) {
-            case 'c':
-                strmap_add(&options, "context", optarg);
-                break;
-            case 'f':
-                free(memtrace->coredump_path);
-                memtrace->coredump_path = strdup(optarg);
-                break;
-            case 'h':
-            default:
-                CONSOLE("Usage: coredump [OPTION]..");
-                CONSOLE("Mark a memory context for coredump generation");
-                CONSOLE("  -h, --help             Display this help");
-                CONSOLE("  -c, --context=VALUE    Mark the specified memory context for coredump generation (default:core.%d)", memtrace->pid);
-                CONSOLE("  -f, --file=PATH        Write the coredump to the specified path");
-                goto error;
-        }
-    }
-
-    if (!(ipc = bus_first_connection(&memtrace->agent))) {
-        CONSOLE("memtrace is not connected to target process");
-        goto error;
-    }
-
-    // Write coredump request and read reply
-    bus_connection_write_request(ipc, "coredump", &options);
-    bus_connection_read_reply(ipc, &options);
-    strmap_get_fmt(&options, "retval", "%d", &retval);
-    if (!(descr = strmap_get(&options, "descr"))) {
-        descr = "Unknown error";
-    }
-    if (!retval) {
-        CONSOLE("Coredump error: %s", descr);
-        goto error;
-    }
-    CONSOLE("Coredump: %s", descr);
-
-error:
-    strmap_cleanup(&options);
-}
-*/
-
 static void memtrace_console_coredump(console_t *console, int argc, char *argv[]) {
-    const char *short_options = "+c:f:h";
+    const char *short_options = "+c:f:hn";
     const struct option long_options[] = {
         {"context",     required_argument,  0, 'c'},
         {"file",        required_argument,  0, 'f'},
+        {"now",         no_argument,        0, 'n'},
         {"help",        no_argument,        0, 'h'},
         {0},
     };
@@ -532,6 +477,8 @@ static void memtrace_console_coredump(console_t *console, int argc, char *argv[]
     int retval = 0;
     const char *descr = NULL;
 
+    const char *filename = NULL;
+    bool now = false;
     int pid = memtrace->pid;
     DIR *threads = NULL;
     libraries_t *libraries = NULL;
@@ -545,8 +492,10 @@ static void memtrace_console_coredump(console_t *console, int argc, char *argv[]
                 strmap_add(&options, "context", optarg);
                 break;
             case 'f':
-                free(memtrace->coredump_path);
-                memtrace->coredump_path = strdup(optarg);
+                filename = optarg;
+                break;
+            case 'n':
+                now = true;
                 break;
             case 'h':
             default:
@@ -554,13 +503,19 @@ static void memtrace_console_coredump(console_t *console, int argc, char *argv[]
                 CONSOLE("Mark a memory context for coredump generation");
                 CONSOLE("  -h, --help             Display this help");
                 CONSOLE("  -c, --context=VALUE    Mark the specified memory context for coredump generation (default:core.%d)", memtrace->pid);
+                CONSOLE("  -n, --now              Generate a breakpoint, now !");
                 CONSOLE("  -f, --file=PATH        Write the coredump to the specified path");
                 goto error;
         }
     }
 
+    if (now) {
+        memtrace_coredump(filename, pid, NULL);
+        goto error;
+    }
+
     if (!arch.breakpoint_set) {
-        CONSOLE("coredump command is not implemented for this platform");
+        CONSOLE("breakpoint is not implemented for this platform");
         goto error;
     }
 
@@ -626,7 +581,7 @@ static void memtrace_console_coredump(console_t *console, int argc, char *argv[]
         CONSOLE("%p is not an allocation function", callstack[0]);
         goto error;
     }
-    if (!breakpoint_wait_until(pid, threads, memfd, bp_addr, callstack, sizeof(callstack))) {
+    if (!breakpoint_wait_until_callstack_matched(pid, threads, memfd, bp_addr, callstack, sizeof(callstack))) {
         CONSOLE("Breakpoint was not hit");
         goto error;
     }
@@ -634,7 +589,7 @@ static void memtrace_console_coredump(console_t *console, int argc, char *argv[]
     cpu_registers_t regs;
     cpu_registers_get(&regs, pid);
     cpu_register_set(&regs, cpu_register_pc, malloc_sym.addr);
-    memtrace_coredump("/tmp/core", pid, &regs);
+    memtrace_coredump(filename, pid, &regs);
 
 error:
     if (memfd >= 0) {
@@ -651,31 +606,26 @@ error:
     strmap_cleanup(&options);
 }
 
-static void cpu_registers_print(cpu_registers_t *regs) {
-    printf("arg1:%zu, arg2:%zu, arg3: %zu, pc:0x%zx, lr:0x%zx\n",
-        cpu_register_get(regs, cpu_register_arg1),
-        cpu_register_get(regs, cpu_register_arg2),
-        cpu_register_get(regs, cpu_register_arg3),
-        cpu_register_get(regs, cpu_register_pc),
-        cpu_register_get(regs, cpu_register_ra));
-}
-
 static void memtrace_console_breakpoint(console_t *console, int argc, char *argv[]) {
     memtrace_t *memtrace = container_of(console, memtrace_t, console);
     DIR *threads = NULL;
     int pid = memtrace->pid;
+    int memfd = -1;
     libraries_t *libraries = NULL;
+    const char *filename = NULL;
     const char *symname = "calloc_hook";
 
     int opt = -1;
-    const char *short_options = "+cf:h";
+    const char *short_options = "+cf:lh";
     const struct option long_options[] = {
         {"file",        required_argument,  0, 'f'},
         {"coredump",    required_argument,  0, 'c'},
+        {"log",         no_argument,        0, 'l'},
         {"help",        no_argument,        0, 'h'},
         {0},
     };
     bool do_coredump = false;
+    bool do_logforever = false;
 
     optind = 1;
     while ((opt = getopt_long(argc, argv, short_options, long_options, NULL)) != -1) {
@@ -684,12 +634,17 @@ static void memtrace_console_breakpoint(console_t *console, int argc, char *argv
                 do_coredump = true;
                 break;
             case 'f':
+                filename = optarg;
+                break;
+            case 'l':
+                do_logforever = true;
                 break;
             case 'h':
             default:
                 CONSOLE("Usage: break [OPTION].. [function]");
                 CONSOLE("Set a breakpoint at the specified function");
                 CONSOLE("  -c, --coredump    Generate a coredump when breakpoint is hit");
+                CONSOLE("  -l, --log         Log breakpoint hits forever until CTRL+C is hit");
                 CONSOLE("  -h, --help        Display this help");
                 goto error;
         }
@@ -704,6 +659,9 @@ static void memtrace_console_breakpoint(console_t *console, int argc, char *argv
         CONSOLE("Failed to get thread list from pid %d", pid);
         goto error;
     }
+    if ((memfd = memfd_open(pid)) < 0) {
+        goto error;
+    }
     if (!(libraries = libraries_create(pid))) {
         CONSOLE("Failed to open libraries");
         goto error;
@@ -716,17 +674,17 @@ static void memtrace_console_breakpoint(console_t *console, int argc, char *argv
 
     CONSOLE("Setting breakpoint on %s at 0x%"PRIx64" (%s+0x%"PRIx64")",
         sym.name, sym.addr, library_name(sym.library), sym.offset);
-    //bp = breakpoint_set(memfd, sym.addr);
-
-    // Continue execution until breakpoint is encountered
-    if (!threads_continue(threads)) {
-        TRACE_ERROR("Failed to continue: %m");
-        goto error;
+    if (do_logforever) {
+        if (!breakpoint_log_forever(pid, threads, memfd, sym.addr)) {
+            CONSOLE("Failed to set breakpoint");
+            goto error;
+        }
     }
-    int status = 0;
-    if (wait(&status) < 0) {
-        TRACE_ERROR("wait(%d) failed: %m", pid);
-        goto error;
+    else {
+        if (!breakpoint_wait(pid, threads, memfd, sym.addr)) {
+            CONSOLE("Failed to wait for breakpoint");
+            goto error;
+        }
     }
     CONSOLE("Breakpoint encountered");
 
@@ -734,15 +692,14 @@ static void memtrace_console_breakpoint(console_t *console, int argc, char *argv
     cpu_registers_get(&regs, pid);
     cpu_registers_print(&regs);
 
-    //library_symbol_t sym_calloc = libraries_find_symbol(libraries, "calloc");
-    //cpu_register_set(&regs, cpu_register_pc, sym_calloc.addr);
-    //CONSOLE("%s at 0x%"PRIx64" (%s+0x%"PRIx64")",
-    //    sym_calloc.name, sym_calloc.addr, library_name(sym_calloc.library), sym_calloc.offset);
     if (do_coredump) {
-        memtrace_coredump("/tmp/core", pid, &regs);
+        memtrace_coredump(filename, pid, NULL);
     }
 
 error:
+    if (memfd >= 0) {
+        close(memfd);
+    }
     if (libraries) {
         libraries_destroy(libraries);
     }
@@ -750,49 +707,6 @@ error:
         CONSOLE("Detaching from %d", pid);
         threads_detach(threads);
     }
-}
-
-static bool memtrace_notify_do_coredump(bus_t *bus, bus_connection_t *connection, bus_topic_t *topic, strmap_t *options, FILE *file) {
-    memtrace_t *memtrace = container_of(topic, memtrace_t, notify_do_coredump_topic);
-    DIR *threads = NULL;
-    cpu_registers_t regs = {0};
-    size_t tid = 0;
-    size_t pc = 0;
-    size_t sp = 0;
-    size_t fp = 0;
-    size_t ra = 0;
-    size_t arg1 = 0;
-    size_t arg2 = 0;
-    size_t arg3 = 0;
-
-    strmap_get_fmt(options, "tid", "%zu", &tid);
-    strmap_get_fmt(options, "pc", "%zu", &pc);
-    strmap_get_fmt(options, "sp", "%zu", &sp);
-    strmap_get_fmt(options, "fp", "%zu", &fp);
-    strmap_get_fmt(options, "ra", "%zu", &ra);
-    strmap_get_fmt(options, "arg1", "%zu", &arg1);
-    strmap_get_fmt(options, "arg2", "%zu", &arg2);
-    strmap_get_fmt(options, "arg3", "%zu", &arg3);
-    cpu_register_set(&regs, cpu_register_pc, pc);
-    cpu_register_set(&regs, cpu_register_sp, sp);
-    cpu_register_set(&regs, cpu_register_fp, fp);
-    cpu_register_set(&regs, cpu_register_ra, ra);
-    cpu_register_set(&regs, cpu_register_arg1, arg1);
-    cpu_register_set(&regs, cpu_register_arg2, arg2);
-    cpu_register_set(&regs, cpu_register_arg3, arg3);
-
-    CONSOLE("Do coredump for process %zu", tid);
-
-    if (!(threads = threads_attach(tid))) {
-        CONSOLE("Failed to get thread list from pid %zu", tid);
-        return false;
-    }
-    memtrace_coredump(memtrace->coredump_path, tid, &regs);
-    threads_detach(threads);
-    CONSOLE("Do coredump done");
-
-    // Reply to NotifyDoCoredump request
-    return bus_connection_write_reply(connection, NULL);
 }
 
 static const console_cmd_t memtrace_console_commands[] = {
@@ -959,6 +873,7 @@ static void help() {
         CONSOLE("  -l, --listen=HOST:PORT TCP listen on the specified host and port and wait for memtrace-server to connect");
     }
     CONSOLE("  -x, --command        Execute memtrace command and exit");
+    CONSOLE("  -C, --coredump=PATH  Generate a coredump and exit");
     CONSOLE("  -d, --debug          Enable debug logs");
     CONSOLE("  -h, --help           Display this help");
     CONSOLE("  -v, --version        Display program version");
@@ -969,11 +884,11 @@ static void version() {
 }
 
 int main(int argc, char *argv[]) {
-    const char *short_options = "+p:L:Cmc:l:x:e:dhv";
+    const char *short_options = "+p:L:C:mc:l:x:e:dhv";
     const struct option long_options[] = {
         {"pid",         required_argument,  0, 'p'},
         {"library",     required_argument,  0, 'L'},
-        {"coredump",    no_argument,        0, 'C'},
+        {"coredump",    required_argument,  0, 'C'},
         {"multicast",   no_argument,        0, 'm'},
         {"connect",     required_argument,  0, 'c'},
         {"listen",      required_argument,  0, 'l'},
@@ -986,7 +901,6 @@ int main(int argc, char *argv[]) {
     };
     int rt = 1;
     int opt = -1;
-    bool do_coredump = false;
     char *libname = NULL;
     const char *hostname = NULL;
     const char *port = "3002";
@@ -998,6 +912,7 @@ int main(int argc, char *argv[]) {
         .timerfd_handler = {.fn = timerfd_handler},
         .pid = -1,
     };
+    const char *coredump_path = NULL;
 
 
     while ((opt = getopt_long(argc, argv, short_options, long_options, NULL)) != -1) {
@@ -1009,7 +924,7 @@ int main(int argc, char *argv[]) {
                 libname = strdup(optarg);
                 break;
             case 'C':
-                do_coredump = true;
+                coredump_path = optarg;
                 break;
             case 'm':
                 multicast = true;
@@ -1061,14 +976,13 @@ int main(int argc, char *argv[]) {
     }
     CONSOLE("Memtrace agent is %s", libname);
     memtrace.inject_libname = libname;
-    assert(asprintf(&memtrace.coredump_path, "core.%d", memtrace.pid) > 0);
-    if (do_coredump) {
+    if (coredump_path) {
         DIR *threads = NULL;
         if (!(threads = threads_attach(memtrace.pid))) {
             CONSOLE("Failed to get thread list from pid %d", memtrace.pid);
             return false;
         }
-        memtrace_coredump(memtrace.coredump_path, memtrace.pid, NULL);
+        memtrace_coredump(coredump_path, memtrace.pid, NULL);
         threads_detach(threads);
         rt = 0;
         goto error;
@@ -1098,9 +1012,6 @@ int main(int argc, char *argv[]) {
         CONSOLE("Failed to connect to memtrace-agent");
         goto error;
     }
-    memtrace.notify_do_coredump_topic.name = "NotifyDoCoredump";
-    memtrace.notify_do_coredump_topic.read = memtrace_notify_do_coredump;
-    bus_register_topic(&memtrace.agent, &memtrace.notify_do_coredump_topic);
     CONSOLE("Memtrace is connected to target process %d", memtrace.pid);
 
     // Establish connection to memtrace-server and add socket to event loop
@@ -1163,7 +1074,6 @@ int main(int argc, char *argv[]) {
 
 error:
     free(libname);
-    free(memtrace.coredump_path);
     free(memtrace.logfile);
     close(memtrace.timerfd);
     strlist_cleanup(&memtrace.commands);

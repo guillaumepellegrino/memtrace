@@ -92,4 +92,13 @@ static inline void cpu_register_set(cpu_registers_t *regs, cpu_register_name_t n
     *arch.cpu_register_reference(regs, name) = value;
 }
 
+static inline void cpu_registers_print(cpu_registers_t *regs) {
+    printf("arg1:%zu, arg2:%zu, arg3: %zu, pc:0x%zx, lr:0x%zx\n",
+        cpu_register_get(regs, cpu_register_arg1),
+        cpu_register_get(regs, cpu_register_arg2),
+        cpu_register_get(regs, cpu_register_arg3),
+        cpu_register_get(regs, cpu_register_pc),
+        cpu_register_get(regs, cpu_register_ra));
+}
+
 #endif

@@ -30,5 +30,6 @@ void evlp_stop(evlp_t *evlp);
 void evlp_exit_onsignal();
 bool evlp_stopped();
 void evlp_block_signals(evlp_t *evlp, bool sigblocked);
+void evlp_set_exit(bool value);
 
 #endif

@@ -178,3 +178,7 @@ bool evlp_stopped() {
 void evlp_block_signals(evlp_t *evlp, bool sigblocked) {
     evlp->sigblocked = sigblocked;
 }
+
+void evlp_set_exit(bool value) {
+    signal_exit = value;
+}
