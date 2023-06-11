@@ -135,37 +135,32 @@ static arm_cpu_mode_t arm_get_cpu_mode(long addr, long instr) {
     }
 }
 
-static breakpoint_t *arm_breakpoint_set(int memfd, size_t breakpoint_addr) {
-    breakpoint_t *bp = NULL;
-    size_t addr = breakpoint_addr & ~1;
-    size_t orig_instr = 0;
+static bool arm_breakpoint_set(breakpoint_t *bp, int memfd, size_t breakpoint_addr) {
+    bp->addr = breakpoint_addr & ~1;
+    bp->memfd = memfd;
 
-    // Read original instruction
-    if (pread64(memfd, &orig_instr, sizeof(orig_instr), addr) < 0) {
-        TRACE_ERROR("pread64(0x%zx) failed: %m", addr);
-        return NULL;
+    // Read original instruction if not already done
+    if (!bp->orig_instr) {
+        if (pread64(memfd, &bp->orig_instr, sizeof(bp->orig_instr), bp->addr) < 0) {
+            TRACE_ERROR("pread64(0x%zx) failed: %m", bp->addr);
+            return false;
+        }
     }
-    arm_cpu_mode_t cpu_mode = arm_get_cpu_mode(addr, orig_instr);
+    arm_cpu_mode_t cpu_mode = arm_get_cpu_mode(bp->addr, bp->orig_instr);
     breakpoint_instr_t instr = arm_breakpoint_instr(cpu_mode);
 
     TRACE_LOG("Set breakpoint instr (0x%lX) at 0x%zX (old: 0x%zX)",
-        instr.opcode, addr, orig_instr);
+        instr.opcode, bp->addr, bp->orig_instr);
 
-    // Read interuption instruction
-    if (pwrite64(memfd, &instr.opcode, instr.size, addr) < 0) {
-        TRACE_ERROR("pwrite64(0x%zx) failed: %m", addr);
-        return NULL;
+    // Write interupt instruction
+    if (pwrite64(memfd, &instr.opcode, instr.size, bp->addr) < 0) {
+        TRACE_ERROR("pwrite64(0x%zx) failed: %m", bp->addr);
+        return false;
     }
 
-    if (!(bp = calloc(1, sizeof(breakpoint_t)))) {
-        return NULL;
-    }
+    bp->is_set = true;
 
-    bp->memfd = memfd;
-    bp->addr = addr;
-    bp->orig_instr = orig_instr;
-
-    return bp;
+    return true;
 }
 
 arch_t arch = {

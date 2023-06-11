@@ -55,12 +55,19 @@ struct _cpu_registers {
     size_t extra[1];
 };
 
+struct _breakpoint {
+    int memfd;
+    size_t addr;
+    size_t orig_instr;
+    bool is_set;
+};
+
 /** CPU Architecture specific functions */
 struct _arch {
     bool (*cpu_registers_get)(cpu_registers_t *regs, int pid);
     bool (*cpu_registers_set)(cpu_registers_t *regs, int pid);
     size_t *(*cpu_register_reference)(cpu_registers_t *regs, cpu_register_name_t name);
-    breakpoint_t *(*breakpoint_set)(int memfd, size_t addr);
+    bool (*breakpoint_set)(breakpoint_t *bp, int memfd, size_t addr);
     const size_t syscall_size;
 };
 extern arch_t arch;

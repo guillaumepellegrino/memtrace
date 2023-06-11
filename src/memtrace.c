@@ -666,7 +666,6 @@ static void memtrace_console_breakpoint(console_t *console, int argc, char *argv
     int pid = memtrace->pid;
     libraries_t *libraries = NULL;
     const char *symname = "calloc_hook";
-    breakpoint_t *bp = NULL;
 
     int opt = -1;
     const char *short_options = "+cf:h";
@@ -744,9 +743,6 @@ static void memtrace_console_breakpoint(console_t *console, int argc, char *argv
     }
 
 error:
-    if (bp) {
-        breakpoint_unset(bp);
-    }
     if (libraries) {
         libraries_destroy(libraries);
     }

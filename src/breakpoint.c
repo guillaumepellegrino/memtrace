@@ -11,26 +11,33 @@
 #include "arch.h"
 #include "log.h"
 
-breakpoint_t *breakpoint_set(int memfd, size_t addr) {
-    return arch.breakpoint_set(memfd, addr);
+typedef bool (*breakpoint_handler_t)(int tid, int memfd, void *userdata);
+
+/**
+ * Set a breakpoint at the specified address.
+ * Implementation is platform specific.
+ */
+static bool breakpoint_set(breakpoint_t *bp, int memfd, size_t addr) {
+    return arch.breakpoint_set(bp, memfd, addr);
 }
 
-bool breakpoint_unset(breakpoint_t *bp) {
+/** Unset the previously set breakpoint */
+static bool breakpoint_unset(breakpoint_t *bp) {
     bool rt = true;
 
-    if (bp) {
+    if (bp && bp->is_set) {
         // Set back the original instruction
         if (pwrite64(bp->memfd, &bp->orig_instr, sizeof(bp->orig_instr), bp->addr) < 0) {
             TRACE_ERROR("pwrite64(0x%zx) failed: %m", bp->addr);
             rt = false;
         }
-        free(bp);
+        bp->is_set = false;
     }
 
     return rt;
 }
 
-bool process_callstack_match(cpu_registers_t *regs, int memfd, void **callstack, size_t size) {
+static bool process_callstack_match(cpu_registers_t *regs, int memfd, void **callstack, size_t size) {
     size_t sp = cpu_register_get(regs, cpu_register_sp);
     ssize_t i = 0;
     ssize_t len = 0;
@@ -64,8 +71,8 @@ bool process_callstack_match(cpu_registers_t *regs, int memfd, void **callstack,
 }
 
 bool breakpoint_wait_until(int pid, DIR *threads, int memfd, long addr, void **callstack, size_t size) {
+    breakpoint_t bp = {0};
     bool rt = false;
-    breakpoint_t *bp = NULL;
 
     while (!evlp_stopped()) {
         TRACE_LOG("Set breakpoint at 0x%lx", addr);
@@ -75,44 +82,32 @@ bool breakpoint_wait_until(int pid, DIR *threads, int memfd, long addr, void **c
         long pc;
 
         // Set the breakpoint
-        if (!(bp = breakpoint_set(memfd, addr))) {
+        if (!(breakpoint_set(&bp, memfd, addr))) {
             TRACE_ERROR("Failed to set breakpoint");
             goto error;
         }
 
         // Continue execution until breakpoint is encountered
-        /*
-        do {
-            if (evlp_stopped()) {
-                goto error;
-            }
-            */
-            if (!threads_continue(threads)) {
-                TRACE_ERROR("Failed to continue: %m");
-                goto error;
-            }
-            if ((tid = wait(&status)) < 0) {
-                TRACE_ERROR("wait(%d) failed: %m", pid);
-                goto error;
-            }
-            if (!cpu_registers_get(&regs, tid)) {
-                TRACE_ERROR("Failed to get registers");
-                goto error;
-            }
-            pc = cpu_register_get(&regs, cpu_register_pc);
-
-            // FIXME: pc comparison must be improved
-            // and is platform specific
-        //} while (pc != bp->addr);
+        if (!threads_continue(threads)) {
+            TRACE_ERROR("Failed to continue: %m");
+            goto error;
+        }
+        if ((tid = wait(&status)) < 0) {
+            TRACE_ERROR("wait(%d) failed: %m", pid);
+            goto error;
+        }
+        if (!cpu_registers_get(&regs, tid)) {
+            TRACE_ERROR("Failed to get registers");
+            goto error;
+        }
+        pc = cpu_register_get(&regs, cpu_register_pc);
 
         // Stop others threads execution
         threads_interrupt_except(threads, tid);
-        if (!breakpoint_unset(bp)) {
+        if (!breakpoint_unset(&bp)) {
             TRACE_ERROR("Failed to unset breakpoint for %d", tid);
-            bp = NULL;
             goto error;
         }
-        bp = NULL;
 
         TRACE_LOG("%d is at 0x%lx", tid, pc);
 
@@ -130,7 +125,6 @@ bool breakpoint_wait_until(int pid, DIR *threads, int memfd, long addr, void **c
 
     rt = true;
 error:
-    breakpoint_unset(bp);
-    bp = NULL;
+    breakpoint_unset(&bp);
     return rt;
 }
