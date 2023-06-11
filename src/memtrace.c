@@ -716,7 +716,7 @@ static const console_cmd_t memtrace_console_commands[] = {
     {.name = "monitor",     .help = "Monitor memory allocations. monitor --help for more details.", .handler = memtrace_console_monitor},
     {.name = "report",      .help = "Show memtrace report. report --help for more details.", .handler = memtrace_console_report},
     {.name = "logreport",   .help = "Log reports at a regular interval in specified file. log --help for more details.", .handler = memtrace_console_logreport},
-    {.name = "coredump",    .help = "Generate a coredump. coredump --help for more details.", .handler = memtrace_console_coredump},
+    {.name = "coredump",    .help = "Mark a memory context for coredump generation. coredump --help for more details.", .handler = memtrace_console_coredump},
     {.name = "break",       .help = "Break on specified function.", .handler = memtrace_console_breakpoint},
     {.name = "clear",       .help = "Clear memory statistics", .handler = memtrace_console_forward},
     {0},
