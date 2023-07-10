@@ -19,6 +19,7 @@
 #include <sys/ptrace.h>
 #include <asm/ptrace.h>
 #include <sys/user.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include "arch.h"
