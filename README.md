@@ -74,7 +74,7 @@ sequenceDiagram
 $ cd memtrace
 $ export CC=arm-linux-gnueabi-gcc
 $ make
-$ make install
+$ sudo make install
 ```
 
 ### 2.3 Usage in local network for Cross-debugging.
