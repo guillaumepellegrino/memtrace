@@ -276,8 +276,10 @@ static bool server_parse_offline_report(memtrace_server_t *server, const char *r
         }
     }
 
+    printf("Writing report to %s\n", (output_path ? output_path : "console"));
     server_parse_report(server, in, out);
     fflush(out);
+    printf("Report written to %s\n", (output_path ? output_path : "console"));
     rt = true;
 
 error:
@@ -318,7 +320,7 @@ int main(int argc, char *argv[]) {
         {"listen",      required_argument,  0, 'l'},
         {"acl",         required_argument,  0, 'a'},
         {"socket",      required_argument,  0, 's'},
-        {"report",      required_argument,  0, 's'},
+        {"report",      required_argument,  0, 'r'},
         {"debug",       no_argument,        0, 'd'},
         {"help",        no_argument,        0, 'h'},
         {"version",     no_argument,        0, 'v'},

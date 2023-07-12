@@ -2,7 +2,9 @@ SUBMAKE=host target
 
 all: $(addsuffix -all, $(SUBMAKE))
 
-install: $(addsuffix -install, $(SUBMAKE))
+install: host-install
+
+install-all: $(addsuffix -install, $(SUBMAKE))
 
 clean: $(addsuffix -clean, $(SUBMAKE))
 

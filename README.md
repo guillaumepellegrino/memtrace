@@ -74,10 +74,24 @@ sequenceDiagram
 $ cd memtrace
 $ export CC=arm-linux-gnueabi-gcc
 $ make
-$ sudo make install
+$ sudo make install  # install memtrace-server on Host computer
 ```
 
-### 2.3 Usage in local network for Cross-debugging.
+### 2.3 Install memtrace on Target
+```
+# Move in the build directory
+$ cd memtrace/build-XXXX
+
+# Install memtrace agent and memtrace itself on target in the same folder.
+$ scp libmemtrace-agent.so $hostname:/tmp/
+$ scp memtrace $hostname-target:/tmp/
+
+# On some embedded linux, you may not have any writable partition with execution rights.
+# So, you may need to give the partition where you install memtrace with execution rights:
+$ mount -o remount,exec /tmp/
+```
+
+### 2.4 Usage in local network for Cross-debugging.
 ```
 # Start memtrace-server on Host.
 # The service will listen on port 3002 and annouce itself with multicast.
@@ -94,7 +108,7 @@ Listening on [0.0.0.0]:3002
 /cfg/system/root # /ext/memtrace -p $(pidof dnsmasq)
 ```
 
-### 2.4 Non local nework
+### 2.5 Non local nework
 When target is not running on local network, memtrace can not rely on multicast to discover memtrace-server .
 In this case, it is useful to start memtrace as a tcp server and memtrace-server as a tcp client. Roles can be inverted if needed.
 
@@ -115,7 +129,7 @@ Connected
 # You should now have the hand on Target
 ```
 
-### 2.5 Offline Usage
+### 2.6 Offline Usage
 When memtrace client has no possibility to connect to memtrace server, it is possible to start memtrace 'offline'.
 / # /ext/memtrace -p $(pidof dummy) 
 

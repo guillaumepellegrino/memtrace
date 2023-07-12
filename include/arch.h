@@ -21,6 +21,7 @@
 
 #include <stddef.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <sys/syscall.h>
 #include <sys/user.h>
 #include <sys/ptrace.h>
