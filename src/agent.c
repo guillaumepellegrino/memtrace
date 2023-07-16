@@ -38,7 +38,6 @@
 #include "libraries.h"
 #include "elf_main.h"
 #include "elf_file.h"
-#include "coredump.h"
 #include "evlp.h"
 #include "bus.h"
 #include "arch.h"
@@ -51,7 +50,6 @@ typedef struct {
     void **callstack;
     void **large_callstack;
     size_t number;
-    bus_connection_t *do_coredump;
     bool do_large_callstack;
 } block_t;
 
@@ -306,74 +304,6 @@ static bool agent_clear(bus_t *bus, bus_connection_t *connection, bus_topic_t *t
     return true;
 }
 
-static bus_connection_t *block_get_coredump_connection(block_t *block, bus_t *bus) {
-    bus_connection_t *connection = NULL;
-
-    if (!block->do_coredump) {
-        goto error;
-    }
-    for (connection = bus_first_connection(bus); connection; connection = bus_connection_next(connection)) {
-        if (block->do_coredump == connection) {
-            break;
-        }
-    }
-    if (!connection) {
-        // connection no longer exist.
-        block->do_coredump = NULL;
-    }
-
-error:
-    return connection;
-}
-
-/**
- * Read coredump request and mark the specified context for coredump
- */
-static bool agent_coredump(bus_t *bus, bus_connection_t *connection, bus_topic_t *topic, strmap_t *options, FILE *fp) {
-    agent_t *agent = container_of(topic, agent_t, coredump_topic);
-    size_t i = 0;
-    size_t context_idx = 0;
-    hashmap_iterator_t *it = NULL;
-    block_t *block = NULL;
-    int retval = false;
-    const char *descr = "";
-    bool lock = hooks_lock();
-
-    strmap_get_fmt(options, "context", "%zu", &context_idx);
-
-    // Lookup for context by index
-    hashmap_qsort(&agent->blocks, blocks_map_compar);
-    hashmap_for_each(it, &agent->blocks) {
-        if (context_idx == i) {
-            block = container_of(it, block_t, it);
-            break;
-        }
-        i++;
-    }
-    if (!block) {
-        descr = "Memory allocation context not found";
-        goto error;
-    }
-
-    // Check if block is already marked for coredump.
-    if (block_get_coredump_connection(block, &agent->bus)) {
-        descr = "Memory allocation context already marked for coredump";
-        goto error;
-    }
-
-    // Mark block for coredump.
-    block->do_coredump = connection;
-    retval = true;
-    descr = "Waiting to hit memory allocation context";
-    TRACE_WARNING("Memory context n°%zu marked for coredump generation", context_idx);
-error:
-    strmap_add_fmt(options, "retval", "%d", retval);
-    strmap_add(options, "descr", descr);
-    bus_connection_write_reply(connection, options);
-    hooks_unlock(lock);
-    return true;
-}
-
 /**
  * Read getcontext request and return the specified context
  */
@@ -542,9 +472,6 @@ bool agent_initialize(agent_t *agent) {
     agent->clear_topic.name = "clear";
     agent->clear_topic.read = agent_clear;
     bus_register_topic(&agent->bus, &agent->clear_topic);
-    agent->coredump_topic.name = "coredump";
-    agent->coredump_topic.read = agent_coredump;
-    bus_register_topic(&agent->bus, &agent->coredump_topic);
     agent->getcontext_topic.name = "getcontext";
     agent->getcontext_topic.read = agent_getcontext;
     bus_register_topic(&agent->bus, &agent->getcontext_topic);
@@ -589,31 +516,11 @@ void agent_unfollow_allocs(agent_t *agent) {
     agent->follow_allocs = false;
 }
 
-static void agent_notify_do_coredump(block_t *block, bus_connection_t *connection, cpu_registers_t *regs) {
-    strmap_t options = {0};
-    size_t tid = syscall(SYS_gettid);
-    strmap_add_fmt(&options, "tid", "%zu", tid);
-    strmap_add_fmt(&options, "pc", "%zu", cpu_register_get(regs, cpu_register_pc));
-    strmap_add_fmt(&options, "sp", "%zu", cpu_register_get(regs, cpu_register_sp));
-    strmap_add_fmt(&options, "fp", "%zu", cpu_register_get(regs, cpu_register_fp));
-    strmap_add_fmt(&options, "ra", "%zu", cpu_register_get(regs, cpu_register_ra));
-    strmap_add_fmt(&options, "arg1", "%zu", cpu_register_get(regs, cpu_register_arg1));
-    strmap_add_fmt(&options, "arg2", "%zu", cpu_register_get(regs, cpu_register_arg2));
-    strmap_add_fmt(&options, "arg3", "%zu", cpu_register_get(regs, cpu_register_arg3));
-    TRACE_WARNING("Write NotifyDoCoredump request for %d", tid);
-    bus_connection_write_request(connection, "NotifyDoCoredump", &options);
-    bus_connection_read_reply(connection, NULL);
-    TRACE_WARNING("NotifyDoCoredump done");
-    block->do_coredump = NULL;
-    strmap_cleanup(&options);
-}
-
 void agent_alloc(agent_t *agent, cpu_registers_t *regs, size_t size, void *newptr) {
     hashmap_iterator_t *it = NULL;
     void **callstack = NULL;
     block_t *block = NULL;
     allocation_t *allocation = NULL;
-    bus_connection_t *connection = NULL;
 
     if (!agent->follow_allocs) {
         return;
@@ -633,10 +540,6 @@ void agent_alloc(agent_t *agent, cpu_registers_t *regs, size_t size, void *newpt
     if ((it = hashmap_get(&agent->blocks, callstack))) {
         block = container_of(it, block_t, it);
         free(callstack);
-
-        if ((connection = block_get_coredump_connection(block, &agent->bus))) {
-            agent_notify_do_coredump(block, connection, regs);
-        }
 
         if (block->do_large_callstack && !block->large_callstack) {
             assert((block->large_callstack = calloc(agent->large_callstack_size, sizeof(size_t))));

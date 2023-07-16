@@ -60,7 +60,6 @@ typedef struct {
     bus_topic_t status_topic;
     bus_topic_t report_topic;
     bus_topic_t clear_topic;
-    bus_topic_t coredump_topic;
     bus_topic_t getcontext_topic;
     evlp_handler_t stats_lasthour_handler;
     int stats_lasthour_timerfd;
