@@ -25,6 +25,16 @@
 #include "console.h"
 #include "log.h"
 
+#define ESC_SEQ_UP(value) CONSOLE_RAW("\x1B[%dA", value)
+#define ESC_SEQ_DOWN(value) CONSOLE_RAW("\x1B[%dB", value)
+#define ESC_SEQ_RIGHT(value) CONSOLE_RAW("\x1B[%dC", value)
+#define ESC_SEQ_LEFT(value) CONSOLE_RAW("\x1B[%dD", value)
+#define ESC_SEQ_HORIZONTAL_ABS(value) CONSOLE_RAW("\x1B[%dG", value)
+#define ESC_SEQ_ERASE_IN_DISPLAY(value) CONSOLE_RAW("\x1B[%dJ", value)
+#define ESC_SEQ_ERASE_IN_LINE_FROM_CURSOR_TO_END() CONSOLE_RAW("\x1B[0K")
+#define ESC_SEQ_ERASE_IN_LINE_FROM_CURSOR_TO_BEGINING() CONSOLE_RAW("\x1B[1K")
+#define ESC_SEQ_ERASE_IN_LINE_ALL() CONSOLE_RAW("\x1B[2K")
+
 void console_clear_line(console_t *console) {
     CONSOLE_RAW("\033[2K\r");
 }
@@ -34,6 +44,7 @@ static void console_reset(console_t *console) {
     console->argv[0] = console->buff;
     console->buff[0] = 0;
     console->bufflen = 0;
+    console->cursor = 0;
     CONSOLE_RAW("> ");
 }
 
@@ -42,23 +53,73 @@ static void console_addchar(console_t *console, char c) {
         TRACE_LOG("cmdline too long (%zu)", console->bufflen);
         return;
     }
-
-    if (c) {
+    const char *right = &console->buff[console->cursor];
+    //TRACE_DEBUG("cursor:%d, bufflen:%d", console->cursor, console->bufflen);
+    if (console->cursor < console->bufflen) {
+        // Rewrite line
+        assert(write(1, &c, 1) > 0);
+        CONSOLE_RAW("%s", right);
+        ESC_SEQ_LEFT(strlen(right));
+    }
+    else {
+        // Append new char at the end of the line
         assert(write(1, &c, 1) > 0);
     }
-    console->buff[console->bufflen] = c;
+
+    // Insert char in the buffer according cursor position
+    memmove(&console->buff[console->cursor + 1],
+            &console->buff[console->cursor],
+            strlen(right));
+    console->buff[console->cursor] = c;
     console->bufflen++;
     console->buff[console->bufflen] = 0;
+    console->cursor++;
 }
 
-static void console_delchar(console_t *console) {
+static void console_backspace(console_t *console) {
     if (console->bufflen <= 0) {
         return;
     }
 
-    CONSOLE_RAW("\b \b");
+    char *right = &console->buff[console->cursor];
+    size_t rightlen = strlen(right);
+
+    // Rewrite line
+    CONSOLE_RAW("\x08%s ", right);
+    ESC_SEQ_LEFT(rightlen + 1);
+
+    // Delete char from internal buffer at the specified cursor position
+    memmove(right-1, right, rightlen);
+    console->cursor--;
     console->bufflen--;
     console->buff[console->bufflen] = 0;
+}
+
+static void console_suppr(console_t *console) {
+    char c = 0;
+    if (read(0, &c, 1) < 0) {
+        return;
+    }
+    if (c != '~') {
+        CONSOLE("Unexpected character '%c'", c);
+        return;
+    }
+
+    TRACE_DEBUG("SUPPR cursor:%zu, bufflen:%zu", console->cursor, console->bufflen);
+    if (console->cursor < console->bufflen) {
+        TRACE_DEBUG("DO SUPPR");
+        char *right = &console->buff[console->cursor];
+        size_t rightlen = strlen(right);
+
+        // Rewrite line
+        CONSOLE_RAW("%s ", right+1);
+        ESC_SEQ_LEFT(rightlen);
+
+        // Delete char from internal buffer at the specified cursor position
+        memmove(right, right+1, rightlen-1);
+        console->bufflen--;
+        console->buff[console->bufflen] = 0;
+    }
 }
 
 static void console_history_restore(console_t *console) {
@@ -174,6 +235,8 @@ static void console_autocomplete(console_t *console) {
         }
     }
 
+    TRACE_DEBUG("cmd_count=%zu", cmd_count);
+
     if (cmd_count == 1) {
         for (cmd = console->cmd_list; cmd->name; cmd++) {
             if (!strncmp(console->buff, cmd->name, console->bufflen)) {
@@ -233,6 +296,25 @@ void console_cleanup(console_t *console) {
     strlist_cleanup(&console->history);
 }
 
+static void console_cursor_reset(console_t *console) {
+    ESC_SEQ_LEFT(console->cursor);
+    console->cursor = 0;
+}
+
+static void console_cursor_left(console_t *console) {
+    if (console->cursor > 0) {
+        ESC_SEQ_LEFT(1);
+        console->cursor--;
+    }
+}
+
+static void console_cursor_right(console_t *console) {
+    if (console->cursor < console->bufflen) {
+        ESC_SEQ_RIGHT(1);
+        console->cursor++;
+    }
+}
+
 static void console_escape_character(console_t *console) {
     char c = 0;
     if (read(0, &c, 1) < 0) {
@@ -246,6 +328,9 @@ static void console_escape_character(console_t *console) {
             }
 
             switch (c) {
+                case 0x33: // SUPPR
+                    console_suppr(console);
+                    break;
                 case 0x41: // UP
                     console_history_prev(console);
                     break;
@@ -253,8 +338,10 @@ static void console_escape_character(console_t *console) {
                     console_history_next(console);
                     break;
                 case 0x43: // RIGHT
+                    console_cursor_right(console);
                     break;
                 case 0x44: // LEFT
+                    console_cursor_left(console);
                     break;
                 default:
                     break;
@@ -281,11 +368,15 @@ bool console_poll(console_t *console) {
         default:
             console_addchar(console, c);
             break;
+        case 0x01:
+        case 0x02:
+            console_cursor_reset(console);
+            break;
         case 0x1B: // ESC (escape)
             console_escape_character(console);
             break;
         case 0x7F: // DEL
-            console_delchar(console);
+            console_backspace(console);
             break;
         case '\n':
             console_eol(console, c);

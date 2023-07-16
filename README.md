@@ -281,6 +281,5 @@ Detaching from 20328
 ```
 
 ## 5. TODO
-- Improve this README
-- Improve console support (move cursor)
 - Add support for IFUNC
+- Add graph feature ?

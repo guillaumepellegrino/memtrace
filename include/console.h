@@ -36,6 +36,7 @@ struct _console {
     size_t bufflen;
     char buff[512];
     struct termios backup;
+    size_t cursor;
     strlist_t history;
     strlist_iterator_t *history_iterator;
     bool is_tty;
