@@ -25,15 +25,15 @@
 #include "console.h"
 #include "log.h"
 
-#define ESC_SEQ_UP(value) CONSOLE_RAW("\x1B[%dA", value)
-#define ESC_SEQ_DOWN(value) CONSOLE_RAW("\x1B[%dB", value)
-#define ESC_SEQ_RIGHT(value) CONSOLE_RAW("\x1B[%dC", value)
-#define ESC_SEQ_LEFT(value) CONSOLE_RAW("\x1B[%dD", value)
-#define ESC_SEQ_HORIZONTAL_ABS(value) CONSOLE_RAW("\x1B[%dG", value)
-#define ESC_SEQ_ERASE_IN_DISPLAY(value) CONSOLE_RAW("\x1B[%dJ", value)
-#define ESC_SEQ_ERASE_IN_LINE_FROM_CURSOR_TO_END() CONSOLE_RAW("\x1B[0K")
-#define ESC_SEQ_ERASE_IN_LINE_FROM_CURSOR_TO_BEGINING() CONSOLE_RAW("\x1B[1K")
-#define ESC_SEQ_ERASE_IN_LINE_ALL() CONSOLE_RAW("\x1B[2K")
+static inline void ESC_SEQ_UP(int value) {CONSOLE_RAW("\x1B[%dA", value);}
+static inline void ESC_SEQ_DOWN(int value) {CONSOLE_RAW("\x1B[%dB", value);}
+static inline void ESC_SEQ_RIGHT(int value) {CONSOLE_RAW("\x1B[%dC", value);}
+static inline void ESC_SEQ_LEFT(int value) {CONSOLE_RAW("\x1B[%dD", value);}
+static inline void ESC_SEQ_HORIZONTAL_ABS(int value) {CONSOLE_RAW("\x1B[%dG", value);}
+static inline void ESC_SEQ_ERASE_IN_DISPLAY(int value) {CONSOLE_RAW("\x1B[%dJ", value);}
+static inline void ESC_SEQ_ERASE_IN_LINE_FROM_CURSOR_TO_END() {CONSOLE_RAW("\x1B[0K");}
+static inline void ESC_SEQ_ERASE_IN_LINE_FROM_CURSOR_TO_BEGINING() {CONSOLE_RAW("\x1B[1K");}
+static inline void ESC_SEQ_ERASE_IN_LINE_ALL() {CONSOLE_RAW("\x1B[2K");}
 
 void console_clear_line(console_t *console) {
     CONSOLE_RAW("\033[2K\r");
