@@ -188,7 +188,7 @@ static bool syscall_hijack(syscall_ctx_t *ctx, size_t syscall, size_t arg1, size
     // Rewind to syscall instruction
     // and restore registers
     pc = cpu_register_get(&save_regs, cpu_register_pc);
-    cpu_register_set(&save_regs, cpu_register_pc, (pc - arch.syscall_size));
+    cpu_register_set(&save_regs, cpu_register_pc, (pc - arch.syscall_rewind_size));
     cpu_registers_set(&save_regs, ctx->pid);
 
     // Resume execution and wait for SYSCALL-Enter event

@@ -169,5 +169,5 @@ arch_t arch = {
     .cpu_registers_set = arm_cpu_registers_set,
     .cpu_register_reference = arm_cpu_register_reference,
     .breakpoint_set = arm_breakpoint_set,
-    .syscall_size = 2,
+    .syscall_rewind_size = 2,
 };

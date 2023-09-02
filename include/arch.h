@@ -69,7 +69,7 @@ struct _arch {
     bool (*cpu_registers_set)(cpu_registers_t *regs, int pid);
     size_t *(*cpu_register_reference)(cpu_registers_t *regs, cpu_register_name_t name);
     bool (*breakpoint_set)(breakpoint_t *bp, int memfd, size_t addr);
-    const size_t syscall_size;
+    const size_t syscall_rewind_size;
 };
 extern arch_t arch;
 
