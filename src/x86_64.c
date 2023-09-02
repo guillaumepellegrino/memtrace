@@ -51,8 +51,8 @@ static size_t *x86_cpu_register_reference(cpu_registers_t *registers, cpu_regist
         case cpu_register_sp:       return (size_t *) &registers->raw.rsp;
         case cpu_register_fp:       return (size_t *) &registers->raw.rbp;
         case cpu_register_ra:       return (size_t *) &registers->extra[0];
-        //case cpu_register_syscall:  return (size_t *) &registers->raw.orig_rax;
-        case cpu_register_syscall:  return (size_t *) &registers->raw.rax;
+        case cpu_register_syscall:  return (size_t *) &registers->raw.orig_rax;
+        //case cpu_register_syscall:  return (size_t *) &registers->raw.rax;
         case cpu_register_arg1:     return (size_t *) &registers->raw.rdi;
         case cpu_register_arg2:     return (size_t *) &registers->raw.rsi;
         case cpu_register_arg3:     return (size_t *) &registers->raw.rdx;
