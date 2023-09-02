@@ -30,6 +30,7 @@
 #include <sys/un.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <sys/time.h>
 #include <sys/timerfd.h>
 #include <sys/epoll.h>
 #include <pthread.h>
@@ -222,10 +223,17 @@ static void ipc_socket_close(int ipc) {
     unlink(bindaddr.sun_path);
 }
 
+static time_t mytime(time_t *tloc) {
+    /** on some platform time() is an IFUNC, which is unsupported by the agent */
+    struct timeval tv = {0};
+    syscall(SYS_gettimeofday, &tv, tloc);
+    return tv.tv_sec;
+}
+
 static void agent_status_unlocked(agent_t *agent, FILE *fp) {
     char date[30] = {0};
     sample_t lasthour = sample_circbuf_last_sub_first(&agent->stats.lasthour);
-    time_t now = time(NULL);
+    time_t now = mytime(NULL);
     asctime_r(localtime(&now), date);
 
     fprintf(fp, "HEAP SUMMARY %s\n", date);
