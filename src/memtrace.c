@@ -130,7 +130,7 @@ static bool connect_to_memtrace_agent(bus_t *bus, int pid) {
         goto error;
     }
     if (connect(s, (struct sockaddr *) &connaddr, sizeof(connaddr)) != 0) {
-        printf("Failed to bind ipc socket to %s: %m\n", connaddr.sun_path);
+        printf("Failed to connect ipc socket to %s: %m\n", connaddr.sun_path);
         goto error;
     }
     if (!bus_ipc_socket(bus, s)) {
@@ -709,6 +709,75 @@ error:
     }
 }
 
+static void memtrace_console_dataviewer(console_t *console, int argc, char *argv[]) {
+    memtrace_t *memtrace = container_of(console, memtrace_t, console);
+    int opt = -1;
+    const char *short_options = "+:h";
+    const struct option long_options[] = {
+        {"count",       required_argument,  0, 'c'},
+        {"help",        no_argument,        0, 'h'},
+        {0},
+    };
+    char line[4096];
+    strmap_t options = {0};
+    bus_connection_t *ipc = NULL;
+    bus_connection_t *server = NULL;
+    bus_connection_t *in = NULL;
+    size_t count = 10;
+
+    optind = 1;
+    while ((opt = getopt_long(argc, argv, short_options, long_options, NULL)) != -1) {
+        switch (opt) {
+            case 'c':
+                count = atoi(optarg);
+                break;
+            case 'h':
+            default:
+                CONSOLE("Usage: dataviewer [OPTION]..");
+                CONSOLE("  -h, --help        Display this help");
+                CONSOLE("  -c, --count=VALUE Count of memory contexts to display (default:10)");
+                goto error;
+        }
+    }
+
+
+    if (!(ipc = bus_first_connection(&memtrace->agent))) {
+        CONSOLE("memtrace is not connected to target process");
+        goto error;
+    }
+    if (count) {
+        strmap_add_fmt(&options, "count", "%d", count);
+    }
+    bus_connection_write_request(ipc, "dataviewer", &options);
+
+    // Are we connected to memtrace-server ?
+    if ((server = bus_first_connection(&memtrace->server))) {
+        // Forward report to memtrace-server for decodding addresses to line and functions
+        bus_connection_write_request(server, "report", NULL);
+        while (bus_connection_readline(ipc, line, sizeof(line))) {
+            bus_connection_printf(server, "%s", line);
+            if (!strcmp(line, "[cmd_done]\n")) {
+                break;
+            }
+        }
+        bus_connection_flush(server);
+    }
+
+    // Read report and dump it on console
+    in = server ? server : ipc;
+    while (bus_connection_readline(in, line, sizeof(line))) {
+        if (!strcmp(line, "[cmd_done]\n")) {
+            break;
+        }
+        else {
+            fputs(line, stdout);
+        }
+    }
+
+error:
+    strmap_cleanup(&options);
+}
+
 static const console_cmd_t memtrace_console_commands[] = {
     {.name = "help",        .help = "Display this help", .handler = console_cmd_help},
     {.name = "quit",        .help = "Quit memtrace and show report", .handler = memtrace_console_quit},
@@ -717,6 +786,7 @@ static const console_cmd_t memtrace_console_commands[] = {
     {.name = "report",      .help = "Show memtrace report. report --help for more details.", .handler = memtrace_console_report},
     {.name = "logreport",   .help = "Log reports at a regular interval in specified file. log --help for more details.", .handler = memtrace_console_logreport},
     {.name = "coredump",    .help = "Mark a memory context for coredump generation. coredump --help for more details.", .handler = memtrace_console_coredump},
+    {.name = "dataviewer",  .help = "Open memtrace report with dataviewer", .handler = memtrace_console_dataviewer},
     {.name = "break",       .help = "Break on specified function.", .handler = memtrace_console_breakpoint},
     {.name = "clear",       .help = "Clear memory statistics", .handler = memtrace_console_forward},
     {0},

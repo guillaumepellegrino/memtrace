@@ -1,6 +1,10 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <unistd.h>
+#include <time.h>
+#include <sys/time.h>
+#include <sys/syscall.h>
 
 /**
  * memtrace currently does not support IFUNC functions from libc.
@@ -95,3 +99,13 @@ void *memset(void *s, int c, size_t n) {
 
     return s;
 }
+
+time_t time(time_t *tloc) {
+    struct timeval tv = {0};
+    syscall(SYS_gettimeofday, &tv, NULL);
+    if (tloc) {
+        *tloc = tv.tv_sec;
+    }
+    return tv.tv_sec;
+}
+

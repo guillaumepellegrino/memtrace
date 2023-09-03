@@ -61,10 +61,13 @@ typedef struct {
     bus_topic_t report_topic;
     bus_topic_t clear_topic;
     bus_topic_t getcontext_topic;
+    bus_topic_t dataviewer_topic;
     evlp_handler_t stats_lasthour_handler;
     int stats_lasthour_timerfd;
     evlp_handler_t periodic_job_handler;
     int periodic_job_timerfd;
+    time_t start_time;
+    size_t elapsed;
 } agent_t;
 
 bool agent_initialize(agent_t *agent);

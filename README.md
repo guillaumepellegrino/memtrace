@@ -318,5 +318,5 @@ sequenceDiagram
 
 
 ## 7. TODO
+- Memory graph with DataViewer. Display the top 10 allocations with a granularity of 1 second.
 - Add support for IFUNC
-- Memory graph ?

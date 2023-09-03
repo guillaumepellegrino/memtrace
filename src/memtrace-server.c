@@ -23,6 +23,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <ctype.h>
 #include <getopt.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -31,6 +32,7 @@
 #include <sys/signal.h>
 #include <sys/socket.h>
 #include <sys/sendfile.h>
+#include <sys/un.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
@@ -146,10 +148,22 @@ static char *target2host_path(const char *sysroot, strlist_t *files, strlist_t *
     return NULL;
 }
 
+static const char *skip_whitespace_and_comment(const char *s) {
+    for (; *s; s++) {
+        if (!isblank(*s) && *s != '#') {
+            break;
+        }
+    }
+
+    return s;
+}
+
 static char *get_topic(const char *line, const char *topic) {
     size_t topiclen = strlen(topic);
     char *value = NULL;
     char *sep = NULL;
+
+    line = skip_whitespace_and_comment(line);
 
     if (!strncmp(line, topic, topiclen)) {
         value = strdup(line + topiclen);
@@ -185,12 +199,53 @@ exit:
     return true;
 }
 
+static FILE *server_start_dataviewer(memtrace_server_t *server) {
+    struct sockaddr_un connaddr = {
+        .sun_family = AF_UNIX,
+    };
+    int s = -1;
+
+    if (system("dataviewer --stream") != 0) {
+        CONSOLE("Failed to start dataviewer: %m");
+        CONSOLE("You may install it with:");
+        CONSOLE("  cargo install dataviewer'");
+        CONSOLE("");
+        CONSOLE("You may also need to install cargo from the rust toolchain with:");
+        CONSOLE("  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh");
+        CONSOLE("");
+        goto error;
+    }
+    CONSOLE("Dataviewer started");
+
+    if ((s = socket(AF_UNIX, SOCK_STREAM|SOCK_CLOEXEC, 0)) < 0) {
+        CONSOLE("Failed to create ipc socket: %m\n");
+        goto error;
+    }
+    snprintf(connaddr.sun_path, sizeof(connaddr.sun_path),
+        "/tmp/dataviewer.ipc");
+
+    if (connect(s, (struct sockaddr *) &connaddr, sizeof(connaddr)) != 0) {
+        CONSOLE("Failed to connext ipc socket to %s: %m\n", connaddr.sun_path);
+        goto error;
+    }
+
+    CONSOLE("Connected to DataViewer");
+
+    return fdopen(s, "r");
+
+error:
+    close(s);
+    return NULL;
+}
+
 static void server_parse_report(memtrace_server_t *server, FILE *in, FILE *out) {
     char line[4096];
     char *cmd_done = NULL;
     char *sysroot = NULL;
     char *toolchain = NULL;
     char *binary = NULL;
+    char *dataview = NULL;
+    FILE *dataviewer = NULL;
     addr2line_t addr2line = {0};
 
     while (fgets(line, sizeof(line), in)) {
@@ -222,6 +277,10 @@ static void server_parse_report(memtrace_server_t *server, FILE *in, FILE *out) 
                 show2user = false;
             }
         }
+        if (!dataview) {
+            dataview = get_topic(line, "[dataview]");
+            dataviewer = server_start_dataviewer(server);
+        }
         if (sysroot && toolchain) {
             char *addr = NULL;
             if ((addr = get_topic(line, "[addr]"))) {
@@ -232,6 +291,9 @@ static void server_parse_report(memtrace_server_t *server, FILE *in, FILE *out) 
         }
         if (show2user) {
             fputs(line, out);
+            if (dataviewer) {
+                fputs(line, dataviewer);
+            }
         }
     }
 
@@ -239,6 +301,10 @@ static void server_parse_report(memtrace_server_t *server, FILE *in, FILE *out) 
     free(sysroot);
     free(toolchain);
     free(binary);
+    free(dataview);
+    if (dataviewer) {
+        fclose(dataviewer);
+    }
     addr2line_cleanup(&addr2line);
 }
 

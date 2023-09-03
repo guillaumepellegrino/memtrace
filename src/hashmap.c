@@ -79,8 +79,8 @@ void hashmap_add(hashmap_t *hashmap, void *key, hashmap_iterator_t *iterator) {
     *iterator = (hashmap_iterator_t) {
         .key = key,
     };
-    list_insert(&hashmap->iterators, &iterator->hashmap_it);
-    list_insert(&hashmap->buckets[idx].iterators, &iterator->bucket_it);
+    list_append(&hashmap->iterators, &iterator->hashmap_it);
+    list_append(&hashmap->buckets[idx].iterators, &iterator->bucket_it);
 }
 
 hashmap_iterator_t *hashmap_first(hashmap_t *hashmap) {

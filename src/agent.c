@@ -46,6 +46,7 @@
 
 typedef struct {
     hashmap_iterator_t it;
+    list_t allocations;
     ssize_t count;
     ssize_t size;
     void **callstack;
@@ -56,8 +57,10 @@ typedef struct {
 
 typedef struct {
     hashmap_iterator_t it;
+    list_iterator_t block_it;
     size_t ptr_size;
     void *ptr;
+    size_t when;
     block_t *block;
 } allocation_t;
 
@@ -126,6 +129,7 @@ static bool allocations_maps_match(hashmap_t *hashmap, void *lkey, void *rkey) {
 static void allocations_maps_destroy(hashmap_t *hashmap, void *key, hashmap_iterator_t *it) {
     agent_t *agent = container_of(hashmap, agent_t, allocations);
     allocation_t *allocation = container_of(it, allocation_t, it);
+    list_iterator_take(&allocation->block_it);
 
     block_t *block = allocation->block;
     block->count -= 1;
@@ -223,17 +227,10 @@ static void ipc_socket_close(int ipc) {
     unlink(bindaddr.sun_path);
 }
 
-static time_t mytime(time_t *tloc) {
-    /** on some platform time() is an IFUNC, which is unsupported by the agent */
-    struct timeval tv = {0};
-    syscall(SYS_gettimeofday, &tv, tloc);
-    return tv.tv_sec;
-}
-
 static void agent_status_unlocked(agent_t *agent, FILE *fp) {
     char date[30] = {0};
     sample_t lasthour = sample_circbuf_last_sub_first(&agent->stats.lasthour);
-    time_t now = mytime(NULL);
+    time_t now = time(NULL);
     asctime_r(localtime(&now), date);
 
     fprintf(fp, "HEAP SUMMARY %s\n", date);
@@ -359,6 +356,96 @@ error:
     return true;
 }
 
+static void memtrace_dataviewer_write(agent_t *agent, FILE *fp) {
+    hashmap_iterator_t *it = NULL;
+    size_t i = 0;
+    size_t max = 10;
+    size_t max_samples = 300;
+    size_t time_interval = agent->elapsed > max_samples ?
+        (agent->elapsed / max_samples) : 1;
+
+    fprintf(fp, "#!/usr/bin/env dataviewer\n");
+    fprintf(fp, "\n");
+    fprintf(fp, "#[sysroot]%s\n", SYSROOT);
+    fprintf(fp, "#[toolchain]%s\n", toolchain_path());
+    fprintf(fp, "\n");
+    fprintf(fp, "[dataview]\n");
+    fprintf(fp, "type = 'XY'\n");
+    fprintf(fp, "title = 'Memtrace report'\n");
+    fprintf(fp, "x_title = 'Time'\n");
+    fprintf(fp, "x_unit = 'seconds'\n");
+    fprintf(fp, "y_title = 'Memory allocation'\n");
+    fprintf(fp, "y_unit = 'Bytes'\n");
+    fprintf(fp, "description = '''\n");
+    fprintf(fp, "Top 10 memory allocations since program start\n");
+    fprintf(fp, "measured with memtrace\n");
+    fprintf(fp, "'''\n");
+    fprintf(fp, "\n");
+
+    hashmap_qsort(&agent->blocks, blocks_map_compar);
+    hashmap_for_each(it, &agent->blocks) {
+        if (max > 0 && i >= max) {
+            break;
+        }
+
+        block_t *block = container_of(it, block_t, it);
+        void *callstack = block->large_callstack ? block->large_callstack : block->callstack;
+        size_t callstack_size = block->large_callstack ? agent->large_callstack_size : agent->callstack_size;
+
+        fprintf(fp, "[chart.%zu]\n", i);
+        fprintf(fp, "title = 'Allocation Context n°%zu'\n", i);
+        fprintf(fp, "description = '''%zd allocs, %zd bytes were not free\n", block->count, block->size);
+        libraries_backtrace_print(agent->libraries, callstack, callstack_size, fp);
+        fprintf(fp, "'''\n");
+        fprintf(fp, "\n");
+
+        i++;
+    }
+    fprintf(fp, "\n");
+    fprintf(fp, "[data]\n");
+
+    i = 0;
+    hashmap_for_each(it, &agent->blocks) {
+        if (max > 0 && i >= max) {
+            break;
+        }
+
+        size_t time = 0;
+        size_t cumulated = 0;
+        block_t *block = container_of(it, block_t, it);
+        list_iterator_t *jt = NULL;
+        fprintf(fp, "%zu = [\n", i);
+        fprintf(fp, "0, 0,\n");
+        jt = list_first(&block->allocations);
+        for (time = time_interval; time < agent->elapsed; time += time_interval) {
+            for (; jt; jt = list_iterator_next(jt)) {
+                allocation_t *alloc = container_of(jt, allocation_t, block_it);
+                if (alloc->when > time) {
+                    break;
+                }
+                cumulated += alloc->ptr_size;
+            }
+            fprintf(fp, "%zu, %zu,\n", time, cumulated);
+        }
+        fprintf(fp, "%zu, %zu,\n", agent->elapsed, block->size);
+        fprintf(fp, "]\n");
+        i++;
+    }
+
+    fprintf(fp, "[cmd_done]\n");
+    fflush(fp);
+}
+
+static bool agent_dataviewer(bus_t *bus, bus_connection_t *connection, bus_topic_t *topic, strmap_t *options, FILE *fp) {
+    agent_t *agent = container_of(topic, agent_t, dataviewer_topic);
+
+    bool lock = hooks_lock();
+    memtrace_dataviewer_write(agent, fp);
+    hooks_unlock(lock);
+    return true;
+}
+
+
 static void agent_stats_lasthour_handler(evlp_handler_t *self, int events) {
     agent_t *agent = container_of(self, agent_t, stats_lasthour_handler);
     uint64_t timestamp = 0;
@@ -412,7 +499,10 @@ static void agent_periodic_job_handler(evlp_handler_t *self, int events) {
     }
 
     lock = hooks_lock();
-    agent_mark_blocks_for_large_callstack(agent);
+    agent->elapsed = time(NULL) - agent->start_time;
+    if (agent->elapsed % 5 == 0) {
+        agent_mark_blocks_for_large_callstack(agent);
+    }
     hooks_unlock(lock);
 }
 
@@ -452,6 +542,8 @@ bool agent_initialize(agent_t *agent) {
     };
     agent->callstack_size = 10;
     agent->large_callstack_size = 50;
+    agent->start_time = time(NULL);
+    agent->elapsed = 0;
     hashmap_initialize(&agent->allocations, &allocations_maps_cfg);
     hashmap_initialize(&agent->blocks, &blocks_maps_cfg);
 
@@ -483,6 +575,9 @@ bool agent_initialize(agent_t *agent) {
     agent->getcontext_topic.name = "getcontext";
     agent->getcontext_topic.read = agent_getcontext;
     bus_register_topic(&agent->bus, &agent->getcontext_topic);
+    agent->dataviewer_topic.name = "dataviewer";
+    agent->dataviewer_topic.read = agent_dataviewer;
+    bus_register_topic(&agent->bus, &agent->dataviewer_topic);
 
     agent->stats_lasthour_handler.fn = agent_stats_lasthour_handler;
     assert((agent->stats_lasthour_timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC)) >= 0);
@@ -500,8 +595,8 @@ bool agent_initialize(agent_t *agent) {
     assert(evlp_add_handler(agent->evlp, &agent->periodic_job_handler, agent->periodic_job_timerfd, EPOLLIN));
     {
         struct itimerspec itimer = {
-            .it_interval.tv_sec = 5,
-            .it_value.tv_sec = 5,
+            .it_interval.tv_sec = 1,
+            .it_value.tv_sec = 1,
         };
         timerfd_settime(agent->periodic_job_timerfd, 0, &itimer, NULL);
     }
@@ -568,7 +663,9 @@ void agent_alloc(agent_t *agent, cpu_registers_t *regs, size_t size, void *newpt
     allocation->ptr_size = size;
     allocation->ptr = newptr;
     allocation->block = block;
+    allocation->when = agent->elapsed;
     hashmap_add(&agent->allocations, newptr, &allocation->it);
+    list_append(&block->allocations, &allocation->block_it);
 
     // increment statistics
     block->count += 1;
