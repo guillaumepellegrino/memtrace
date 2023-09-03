@@ -282,7 +282,9 @@ static void server_parse_report(memtrace_server_t *server, FILE *in, FILE *out) 
         }
         if (!dataview) {
             dataview = get_topic(line, "[dataview]");
-            dataviewer = server_start_dataviewer(server);
+            if (dataview) {
+                dataviewer = server_start_dataviewer(server);
+            }
         }
         if (sysroot && toolchain) {
             char *addr = NULL;
