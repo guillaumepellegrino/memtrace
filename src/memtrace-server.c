@@ -207,11 +207,14 @@ static FILE *server_start_dataviewer(memtrace_server_t *server) {
 
     if (system("dataviewer --stream") != 0) {
         CONSOLE("Failed to start dataviewer: %m");
-        CONSOLE("You may install it with:");
-        CONSOLE("  cargo install dataviewer'");
-        CONSOLE("");
-        CONSOLE("You may also need to install cargo from the rust toolchain with:");
+        CONSOLE("You may need to install it with the following steps:");
+        CONSOLE("- Install rust toolchain:");
         CONSOLE("  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh");
+        CONSOLE("- Install GTK4 dependency:");
+        CONSOLE("  sudo apt install libgtk-4-dev");
+        CONSOLE("- Install dataviewer itself from rust package manager:");
+        CONSOLE("  cargo install dataviewer --locked'");
+        CONSOLE("");
         CONSOLE("");
         goto error;
     }
