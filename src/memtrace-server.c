@@ -218,8 +218,6 @@ static FILE *server_start_dataviewer(memtrace_server_t *server) {
         CONSOLE("");
         goto error;
     }
-    CONSOLE("Dataviewer started");
-
     if ((s = socket(AF_UNIX, SOCK_STREAM|SOCK_CLOEXEC, 0)) < 0) {
         CONSOLE("Failed to create ipc socket: %m\n");
         goto error;
@@ -231,16 +229,16 @@ static FILE *server_start_dataviewer(memtrace_server_t *server) {
         CONSOLE("Failed to connext ipc socket to %s: %m\n", connaddr.sun_path);
         goto error;
     }
+    CONSOLE("Dataviewer started");
 
-    CONSOLE("Connected to DataViewer");
-
-    return fdopen(s, "r");
+    return fdopen(s, "w");
 
 error:
     close(s);
     return NULL;
 }
 
+// This function could benefit some refactoring
 static void server_parse_report(memtrace_server_t *server, FILE *in, FILE *out) {
     char line[4096];
     char *cmd_done = NULL;
@@ -284,6 +282,7 @@ static void server_parse_report(memtrace_server_t *server, FILE *in, FILE *out) 
             dataview = get_topic(line, "[dataview]");
             if (dataview) {
                 dataviewer = server_start_dataviewer(server);
+                out = dataviewer;
             }
         }
         if (sysroot && toolchain) {
@@ -294,11 +293,9 @@ static void server_parse_report(memtrace_server_t *server, FILE *in, FILE *out) 
                 show2user = false;
             }
         }
+
         if (show2user) {
             fputs(line, out);
-            if (dataviewer) {
-                fputs(line, dataviewer);
-            }
         }
     }
 
@@ -308,6 +305,8 @@ static void server_parse_report(memtrace_server_t *server, FILE *in, FILE *out) 
     free(binary);
     free(dataview);
     if (dataviewer) {
+        fputc(0, dataviewer);
+        fflush(dataviewer);
         fclose(dataviewer);
     }
     addr2line_cleanup(&addr2line);

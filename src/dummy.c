@@ -78,7 +78,7 @@ int main(int argc, char *argv[]) {
         if (num) {
             *num = getmagicnumber(loop);
             printf("magic number = %d (%p)\n", *num, num);
-            free(num);
+            //free(num);
         }
         else {
             printf("num is NULL\n");

@@ -258,6 +258,24 @@ Writing coredump done
 Detaching from 20328
 ```
 
+### 7. Experimental support with dataviewer
+It is possible to plot the top 10 memory allocations usage over the time with dataviewer.
+For that purpose, you can use the 'dataviewer' command in memtrace's cli.
+
+Prequites to use dataviewer are:
+- Install rust toolchain:
+```
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+```
+- Install GTK4 dependency:
+```
+sudo apt install libgtk-4-dev
+```
+- Install dataviewer itself from rust package manager:
+```
+cargo install dataviewer --locked
+```
+
 ### 6. Architecture
 ```mermaid
 sequenceDiagram
@@ -318,5 +336,4 @@ sequenceDiagram
 
 
 ## 7. TODO
-- Memory graph with DataViewer. Display the top 10 allocations with a granularity of 1 second.
 - Add support for IFUNC

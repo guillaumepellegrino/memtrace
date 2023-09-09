@@ -763,15 +763,15 @@ static void memtrace_console_dataviewer(console_t *console, int argc, char *argv
         bus_connection_flush(server);
     }
 
-    // Read report and dump it on console
+    // Read report
     in = server ? server : ipc;
     while (bus_connection_readline(in, line, sizeof(line))) {
         if (!strcmp(line, "[cmd_done]\n")) {
             break;
         }
-        else {
-            fputs(line, stdout);
-        }
+        //else {
+        //    fputs(line, stdout);
+        //}
     }
 
 error:
