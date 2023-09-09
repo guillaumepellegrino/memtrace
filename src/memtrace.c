@@ -722,7 +722,6 @@ static void memtrace_console_dataviewer(console_t *console, int argc, char *argv
     strmap_t options = {0};
     bus_connection_t *ipc = NULL;
     bus_connection_t *server = NULL;
-    bus_connection_t *in = NULL;
     size_t count = 10;
 
     optind = 1;
@@ -745,33 +744,33 @@ static void memtrace_console_dataviewer(console_t *console, int argc, char *argv
         CONSOLE("memtrace is not connected to target process");
         goto error;
     }
+    if (!(server = bus_first_connection(&memtrace->server))) {
+        CONSOLE("memtrace-server is not running: dataviewer can not be started");
+        goto error;
+    }
     if (count) {
         strmap_add_fmt(&options, "count", "%d", count);
     }
+
+    // Ask memtrace-agent to generate a dataviewer report
     bus_connection_write_request(ipc, "dataviewer", &options);
 
-    // Are we connected to memtrace-server ?
-    if ((server = bus_first_connection(&memtrace->server))) {
-        // Forward report to memtrace-server for decodding addresses to line and functions
-        bus_connection_write_request(server, "report", NULL);
-        while (bus_connection_readline(ipc, line, sizeof(line))) {
-            bus_connection_printf(server, "%s", line);
-            if (!strcmp(line, "[cmd_done]\n")) {
-                break;
-            }
-        }
-        bus_connection_flush(server);
-    }
-
-    // Read report
-    in = server ? server : ipc;
-    while (bus_connection_readline(in, line, sizeof(line))) {
+    // Forward dataviewer report to memtrace-server for decodding addresses to line and functions
+    // dataviewer itself will be started by memtrace-server
+    bus_connection_write_request(server, "report", &options);
+    while (bus_connection_readline(ipc, line, sizeof(line))) {
+        bus_connection_printf(server, "%s", line);
         if (!strcmp(line, "[cmd_done]\n")) {
             break;
         }
-        //else {
-        //    fputs(line, stdout);
-        //}
+    }
+    bus_connection_flush(server);
+
+    // Wait for command done
+    while (bus_connection_readline(server, line, sizeof(line))) {
+        if (!strcmp(line, "[cmd_done]\n")) {
+            break;
+        }
     }
 
 error:
