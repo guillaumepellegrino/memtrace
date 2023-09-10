@@ -276,6 +276,10 @@ sudo apt install libgtk-4-dev
 cargo install dataviewer --locked
 ```
 
+![alt text](https://github.com/guillaumepellegrino/dataviewer/blob/master/images/DataViewerMemtrace.png)
+
+https://github.com/guillaumepellegrino/dataviewer
+
 ### 6. Architecture
 ```mermaid
 sequenceDiagram
