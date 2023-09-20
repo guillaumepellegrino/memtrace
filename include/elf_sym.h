@@ -25,6 +25,7 @@ struct _elf_sym {
     const char *name;
     uint64_t offset;
     uint16_t section_index;
+    uint8_t st_info;
 };
 
 elf_sym_t elf_sym(elf_file_t *symtab, elf_file_t *strtab, uint64_t address);

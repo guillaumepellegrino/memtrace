@@ -29,6 +29,7 @@
 #include "ptrace.h"
 #include "arch.h"
 #include "log.h"
+#include "coredump.h"
 
 #if 0
 static bool memfd_read(int memfd, void *buf, size_t count, off64_t offset) {
@@ -111,7 +112,7 @@ static bool syscall_trace(syscall_ctx_t *ctx) {
  * We wait to enter a SYSCALL instruction for initialization.
  * We can then alterate the registers to hijack the syscall.
  */
-bool syscall_init(syscall_ctx_t *ctx, int pid, int memfd) {
+bool syscall_initialize(syscall_ctx_t *ctx, int pid, int memfd) {
     cpu_registers_t syscall_regs = {0};
     int status = 0;
 
@@ -134,6 +135,128 @@ bool syscall_init(syscall_ctx_t *ctx, int pid, int memfd) {
 
 error:
     return true;
+}
+
+void syscall_cleanup(syscall_ctx_t *ctx) {
+    if (ctx->intraddr) {
+        //syscall_munmap(ctx->intraddr, 4096);
+    }
+}
+
+void syscall_coredump(syscall_ctx_t *ctx) {
+    const char *filename = "/tmp/core";
+    FILE *core = NULL;
+    fprintf(stderr, "Writing coredump to %s\n", filename);
+    if (!(core = fopen(filename, "w"))) {
+        TRACE_ERROR("Failed to open %s: %m", filename);
+        return;
+    }
+    coredump_write(ctx->pid, ctx->memfd, core, NULL);
+    fclose(core);
+    fprintf(stderr, "Writing coredump done\n");
+}
+
+bool syscall_function(syscall_ctx_t *ctx, void *func, size_t arg1, size_t arg2, size_t arg3, size_t arg4, size_t arg5, size_t arg6, size_t *ret) {
+    cpu_registers_t regs = {0};
+    cpu_registers_t save_regs = {0};
+    size_t pc = 0;
+    int status = 0;
+    bool retval = false;
+
+    if (!ctx->intraddr) {
+        ctx->intraddr = syscall_mmap(ctx, 0, 4096, 0, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+        if (ctx->intraddr == MAP_FAILED) {
+            TRACE_ERROR("Failed to allocate memory");
+            return false;
+        }
+    }
+    if (!ctx->stackaddr) {
+        ctx->stackaddr = syscall_mmap(ctx, 0, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+        if (ctx->stackaddr == MAP_FAILED) {
+            TRACE_ERROR("Failed to allocate memory");
+            return false;
+        }
+    }
+
+    size_t stackaddr = (size_t) ctx->stackaddr;
+    stackaddr += 2048 + 8;
+
+    // Save current registers
+    cpu_registers_get(&regs, ctx->pid);
+    save_regs = regs;
+
+    // Set registers for function arguments
+    cpu_register_set(&regs, cpu_register_pc, (size_t) func);
+    cpu_register_set(&regs, cpu_register_sp, stackaddr);
+    cpu_register_set(&regs, cpu_register_ra, (size_t) ctx->intraddr);
+    cpu_register_set(&regs, cpu_register_arg1, arg1);
+    cpu_register_set(&regs, cpu_register_arg2, arg2);
+    cpu_register_set(&regs, cpu_register_arg3, arg3);
+    cpu_register_set(&regs, cpu_register_arg4, arg4);
+    cpu_register_set(&regs, cpu_register_arg5, arg5);
+    cpu_register_set(&regs, cpu_register_arg6, arg6);
+    if (!cpu_registers_set(&regs, ctx->pid)) {
+        TRACE_ERROR("Failed to setregs for process %d (%m)", ctx->pid);
+        return false;
+    }
+
+    // Resume execution and wait for SIGINT signal
+    //TRACE_CPUREG(ctx->pid, "[HIJACK] Resume execution ...");
+    if (ptrace(PTRACE_CONT, ctx->pid, 0, 0) != 0) {
+        TRACE_ERROR("Failed STEP: %m");
+        return false;
+    }
+    if (waitpid(ctx->pid, &status, 0) < 0) {
+        TRACE_ERROR("waitpid(%d) failed: %m", ctx->pid);
+        return false;
+    }
+    if (!WIFSTOPPED(status)) {
+        TRACE_ERROR("waitpid(%d): Program terminated", ctx->pid);
+        return false;
+    }
+    if (WSTOPSIG(status) != 11) {
+        TRACE_ERROR("waitpid(%d): Unepected signal %d", ctx->pid, WSTOPSIG(status));
+        return false;
+    }
+    cpu_registers_get(&regs, ctx->pid);
+    if (ret) {
+        *ret = cpu_register_get(&regs, cpu_register_retval);
+    }
+
+    // Did we reach the interrupt address ?
+    pc = cpu_register_get(&regs, cpu_register_pc);
+    if (pc == (size_t) ctx->intraddr) {
+        retval = true;
+    }
+    else {
+        TRACE_WARNING("[%d] Failed to run function at %p", ctx->pid, func);
+        TRACE_WARNING("[%d] Function return expected at %p instead of %p", ctx->pid, ctx->intraddr, (void *) pc);
+        TRACE_WARNING("[%d] StackAddr: %p", ctx->pid, stackaddr);
+        cpu_registers_print(&regs);
+        syscall_coredump(ctx);
+    }
+
+    //TRACE_CPUREG(ctx->pid, "[HIJACK] Paused:Exit SYSCALL");
+
+    // Rewind to syscall instruction
+    // and restore registers
+    pc = cpu_register_get(&save_regs, cpu_register_pc);
+    cpu_register_set(&save_regs, cpu_register_pc, (pc - arch.syscall_rewind_size));
+    cpu_registers_set(&save_regs, ctx->pid);
+
+    // Resume execution and wait for SYSCALL-Enter event
+    //TRACE_CPUREG(ctx->pid, "[INIT] Resume execution ...");
+    if (ptrace(PTRACE_SYSCALL, ctx->pid, 0, 0) != 0) {
+        TRACE_ERROR("Failed STEP: %m");
+        return false;
+    }
+    if (waitpid(ctx->pid, &status, 0) < 0) {
+        TRACE_ERROR("waitpid(%d) failed: %m", ctx->pid);
+        return false;
+    }
+    //TRACE_CPUREG(ctx->pid, "[INIT] Paused:Enter SYSCALL");
+
+    return retval;
 }
 
 /**

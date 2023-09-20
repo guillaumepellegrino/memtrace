@@ -543,6 +543,7 @@ bool agent_initialize(agent_t *agent) {
     agent->callstack_size = 10;
     agent->large_callstack_size = 50;
     agent->start_time = time(NULL);
+
     agent->elapsed = 0;
     hashmap_initialize(&agent->allocations, &allocations_maps_cfg);
     hashmap_initialize(&agent->blocks, &blocks_maps_cfg);
@@ -600,7 +601,6 @@ bool agent_initialize(agent_t *agent) {
         };
         timerfd_settime(agent->periodic_job_timerfd, 0, &itimer, NULL);
     }
-
 
     return true;
 }
@@ -692,4 +692,15 @@ void agent_dealloc(agent_t *agent, void *ptr) {
         hashmap_iterator_destroy(&allocation->it);
     }
 }
+
+const char **agent_get_function_map() {
+    static const char *function_map[] = {
+        "malloc", "agent_malloc",
+        "calloc", "agent_calloc",
+        NULL
+    };
+
+    return function_map;
+}
+
 

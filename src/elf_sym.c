@@ -19,8 +19,10 @@
 #include "elf_sym.h"
 #include "elf_main.h"
 #include "elf_file.h"
+#include "elf.h"
 #include "log.h"
 #include <string.h>
+#include <stdlib.h>
 
 #define STB_LOCAL  0
 #define STB_GLOBAL 1
@@ -78,6 +80,7 @@ elf_sym_t elf_sym(elf_file_t *symtab, elf_file_t *strtab, uint64_t address) {
             result.name = elf_file_read_strp(strtab);
             result.offset = address - sym.st_value;
             result.section_index = sym.st_shndx;
+            result.st_info = sym.st_info;
             return result;
         }
     } while (!elf_file_eof(symtab));
@@ -116,6 +119,9 @@ elf_sym_t elf_sym_from_name(elf_file_t *symtab, elf_file_t *strtab, const char *
             case STT_OBJECT:
                 symname = elf_file_read_strp(strtab);
                 break;
+            case STT_GNU_IFUNC:
+                symname = elf_file_read_strp(strtab);
+                break;
             default:
                 break;
         }
@@ -124,6 +130,7 @@ elf_sym_t elf_sym_from_name(elf_file_t *symtab, elf_file_t *strtab, const char *
             result.name = symname;
             result.offset = sym.st_value;
             result.section_index = sym.st_shndx;
+            result.st_info = sym.st_info;
             return result;
         }
     } while (!elf_file_eof(symtab));

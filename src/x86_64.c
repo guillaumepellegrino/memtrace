@@ -31,7 +31,7 @@ static bool x86_cpu_registers_get(cpu_registers_t *regs, int pid) {
         return false;
     }
 
-    regs->extra[0] = ptrace(PTRACE_PEEKTEXT, pid, regs->raw.rsp, 0);
+    regs->ra = ptrace(PTRACE_PEEKTEXT, pid, regs->raw.rsp, 0);
 
     return true;
 }
@@ -39,6 +39,10 @@ static bool x86_cpu_registers_get(cpu_registers_t *regs, int pid) {
 static bool x86_cpu_registers_set(cpu_registers_t *regs, int pid) {
     if (ptrace(PTRACE_SETREGS, pid, NULL, &regs->raw) != 0) {
         TRACE_ERROR("ptrace(SETREGS, %d) failed: %m", pid);
+        return false;
+    }
+    if (ptrace(PTRACE_POKETEXT, pid, regs->raw.rsp, regs->ra) != 0) {
+        TRACE_ERROR("ptrace(POKE, %d, rsp, 0x%zx) failed: %m", pid, regs->ra);
         return false;
     }
 
@@ -50,7 +54,7 @@ static size_t *x86_cpu_register_reference(cpu_registers_t *registers, cpu_regist
         case cpu_register_pc:       return (size_t *) &registers->raw.rip;
         case cpu_register_sp:       return (size_t *) &registers->raw.rsp;
         case cpu_register_fp:       return (size_t *) &registers->raw.rbp;
-        case cpu_register_ra:       return (size_t *) &registers->extra[0];
+        case cpu_register_ra:       return (size_t *) &registers->ra;
         case cpu_register_syscall:  return (size_t *) &registers->raw.orig_rax;
         //case cpu_register_syscall:  return (size_t *) &registers->raw.rax;
         case cpu_register_arg1:     return (size_t *) &registers->raw.rdi;

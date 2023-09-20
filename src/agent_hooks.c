@@ -104,6 +104,7 @@ void *malloc_hook(size_t size, size_t arg2, size_t arg3) {
     if (locked) {
         agent_alloc(&g_agent, &regs, size, newptr);
     }
+
     hooks_unlock(locked);
 
     return newptr;
@@ -128,6 +129,7 @@ void *calloc_hook(size_t nmemb, size_t size, size_t arg3) {
     if (locked) {
         agent_alloc(&g_agent, &regs, (nmemb*size), newptr);
     }
+
     hooks_unlock(locked);
 
     return newptr;

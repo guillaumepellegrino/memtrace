@@ -341,3 +341,4 @@ sequenceDiagram
 
 ## 7. TODO
 - Add support for IFUNC
+- The list of functions to map should be defined in the agent library. It should allow to make others extensions than memory tracing.

@@ -48,12 +48,12 @@ typedef enum {
 struct _cpu_registers {
 #if defined(__x86_64__)
     struct user_regs_struct raw;
+    size_t ra;
 #elif defined(__mips__)
     struct user raw;
 #else
     struct user_regs raw;
 #endif
-    size_t extra[1];
 };
 
 struct _breakpoint {

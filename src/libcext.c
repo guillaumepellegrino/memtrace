@@ -11,6 +11,7 @@
  * Instead we implement them as a workarround.
  */
 
+/*
 char *strchr(const char *s, int c) {
     for (size_t i = 0; s[i]; i++) {
         if (s[i] == c) {
@@ -108,4 +109,4 @@ time_t time(time_t *tloc) {
     }
     return tv.tv_sec;
 }
-
+*/

@@ -44,6 +44,7 @@
 
 struct _injecter {
     int pid; /** PID of the target process */
+    int memfd;
     libraries_t *libraries; /** Shared libraries from the target process */
     char *inject_libname; /** Name of the library to inject */
     void *straddr; /** Memory mapper on target process for writing string */
@@ -52,6 +53,7 @@ struct _injecter {
     library_t *inject_lib; /** Injected library */
     library_t *c_lib; /** libc library from target process */
     library_t *pthread_lib; /** optional pthread library from target process */
+    syscall_ctx_t syscall;
 };
 
 typedef struct {
@@ -129,7 +131,7 @@ static bool library_replace_function(int pid, library_t *target, library_t *inje
     return true;
 }
 
-static size_t resolve_function_fromlib(elf_relocate_t *rela, library_t *lib) {
+static size_t resolve_function_fromlib(injecter_t *injecter, elf_relocate_t *rela, library_t *lib) {
     // Compute lib function offset
     elf_file_t *symtab = library_get_elf_section(lib, library_section_dynsym);
     elf_file_t *strtab = library_get_elf_section(lib, library_section_dynstr);
@@ -142,6 +144,21 @@ static size_t resolve_function_fromlib(elf_relocate_t *rela, library_t *lib) {
         //TRACE_ERROR("%s not found (section idx: %d)", rela->sym.name, rela->sym.section_index);
         return 0;
     }
+    if ((sym.st_info & 0x0f) == STT_GNU_IFUNC) {
+        TRACE_WARNING("%s : %s() is an IFUNC", library_name(lib), sym.name);
+        TRACE_WARNING("symbol section_index: %u, offset: 0x%x", sym.section_index, sym.offset);
+        void *ifunc = (void *) library_absolute_address(lib, sym.offset);
+        size_t ret = 0;
+
+        TRACE_WARNING("Run ifunc at %p", ifunc);
+        if (!syscall_function(&injecter->syscall, ifunc, 1, 0, 0, 0, 0, 0, &ret) != 0) {
+            TRACE_ERROR("Failed to run function");
+            abort();
+        }
+        TRACE_WARNING("real_function = 0x%zx", ret);
+        return ret;
+    }
+
     if (sym.section_index == 0) {
         // Symbol is undefined.
         return 0;
@@ -174,16 +191,16 @@ static size_t x86_64_relocate_value(injecter_t *injecter, elf_relocate_t *rela, 
             if (rela->sym.offset) {
                 return library_absolute_address(injecter->inject_lib, rela->sym.offset);
             }
-            if ((value = resolve_function_fromlib(rela, injecter->c_lib))) {
+            if ((value = resolve_function_fromlib(injecter, rela, injecter->c_lib))) {
                 return value;
             }
-            if (injecter->pthread_lib && (value = resolve_function_fromlib(rela, injecter->pthread_lib))) {
+            if (injecter->pthread_lib && (value = resolve_function_fromlib(injecter, rela, injecter->pthread_lib))) {
                 return value;
             }
-            if ((value = resolve_function_fromlib(rela, injecter->program_lib))) {
+            if ((value = resolve_function_fromlib(injecter, rela, injecter->program_lib))) {
                 return value;
             }
-            TRACE_WARNING("Function %s() was not resolved", rela->sym.name);
+            TRACE_WARNING("Function %s() was not resolved(info:%d, type:%d)", rela->sym.name, rela->info, rela->type);
             break;
         case R_X86_64_RELATIVE:
             return library_absolute_address(injecter->inject_lib, rela->addend);
@@ -207,13 +224,13 @@ static size_t arm_relocate_value(injecter_t *injecter, elf_relocate_t *rela, siz
             if (rela->sym.offset) {
                 return library_absolute_address(injecter->inject_lib, rela->sym.offset);
             }
-            if ((value = resolve_function_fromlib(rela, injecter->c_lib))) {
+            if ((value = resolve_function_fromlib(injecter, rela, injecter->c_lib))) {
                 return value;
             }
-            if (injecter->pthread_lib && (value = resolve_function_fromlib(rela, injecter->pthread_lib))) {
+            if (injecter->pthread_lib && (value = resolve_function_fromlib(injecter, rela, injecter->pthread_lib))) {
                 return value;
             }
-            if ((value = resolve_function_fromlib(rela, injecter->program_lib))) {
+            if ((value = resolve_function_fromlib(injecter, rela, injecter->program_lib))) {
                 return value;
             }
             TRACE_WARNING("Function %s() was not resolved", rela->sym.name);
@@ -240,13 +257,13 @@ static size_t mips_relocate_value(injecter_t *injecter, elf_relocate_t *rela, si
             if (rela->sym.offset) {
                 return library_absolute_address(injecter->inject_lib, rela->sym.offset);
             }
-            if ((value = resolve_function_fromlib(rela, injecter->c_lib))) {
+            if ((value = resolve_function_fromlib(injecter, rela, injecter->c_lib))) {
                 return value;
             }
-            if (injecter->pthread_lib && (value = resolve_function_fromlib(rela, injecter->pthread_lib))) {
+            if (injecter->pthread_lib && (value = resolve_function_fromlib(injecter, rela, injecter->pthread_lib))) {
                 return value;
             }
-            if ((value = resolve_function_fromlib(rela, injecter->program_lib))) {
+            if ((value = resolve_function_fromlib(injecter, rela, injecter->program_lib))) {
                 return value;
             }
             TRACE_WARNING("Function %s() was not resolved", rela->sym.name);
@@ -341,13 +358,43 @@ static bool injecter_resolve_functions(injecter_t *injecter) {
 }
 
 injecter_t *injecter_create(int pid) {
+    char memfile[64];
     injecter_t *injecter = NULL;
 
     assert(pid);
     assert((injecter = calloc(1, sizeof(injecter_t))));
     injecter->pid = pid;
+    snprintf(memfile, sizeof(memfile), "/proc/%d/mem", injecter->pid);
+    if ((injecter->memfd = open(memfile, O_RDWR)) < 0) {
+        TRACE_ERROR("Failed to open %s: %m", memfile);
+        goto error;
+    }
+
+    CONSOLE("Waiting for target process to perform a system call to hijack it");
+    if (!syscall_initialize(&injecter->syscall, injecter->pid, injecter->memfd)) {
+        TRACE_ERROR("Failed to init syscall");
+        goto error;
+    }
+
+    // Syscall sanity check
+    if (syscall_getpid(&injecter->syscall) != injecter->pid) {
+        TRACE_ERROR("Failed to inject syscall in target process");
+        goto error;
+    }
+    if (syscall_getpid(&injecter->syscall) != injecter->pid) {
+        TRACE_ERROR("Failed to inject syscall in target process");
+        goto error;
+    }
+    if (syscall_getpid(&injecter->syscall) != injecter->pid) {
+        TRACE_ERROR("Failed to inject syscall in target process");
+        goto error;
+    }
 
     return injecter;
+
+error:
+    injecter_destroy(injecter);
+    return NULL;
 }
 
 void injecter_destroy(injecter_t *injecter) {
@@ -355,6 +402,10 @@ void injecter_destroy(injecter_t *injecter) {
         return;
     }
 
+    syscall_cleanup(&injecter->syscall);
+    if (injecter->memfd >= 0) {
+        close(injecter->memfd);
+    }
     if (injecter->libraries) {
         libraries_destroy(injecter->libraries);
     }
@@ -488,12 +539,10 @@ static bool memfd_zerowrite(int memfd, size_t addr, size_t len) {
 }
 
 bool injecter_load_library(injecter_t *injecter, const char *libname) {
-    char memfile[64];
-    int memfd = -1;
     elf_t *elf = NULL;
     const program_header_t *ph = NULL;
     FILE *fp = NULL;
-    syscall_ctx_t syscall = {0};
+    bool rt = false;
 
     assert(injecter);
     assert(libname);
@@ -501,65 +550,37 @@ bool injecter_load_library(injecter_t *injecter, const char *libname) {
     injecter->inject_libname = strdup(libname);
     if (!(fp = fopen(injecter->inject_libname, "r"))) {
         TRACE_ERROR("fopen %s failed: %m", injecter->inject_libname);
-        return false;
+        goto error;
     }
     if (!(elf = elf_open_local(injecter->inject_libname))) {
         TRACE_ERROR("Failed to open %s", injecter->inject_libname);
-        return false;
+        goto error;
     }
 
-    snprintf(memfile, sizeof(memfile), "/proc/%d/mem", injecter->pid);
-    if ((memfd = open(memfile, O_RDWR)) < 0) {
-        TRACE_ERROR("Failed to open %s: %m", memfile);
-        return false;
-    }
 
-    // Sanity check
-    CONSOLE("Waiting for target process to perform a system call to hijack it");
-    if (!syscall_init(&syscall, injecter->pid, memfd)) {
-        TRACE_ERROR("Failed to init syscall");
-        return false;
-    }
-
-    if (syscall_getpid(&syscall) != injecter->pid) {
-        TRACE_ERROR("Failed to inject syscall in target process");
-        return false;
-    }
-    if (syscall_getpid(&syscall) != injecter->pid) {
-        TRACE_ERROR("Failed to inject syscall in target process");
-        return false;
-    }
-    if (syscall_getpid(&syscall) != injecter->pid) {
-        TRACE_ERROR("Failed to inject syscall in target process");
-        return false;
-    }
-/*
-    CONSOLE("DEBUG ERROR");
-    return false;
-*/
     // Allocate memory for writing string
-    injecter->straddr = syscall_mmap(&syscall,
+    injecter->straddr = syscall_mmap(&injecter->syscall,
         0, 4096, PROT_READ, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
 
     if (!injecter->straddr) {
         TRACE_ERROR("mmap failed");
-        return false;
+        goto error;
     }
     CONSOLE("Memory mapped at %p to store library name", injecter->straddr);
 
     // Write library name in target memory
-    if (lseek64(memfd, (size_t)injecter->straddr, SEEK_SET) < 0) {
+    if (lseek64(injecter->memfd, (size_t)injecter->straddr, SEEK_SET) < 0) {
         TRACE_ERROR("Failed lseek %p: %m", injecter->straddr);
-        return false;
+        goto error;
     }
-    if (write(memfd, injecter->inject_libname, strlen(injecter->inject_libname) + 1) < 0) {
+    if (write(injecter->memfd, injecter->inject_libname, strlen(injecter->inject_libname) + 1) < 0) {
         TRACE_ERROR("Failed write(memfd): %m");
-        return false;
+        goto error;
     }
-    int fd = syscall_open(&syscall, injecter->straddr, O_RDONLY, 0);
+    int fd = syscall_open(&injecter->syscall, injecter->straddr, O_RDONLY, 0);
     if (fd < 0) {
         TRACE_ERROR("Failed to open %s inside pid %d", injecter->inject_libname, injecter->pid);
-        return false;
+        goto error;
     }
 
     CONSOLE("%s opened in target process with fd:%d", injecter->inject_libname, fd);
@@ -567,7 +588,7 @@ bool injecter_load_library(injecter_t *injecter, const char *libname) {
     size_t base_addr = 0;
     if (!(base_addr = elf_find_available_memory(injecter->pid, elf))) {
         CONSOLE("Failed to find available memory to map library");
-        return false;
+        goto error;
     }
     injecter->inject_baseaddr = (void *) base_addr;
     CONSOLE("Base Addr: 0x%zx", base_addr);
@@ -594,26 +615,26 @@ bool injecter_load_library(injecter_t *injecter, const char *libname) {
         size_t mapoffset = ph->p_offset - elf_pageoffset(base_addr + ph->p_vaddr);
 
         CONSOLE("Load program at 0x%zx, offset: %zx, size: %zx", mapaddr, mapoffset, mapsize);
-        if (syscall_mmap(&syscall,
+        if (syscall_mmap(&injecter->syscall,
             (void *) mapaddr, mapsize, prot, MAP_PRIVATE|MAP_FIXED, fd, mapoffset) != (void *) mapaddr)
         {
             TRACE_ERROR("Failed to map memory");
-            return false;
+            goto error;
         }
 
         // Fill unitialized memory with zero
         size_t zeroaddr = base_addr + ph->p_vaddr + ph->p_filesz;
         size_t zerolen = ph->p_memsz - ph->p_filesz;
-        if (!memfd_zerowrite(memfd, zeroaddr, zerolen)) {
+        if (!memfd_zerowrite(injecter->memfd, zeroaddr, zerolen)) {
             TRACE_ERROR("Failed to zeroing memory at 0x%zx (len=0x%zx)", zeroaddr, zerolen);
-            //return false;
+            //goto error;
         }
         CONSOLE("Program mapped at 0x%zx (size=0x%zx)", mapaddr, mapsize);
     }
 
     if (!(injecter->libraries = libraries_create(injecter->pid))) {
         TRACE_ERROR("Failed to open libraries");
-        return false;
+        goto error;
     }
     libraries_print(injecter->libraries, stdout);
 
@@ -623,24 +644,49 @@ bool injecter_load_library(injecter_t *injecter, const char *libname) {
     injecter->inject_lib = libraries_find_by_name(injecter->libraries, injecter->inject_libname);
     if (!injecter->program_lib) {
         TRACE_ERROR("Failed to find target lib");
-        return false;
+        goto error;
     }
     if (!injecter->c_lib) {
         TRACE_ERROR("Failed to find C lib");
-        return false;
+        goto error;
     }
     if (!injecter->inject_lib) {
         TRACE_ERROR("Failed to find inject lib");
-        return false;
+        goto error;
     }
 
     // Resolve functions from injected library
     injecter_resolve_functions(injecter);
 
-    elf_close(elf);
-    fclose(fp);
-    close(memfd);
-    return true;
+    // Are we able to run 'getpid()' function ?
+    const char *symname = "getpid";
+    library_symbol_t sym = libraries_find_symbol(injecter->libraries, symname);
+    if (!sym.addr) {
+        TRACE_ERROR("%s() not found", symname);
+        goto error;
+    }
+    void *func = (void *)(size_t) sym.addr;
+    size_t ret = 0;
+    CONSOLE("Run function at address %p", func);
+    if (!syscall_function(&injecter->syscall, func, 3, 2, 3, 4, 5, 6, &ret) != 0) {
+        TRACE_ERROR("Failed to run function");
+        goto error;
+    }
+    if ((int)ret != injecter->pid) {
+        TRACE_ERROR("Failed to call function: %d != %d", ret, injecter->pid);
+        goto error;
+    }
+    CONSOLE("Run function at address %p - RET: %zu", func, ret);
+
+    rt = true;
+error:
+    if (elf) {
+        elf_close(elf);
+    }
+    if (fp) {
+        fclose(fp);
+    }
+    return rt;
 }
 
 bool injecter_replace_function(injecter_t *injecter, const char *program_fname, const char *inject_fname) {
