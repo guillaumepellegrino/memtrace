@@ -19,8 +19,7 @@
 #define TRACE_ZONE TRACE_ZONE_COREDUMP
 #include <sys/procfs.h>
 #include <sys/types.h>
-#include <linux/elf.h>
-#include <linux/elf-fdpic.h>
+#include "elf.h"
 #include <errno.h>
 #include <stdlib.h>
 #include <unistd.h>

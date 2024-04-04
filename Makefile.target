@@ -3,8 +3,12 @@ BUILDTGT?=build-$(MACHINE)
 O?=$(BUILDTGT)
 CROSS_COMPILE?=
 CC?=$(CROSS_COMPILE)cc
-CFLAGS+=-Wall -Wextra -Wno-unused-parameter -Werror -g -O2 -fPIC -pthread \
-	-D_DEFAULT_SOURCE -D_GNU_SOURCE \
+CFLAGS+=-g -O2 -fPIC -pthread \
+	-Wall -Wextra -Werror \
+	-Wno-unused-parameter \
+	-Wno-missing-field-initializers \
+	-Wno-missing-braces \
+	-D_DEFAULT_SOURCE -D_GNU_SOURCE -std=gnu99 \
 	-Iinclude \
 	-DVERSION=\"$(shell git describe --all)\" \
 	-DSYSROOT=\"$(shell $(CC) -print-sysroot)\" \

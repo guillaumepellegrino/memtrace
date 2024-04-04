@@ -1,8 +1,12 @@
 BUILDHOST?=build-host
 BUILD?=$(BUILDHOST)
 CC_HOST?=cc
-CFLAGS_HOST+=-Wall -Wextra -Wno-unused-parameter -Werror -g -O2 -pthread \
-	-D_DEFAULT_SOURCE -D_GNU_SOURCE \
+CFLAGS_HOST+=-g -O2 -pthread \
+	-Wall -Wextra -Werror \
+	-Wno-unused-parameter \
+	-Wno-missing-field-initializers \
+	-Wno-missing-braces \
+	-D_DEFAULT_SOURCE -D_GNU_SOURCE -std=gnu99 \
 	-Iinclude \
 	-DVERSION=\"$(shell git describe --all)\"
 LDFLAGS_HOST+=-pthread
