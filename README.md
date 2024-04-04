@@ -83,7 +83,7 @@ Listening on [0.0.0.0]:3002
 # - inject the agent in target process to follow memory allocations
 # - connect to the agent through ipc socket
 # - query memtrace-server service with multicast and try to connect to it.
-/cfg/system/root # /ext/memtrace -p $(pidof dnsmasq)
+/cfg/system/root # /tmp/memtrace -p $(pidof dnsmasq)
 ```
 
 ### 4.3 Non local nework
@@ -93,7 +93,7 @@ In this case, it is useful to start memtrace as a tcp server and memtrace-server
 ```
 # Attach memtrace to process on Target
 # memtrace will listen on tcp port 3002 and wait for memtrace-fs to connect
-/cfg/system/root # /ext/memtrace -p $(pidof dnsmasq) -l 0.0.0.0
+/cfg/system/root # /tmp/memtrace -p $(pidof dnsmasq) -l 0.0.0.0
 Listening on [0.0.0.0]:3002
 Waiting for client to connect
 
@@ -109,15 +109,15 @@ Connected
 
 ### 4.4 Offline Usage
 When memtrace client has no possibility to connect to memtrace server, it is possible to start memtrace 'offline'.
-/ # /ext/memtrace -p $(pidof dummy) 
+/ # /tmp/memtrace -p $(pidof dummy) 
 
 You can still generate 'report' but you will need to decode it offline with memtrace-server.
 
 ```
-/ # /ext/memtrace -p $(pidof dummy) 
+/ # /tmp/memtrace -p $(pidof dummy) 
 Try to find /usr/lib/libmemtrace-agent.so
-Try to find /ext/libmemtrace-agent.so
-Memtrace agent is /ext/libmemtrace-agent.so
+Try to find /tmp/libmemtrace-agent.so
+Memtrace agent is /tmp/libmemtrace-agent.so
 Memtrace agent is already injected in target process
 Memtrace is connected to target process 14612
 Enter 'help' for listing possible commands
@@ -130,12 +130,12 @@ Memory allocation context n°0
 185 allocs, 1295 bytes were not free
 [addr]/lib/libc.so.6+0x70ed8 | __libc_malloc()+0x0
 [addr]/lib/libc.so.6+0x753e0 | __strdup()+0x18
-[addr]/ext/dummy+0x1092c
-[addr]/ext/dummy+0x10924
-[addr]/ext/dummy+0x1084c | thread_loop()+0x44
+[addr]/tmp/dummy+0x1092c
+[addr]/tmp/dummy+0x10924
+[addr]/tmp/dummy+0x1084c | thread_loop()+0x44
 [addr]/lib/libpthread.so.0+0x5f14
 [addr]/lib/libc.so.6+0xd0658
-[addr]/ext/dummy+0x10808 | thread_loop()+0x0
+[addr]/tmp/dummy+0x10808 | thread_loop()+0x0
 [addr]/lib/libc.so.6+0x10e508
 [addr]/lib/libc.so.6+0x10eb08
 [addr]/lib/libc.so.6+0x10f408
@@ -251,7 +251,7 @@ Attaching to 20328
 memtrace attached to pid:20328/tid:20328
 memtrace attached to pid:20328/tid:20330
 memtrace attached to pid:20328/tid:21299
-Setting breakpoint on malloc_hook at 0x55860 (/ext/libmemtrace-agent.so+0x5860)
+Setting breakpoint on malloc_hook at 0x55860 (/tmp/libmemtrace-agent.so+0x5860)
 Breakpoint was hit !
 Writing coredump to /tmp/core
 Writing coredump done
