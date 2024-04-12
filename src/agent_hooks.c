@@ -36,43 +36,34 @@
 #define return_address()        (size_t) __builtin_return_address(0)
 
 __attribute__((aligned)) char g_buff[G_BUFF_SIZE];
-static pthread_mutex_t init_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t global_lock = PTHREAD_MUTEX_INITIALIZER;
-static bool global_lock_init = false;
 static agent_t g_agent = {0};
 
-
-static void cleanup() {
-    agent_cleanup(&g_agent);
-}
-
-static void try_initialize() {
-    bool locked = false;
-    pthread_mutexattr_t attr = {0};
-
-    pthread_mutex_lock(&init_lock);
-    if (global_lock_init) {
-        pthread_mutex_unlock(&init_lock);
-        return;
-    }
+__attribute__((constructor))
+static void agent_dlopen() {
+    log_set_header("[memtrace-agent]");
+    TRACE_WARNING("Library injected !");
 
     // initialize global lock and lock it
+    pthread_mutexattr_t attr;
     pthread_mutexattr_init(&attr);
     pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_ERRORCHECK);
     pthread_mutex_init(&global_lock, &attr);
-    locked = hooks_lock();
-    global_lock_init = true;
-    pthread_mutex_unlock(&init_lock);
 
     // initialize agent
-    fprintf(stderr, "[memtrace-agent] Initialize\n");
-    if (agent_initialize(&g_agent)) {
-        atexit(cleanup);
-    }
-    else {
+    TRACE_WARNING("Initializing agent");
+    if (!agent_initialize(&g_agent)) {
         TRACE_ERROR("Failed to initialize memtrace agent");
+        return;
     }
-    hooks_unlock(locked);
+    TRACE_WARNING("Initialized !");
+}
+
+__attribute__((destructor))
+static void agent_dlclose() {
+    TRACE_WARNING("Cleaning-up");
+    agent_cleanup(&g_agent);
+    TRACE_WARNING("Cleanup done");
 }
 
 bool hooks_lock() {
@@ -98,7 +89,6 @@ void *malloc_hook(size_t size, size_t arg2, size_t arg3) {
     bool locked = false;
     void *newptr = NULL;
 
-    try_initialize();
     locked = hooks_lock();
     newptr = malloc(size);
     if (locked) {
@@ -122,7 +112,6 @@ void *calloc_hook(size_t nmemb, size_t size, size_t arg3) {
     bool locked = false;
     void *newptr = NULL;
 
-    try_initialize();
     locked = hooks_lock();
     newptr = calloc(nmemb, size);
     if (locked) {
@@ -145,7 +134,6 @@ void *realloc_hook(void *ptr, size_t size) {
     bool locked = false;
     void *newptr = NULL;
 
-    try_initialize();
     locked = hooks_lock();
     if (locked && ptr) {
         agent_dealloc(&g_agent, ptr);
@@ -183,7 +171,6 @@ void *reallocarray_hook(void *ptr, size_t nmemb, size_t size) {
     bool locked = false;
     void *newptr = NULL;
 
-    try_initialize();
     locked = hooks_lock();
     // reallocarray() may not exist in old c library
     if (locked && ptr) {
@@ -201,7 +188,6 @@ void *reallocarray_hook(void *ptr, size_t nmemb, size_t size) {
 void free_hook(void *ptr) {
     bool locked = false;
 
-    try_initialize();
     locked = hooks_lock();
     if (locked) {
         agent_dealloc(&g_agent, ptr);

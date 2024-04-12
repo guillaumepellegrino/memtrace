@@ -509,21 +509,19 @@ static void agent_periodic_job_handler(evlp_handler_t *self, int events) {
 static void *ipc_accept_loop(void *arg) {
     agent_t *agent = arg;
 
+    TRACE_WARNING("Control Thread - Entering event loop");
     signal(SIGPIPE, SIG_IGN);
-
-    TRACE_WARNING("Entered event loop");
     if (!bus_ipc_listen(&agent->bus, agent->ipc)) {
         TRACE_ERROR("Failed to listen on ipc socket");
         return NULL;
     }
     evlp_main(agent->evlp);
-    TRACE_WARNING("Exiting event loop");
+    TRACE_WARNING("Control Thread - Exiting event loop");
 
     return NULL;
 }
 
 bool agent_initialize(agent_t *agent) {
-    log_set_header("[memtrace-agent]");
     if (!(agent->libraries = libraries_create(getpid()))) {
         TRACE_ERROR("Failed to create libraries");
         return false;
@@ -547,19 +545,11 @@ bool agent_initialize(agent_t *agent) {
     hashmap_initialize(&agent->allocations, &allocations_maps_cfg);
     hashmap_initialize(&agent->blocks, &blocks_maps_cfg);
 
-    libraries_print(agent->libraries, stdout);
-
     if ((agent->ipc = ipc_socket()) < 0) {
         return false;
     }
 
-    if (pthread_create(&agent->thread, NULL, ipc_accept_loop, agent) != 0) {
-        TRACE_ERROR("Failed to create thread: %m");
-        return false;
-    }
-
     agent->follow_allocs = true;
-
 
     agent->evlp = evlp_create();
     bus_initialize(&agent->bus, agent->evlp, "memtrace-agent", "memtrace");
@@ -601,6 +591,11 @@ bool agent_initialize(agent_t *agent) {
         timerfd_settime(agent->periodic_job_timerfd, 0, &itimer, NULL);
     }
 
+    if (pthread_create(&agent->thread, NULL, ipc_accept_loop, agent) != 0) {
+        TRACE_ERROR("Failed to create thread: %m");
+        return false;
+    }
+    libraries_update(agent->libraries);
 
     return true;
 }
@@ -631,6 +626,10 @@ void agent_alloc(agent_t *agent, cpu_registers_t *regs, size_t size, void *newpt
     if (pthread_self() == agent->thread) {
         // ignore allocation from the agent itself
         return;
+    }
+
+    if (agent->stats.alloc_count == 0) {
+        TRACE_WARNING("Memory allocations are tracked !");
     }
 
     assert((callstack = calloc(agent->callstack_size, sizeof(size_t))));

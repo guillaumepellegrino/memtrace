@@ -96,5 +96,7 @@ size_t library_relative_address(const library_t *library, size_t address);
 /** Return the absolute address value */
 size_t library_absolute_address(const library_t *library, size_t address);
 
+/** Return the symbol corresponding to this name */
+library_symbol_t library_find_symbol(library_t *library, const char *symname);
 
 #endif

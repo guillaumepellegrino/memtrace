@@ -32,8 +32,10 @@ typedef struct {
 } syscall_ctx_t;
 
 bool syscall_init(syscall_ctx_t *ctx, int pid, int memfd);
+bool syscall_function(syscall_ctx_t *ctx, size_t function, size_t arg1, size_t arg2, size_t arg3, size_t arg4, size_t *retval);
 int syscall_open(syscall_ctx_t *ctx, void *path, int flags, mode_t mode);
 void *syscall_mmap(syscall_ctx_t *ctx, void *addr, size_t length, int prot, int flags, int fd, off_t offset);
+int syscall_munmap(syscall_ctx_t *ctx, void *addr, size_t length);
 int syscall_getpid(syscall_ctx_t *ctx);
 
 #endif

@@ -330,39 +330,48 @@ library_t *libraries_find_by_name(libraries_t *libraries, const char *regex) {
     return NULL;
 }
 
+library_symbol_t library_find_symbol(library_t *library, const char *symname) {
+    elf_file_t *dynsym = library_get_elf_section(library, library_section_dynsym);
+    elf_file_t *dynstr = library_get_elf_section(library, library_section_dynstr);
+    elf_file_t *symtab = library_get_elf_section(library, library_section_symtab);
+    elf_file_t *strtab = library_get_elf_section(library, library_section_strtab);
+    elf_sym_t sym = {0};
+
+    if (dynsym && dynstr) {
+        sym = elf_sym_from_name(dynsym, dynstr, symname);
+        if (sym.name && sym.offset) {
+            return (library_symbol_t) {
+                .name = sym.name,
+                .offset = sym.offset,
+                .addr = library_absolute_address(library, sym.offset),
+                .library = library,
+            };
+        }
+    }
+    if (symtab && strtab && !sym.name) {
+        sym = elf_sym_from_name(symtab, strtab, symname);
+        if (sym.name && sym.offset) {
+            return (library_symbol_t) {
+                .name = sym.name,
+                .offset = sym.offset,
+                .addr = library_absolute_address(library, sym.offset),
+                .library = library,
+            };
+        }
+    }
+
+    return (library_symbol_t) {0};
+}
+
 library_symbol_t libraries_find_symbol(libraries_t *libraries, const char *symname) {
     assert(libraries);
     size_t i = 0;
 
     for (i = 0; i < libraries_count(libraries); i++) {
         library_t *library = libraries_get(libraries, i);
-        elf_file_t *dynsym = library_get_elf_section(library, library_section_dynsym);
-        elf_file_t *dynstr = library_get_elf_section(library, library_section_dynstr);
-        elf_file_t *symtab = library_get_elf_section(library, library_section_symtab);
-        elf_file_t *strtab = library_get_elf_section(library, library_section_strtab);
-        elf_sym_t sym = {0};
-
-        if (dynsym && dynstr) {
-            sym = elf_sym_from_name(dynsym, dynstr, symname);
-            if (sym.name && sym.offset) {
-                return (library_symbol_t) {
-                    .name = sym.name,
-                        .offset = sym.offset,
-                        .addr = library_absolute_address(library, sym.offset),
-                        .library = library,
-                };
-            }
-        }
-        if (symtab && strtab && !sym.name) {
-            sym = elf_sym_from_name(symtab, strtab, symname);
-            if (sym.name && sym.offset) {
-                return (library_symbol_t) {
-                    .name = sym.name,
-                        .offset = sym.offset,
-                        .addr = library_absolute_address(library, sym.offset),
-                        .library = library,
-                };
-            }
+        library_symbol_t symbol = library_find_symbol(library, symname);
+        if (symbol.name) {
+            return symbol;
         }
     }
 

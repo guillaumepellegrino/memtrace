@@ -71,7 +71,6 @@ static const struct {
 } alloc_functions[] = {
     {"malloc",          "malloc_hook"},
     {"calloc",          "calloc_hook"},
-    {"calloc",          "calloc_hook"},
     {"realloc",         "realloc_hook"},
     {"reallocarray",    "reallocarray_hook"},
     {"free",            "free_hook"},
@@ -903,12 +902,6 @@ static char *find_libmemtrace_agent() {
     struct stat stbuf;
     char *buff = NULL;
 
-    // Check default library
-    CONSOLE("Try to find %s", default_lib);
-    if (stat(default_lib, &stbuf) == 0) {
-        return strdup(default_lib);
-    }
-
     // Check executable directory
     if (readlink("/proc/self/exe", g_buff, sizeof(g_buff)) > 0) {
         assert(asprintf(&buff, "%s/libmemtrace-agent.so", dirname(g_buff)) > 0);
@@ -925,6 +918,12 @@ static char *find_libmemtrace_agent() {
         if (stat(buff, &stbuf) == 0) {
             return buff;
         }
+    }
+
+    // Check default library
+    CONSOLE("Try to find %s", default_lib);
+    if (stat(default_lib, &stbuf) == 0) {
+        return strdup(default_lib);
     }
 
     return NULL;
