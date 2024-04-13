@@ -54,6 +54,7 @@ struct _cpu_registers {
     struct user_regs raw;
 #endif
     size_t extra[1];
+    bool set_return_addr;
 };
 
 struct _breakpoint {

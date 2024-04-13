@@ -62,6 +62,9 @@ typedef struct {
     library_t *pthread_lib;
 } injecter_resolve_function_ctx_t;
 
+/**
+ * Get Relocation Address (RELA) offset for the specified function
+ */
 static int64_t library_get_rela_offset(library_t *target, const char *fname) {
     elf_relocate_t rela;
     elf_file_t *rela_plt = library_get_elf_section(target, library_section_rela_plt);
@@ -85,7 +88,7 @@ static int64_t library_get_rela_offset(library_t *target, const char *fname) {
         return rela.offset;
     }
 
-    TRACE_WARNING("Relocation address not found for %s():%s", fname, library_name(target));
+    CONSOLE("  - No relocation address for %s()", fname);
 
     // FIXME: We are assuming rela type is R_X86_64_JUMP_SLO
     return -1;
@@ -95,215 +98,35 @@ static bool library_replace_function(int pid, library_t *target, library_t *inje
     CONSOLE("Replace %s():%s by %s():%s", fname, library_name(target), inject_fname, library_name(inject));
 
     size_t startcode = library_absolute_address(target, 0);
-    //CONSOLE("startcode = 0x%zx", startcode);
-
     ssize_t rela_fn_offset = library_get_rela_offset(target, fname);
     if (rela_fn_offset < 0) {
-        return false;
+        return true;
     }
 
     size_t rela_fn_addr = startcode + rela_fn_offset;
-    CONSOLE("Relocation function address: 0x%zx (offset: 0x%zx)", rela_fn_addr, rela_fn_offset);
+    CONSOLE("  - Relocation Address for %s() is 0x%zx (+0x%zx)", fname, rela_fn_addr, rela_fn_offset);
 
     // Compute inject function offset
     elf_file_t *symtab = library_get_elf_section(inject, library_section_symtab);
     elf_file_t *strtab = library_get_elf_section(inject, library_section_strtab);
     if (!symtab || !strtab) {
-        TRACE_ERROR(".symtab or .strtab not found");
+        TRACE_ERROR(".symtab or .strtab sections not found in %s", library_name(inject));
         return false;
     }
     elf_sym_t sym = elf_sym_from_name(symtab, strtab, inject_fname);
     if (!sym.name) {
-        TRACE_ERROR("%s not found", inject_fname);
+        TRACE_ERROR("%s() not found in %s", inject_fname, library_name(inject));
         return false;
     }
-    CONSOLE("Inject function offset: 0x%"PRIx64" (section: %u)", sym.offset, sym.section_index);
     size_t fn_addr = library_absolute_address(inject, sym.offset);
-
-    CONSOLE("Replace function (*0x%zx = 0x%zx)", rela_fn_addr, fn_addr);
+    CONSOLE("  - %s() address is 0x%zx (+0x%"PRIx64")", inject_fname, fn_addr, sym.offset);
+    CONSOLE("  - Set *0x%zx = 0x%zx", rela_fn_addr, fn_addr);
     if (ptrace(PTRACE_POKETEXT, pid, rela_fn_addr, fn_addr) != 0) {
-        TRACE_ERROR("Failed to replace function: %m");
+        TRACE_ERROR("Failed to replace function: ptrace(POKETEXT, %d, 0x%zx, 0x%zx) -> %m",
+            pid, rela_fn_addr, fn_addr);
+        sleep(10);
         return false;
     }
-    return true;
-}
-
-static size_t resolve_function_fromlib(elf_relocate_t *rela, library_t *lib) {
-    // Compute lib function offset
-    elf_file_t *symtab = library_get_elf_section(lib, library_section_dynsym);
-    elf_file_t *strtab = library_get_elf_section(lib, library_section_dynstr);
-    if (!symtab || !strtab) {
-        TRACE_ERROR(".dynsym or .dynstr not found");
-        return 0;
-    }
-    elf_sym_t sym = elf_sym_from_name(symtab, strtab, rela->sym.name);
-    if (!sym.name) {
-        //TRACE_ERROR("%s not found (section idx: %d)", rela->sym.name, rela->sym.section_index);
-        return 0;
-    }
-    if (sym.section_index == 0) {
-        // Symbol is undefined.
-        return 0;
-    }
-
-    return library_absolute_address(lib, sym.offset);
-}
-
-static int injecter_get_machine(injecter_t *injecter) {
-    elf_t *elf = NULL;
-    const elf_header_t *hdr = NULL;
-
-    if (!(elf = library_elf(injecter->inject_lib))) {
-        return EM_NONE;
-    }
-    if (!(hdr = elf_header(elf))) {
-        return EM_NONE;
-    }
-    return hdr->e_machine;
-}
-
-// Refer to glibc/sysdeps/x86_64/dl-machine.h
-static size_t x86_64_relocate_value(injecter_t *injecter, elf_relocate_t *rela, size_t rela_addr) {
-    size_t value = 0;
-
-    switch (rela->type) {
-        case R_X86_64_64:
-        case R_X86_64_GLOB_DAT:
-        case R_X86_64_JUMP_SLOT:
-            if (rela->sym.offset) {
-                return library_absolute_address(injecter->inject_lib, rela->sym.offset);
-            }
-            if ((value = resolve_function_fromlib(rela, injecter->c_lib))) {
-                return value;
-            }
-            if (injecter->pthread_lib && (value = resolve_function_fromlib(rela, injecter->pthread_lib))) {
-                return value;
-            }
-            if ((value = resolve_function_fromlib(rela, injecter->program_lib))) {
-                return value;
-            }
-            TRACE_WARNING("Function %s() was not resolved", rela->sym.name);
-            break;
-        case R_X86_64_RELATIVE:
-            return library_absolute_address(injecter->inject_lib, rela->addend);
-        default:
-            CONSOLE("%x is not handled", rela->type);
-            break;
-    }
-
-    return value;
-
-}
-
-// Refer to glibc/sysdeps/arm/dl-machine.h
-static size_t arm_relocate_value(injecter_t *injecter, elf_relocate_t *rela, size_t rela_addr) {
-    size_t value = 0;
-
-    switch (rela->type) {
-        case R_ARM_ABS32:
-        case R_ARM_GLOB_DAT:
-        case R_ARM_JUMP_SLOT:
-            if (rela->sym.offset) {
-                return library_absolute_address(injecter->inject_lib, rela->sym.offset);
-            }
-            if ((value = resolve_function_fromlib(rela, injecter->c_lib))) {
-                return value;
-            }
-            if (injecter->pthread_lib && (value = resolve_function_fromlib(rela, injecter->pthread_lib))) {
-                return value;
-            }
-            if ((value = resolve_function_fromlib(rela, injecter->program_lib))) {
-                return value;
-            }
-            TRACE_WARNING("Function %s() was not resolved", rela->sym.name);
-            break;
-        case R_ARM_RELATIVE:
-            return library_absolute_address(injecter->inject_lib, rela->addend);
-        default: break;
-    }
-
-    CONSOLE("Unsupported relocation type: %d", rela->type);
-
-    return 0;
-}
-
-// Refer to glibc/sysdeps/mips/dl-machine.h
-static size_t mips_relocate_value(injecter_t *injecter, elf_relocate_t *rela, size_t rela_addr) {
-    size_t value = 0;
-
-    switch (rela->type) {
-        case R_MIPS_16:
-        case R_MIPS_32:
-        case R_MIPS_GLOB_DAT:
-        case R_MIPS_JUMP_SLOT:
-            if (rela->sym.offset) {
-                return library_absolute_address(injecter->inject_lib, rela->sym.offset);
-            }
-            if ((value = resolve_function_fromlib(rela, injecter->c_lib))) {
-                return value;
-            }
-            if (injecter->pthread_lib && (value = resolve_function_fromlib(rela, injecter->pthread_lib))) {
-                return value;
-            }
-            if ((value = resolve_function_fromlib(rela, injecter->program_lib))) {
-                return value;
-            }
-            TRACE_WARNING("Function %s() was not resolved", rela->sym.name);
-            break;
-        case R_MIPS_REL32:
-            return library_absolute_address(injecter->inject_lib, rela->addend);
-        default: break;
-    }
-
-    CONSOLE("Unsupported relocation type: %d", rela->type);
-
-    return 0;
-}
-
-static size_t relocate_value(injecter_t *injecter, elf_relocate_t *rela, size_t rela_addr) {
-    switch (injecter_get_machine(injecter)) {
-        case EM_X86_64:
-            return x86_64_relocate_value(injecter, rela, rela_addr);
-        case EM_ARM:
-            return arm_relocate_value(injecter, rela, rela_addr);
-        case EM_MIPS:
-            return mips_relocate_value(injecter, rela, rela_addr);
-        case EM_NONE:
-        default:
-            CONSOLE("Unsupported Architecture");
-            return 0;
-    }
-}
-
-bool resolve_function(elf_relocate_t *rela, void *userdata) {
-    injecter_t *injecter = userdata;
-    size_t rela_addr = 0;
-    size_t rela_value = 0;
-
-    if (!strcmp(rela->sym.name, "_ITM_deregisterTMCloneTable")
-        || !strcmp(rela->sym.name, "_ITM_registerTMCloneTable")
-        || !strcmp(rela->sym.name, "__gmon_start__")
-        || !strcmp(rela->sym.name, "_Jv_RegisterClasses")) {
-        // do not resolve these functions
-        return true;
-    }
-
-    rela_addr = library_absolute_address(injecter->inject_lib, rela->offset);
-    if (rela->sh_type == sh_type_rel) {
-        // for sh_type_rel, addend must be read from relocation address
-        rela->addend = ptrace(PTRACE_PEEKTEXT, injecter->pid, rela_addr, 0);
-    }
-    if (!(rela_value = relocate_value(injecter, rela, rela_addr))) {
-        TRACE_ERROR("Failed to get %s() relocation value", rela->sym.name);
-        return true;
-    }
-
-    CONSOLE("Resolve %s() (*0x%zx = 0x%zx)", rela->sym.name, rela_addr, rela_value);
-    if (ptrace(PTRACE_POKETEXT, injecter->pid, rela_addr, rela_value) != 0) {
-        TRACE_ERROR("Failed to replace function: %m");
-        return true;
-    }
-
     return true;
 }
 
@@ -328,130 +151,6 @@ void injecter_destroy(injecter_t *injecter) {
 
     free(injecter->inject_libname);
     free(injecter);
-}
-
-size_t alignup(size_t value, size_t align) {
-    if (value % align == 0) {
-        return value;
-    }
-    else {
-        value /= align;
-        value += 1;
-        value *= align;
-        return value;
-    }
-}
-
-static inline size_t elf_pagestart(size_t value) {
-    return value & ~(getpagesize()- 1);
-}
-
-static inline size_t elf_pageoffset(size_t value) {
-    return value & (getpagesize()- 1);
-}
-
-/** Find available memory in /proc/pid/maps */
-size_t procmaps_find_available_memory(int pid) {
-    size_t bestavailable = 0;
-    size_t bestavailable_size = 0;
-    size_t available_size = 0;
-    size_t prev_end = 0;
-    snprintf(g_buff, sizeof(g_buff), "/proc/%d/maps", pid);
-
-    //copy file in buffer
-    FILE *fp = fopen(g_buff, "r");
-    if (!fp) {
-        TRACE_ERROR("Failed to open %s", g_buff);
-        return 0;
-    }
-
-    while (fgets(g_buff, sizeof(g_buff), fp)) {
-        char *sep = NULL;
-        void *begin_p = NULL;
-        void *end_p = NULL;
-        size_t begin = 0;
-        size_t end = 0;
-        bool stack = false;
-
-        // Strip new line character
-        if ((sep = strchr(g_buff, '\n'))) {
-            *sep = 0;
-        }
-
-        // Scan line
-        if ((sscanf(g_buff, "%p-%p", &begin_p, &end_p) != 2)) {
-            continue;
-        }
-        stack = strstr(g_buff, "[stack]");
-
-        begin = (size_t) begin_p;
-        end = (size_t) end_p;
-        if (stack) {
-            // do not map anything after the stack
-            break;
-        }
-        available_size = begin - prev_end;
-        if (available_size > bestavailable_size && prev_end != 0) {
-            bestavailable_size = available_size;
-            bestavailable = prev_end + 1;
-        }
-        prev_end = end;
-    }
-    CONSOLE("Memory available at 0x%zx (size: 0x%zx)", bestavailable, bestavailable_size);
-
-    return bestavailable;
-}
-
-size_t elf_find_available_memory(int pid, elf_t *elf) {
-    size_t base_unaligned_addr = 0;
-    size_t align = 0;
-    const program_header_t *ph = NULL;
-
-    // lookup for available memory in /proc/$pid/maps
-    if (!(base_unaligned_addr = procmaps_find_available_memory(pid))) {
-        return 0;
-    }
-
-    // lookup for the alignement size of the first elf program to be loaded
-    for (ph = elf_program_header_first(elf); ph; ph = elf_program_header_next(elf, ph)) {
-        if (ph->p_type != p_type_load) {
-            continue;
-        }
-        align = max(ph->p_align, 0x1000);
-        break;
-    }
-
-    return alignup(base_unaligned_addr, align);
-}
-
-bool memfd_zerowrite(int memfd, size_t addr, size_t len) {
-        char buff[1] = {0};
-        size_t i = 0;
-        size_t remain = 0;
-
-        if (len <= 0) {
-            return true;
-        }
-
-        if (lseek64(memfd, addr, SEEK_SET) < 0) {
-            TRACE_ERROR("Failed lseek 0x%zx: %m", addr);
-            return false;
-        }
-
-        for (i = 0; (i + sizeof(buff)) < len; i += sizeof(buff)) {
-            if (write(memfd, buff, sizeof(buff)) < 0) {
-                TRACE_ERROR("Failed write(0x%zx): %m", addr+i);
-                return false;
-            }
-        }
-
-        remain = len - i;
-        if (write(memfd, buff, remain) < 0) {
-            TRACE_ERROR("Failed write(0x%zx): %m", addr+i);
-            return false;
-        }
-
-        return true;
 }
 
 bool injecter_load_library(injecter_t *injecter, const char *libname) {
@@ -486,9 +185,11 @@ bool injecter_load_library(injecter_t *injecter, const char *libname) {
         return false;
     }
 
+    /*
     CONSOLE("Performing syscall sanity check on target process");
-    if (syscall_getpid(&syscall) != injecter->pid) {
-        TRACE_ERROR("Failed to inject syscall in target process");
+    int pid = syscall_getpid(&syscall);
+    if (pid != injecter->pid) {
+        TRACE_ERROR("Failed to inject syscall in target process (pid != %d).", pid);
         return false;
     }
     if (syscall_getpid(&syscall) != injecter->pid) {
@@ -501,6 +202,7 @@ bool injecter_load_library(injecter_t *injecter, const char *libname) {
     }
     CONSOLE("=> Sanity check okay: getpid() returned the correct pid");
 
+    */
 
 /*
 Page Size: 0x1000 bytes

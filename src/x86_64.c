@@ -41,6 +41,12 @@ static bool x86_cpu_registers_set(cpu_registers_t *regs, int pid) {
         TRACE_ERROR("ptrace(SETREGS, %d) failed: %m", pid);
         return false;
     }
+    if (regs->set_return_addr) {
+        if (ptrace(PTRACE_POKETEXT, pid, regs->raw.rsp, regs->extra[0]) != 0) {
+            TRACE_ERROR("ptrace(POKETEXT, %d) failed: %m", pid);
+            return false;
+        }
+    }
 
     return true;
 }

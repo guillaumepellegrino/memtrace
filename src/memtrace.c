@@ -825,6 +825,7 @@ static bool inject_memtrace_agent(int pid, const char *libname) {
         TRACE_ERROR("Failed to load %s inside pid %d", libname, pid);
         goto error;
     }
+    //
 
     CONSOLE("[Replacing functions]");
     for (size_t i = 0; i < countof(alloc_functions); i++) {

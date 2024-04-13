@@ -248,7 +248,7 @@ error:
 }
 
 static bool resume_until(const syscall_ctx_t *ctx, cpu_registers_t *regs, enum __ptrace_request ptrace_req) {
-    const struct timespec timeout = {.tv_sec = 3};
+    const struct timespec timeout = {.tv_sec = 15};
     int status = 0;
     int sig = 0;
     sigset_t sigmask = {0};
@@ -260,6 +260,7 @@ static bool resume_until(const syscall_ctx_t *ctx, cpu_registers_t *regs, enum _
     sigprocmask(SIG_BLOCK, &sigmask, NULL);
 
     // Set registers and resume SYSCALL
+    regs->set_return_addr = true;
     if (!cpu_registers_set(regs, ctx->pid)) {
         TRACE_ERROR("Failed to setregs for process %d (%m)", ctx->pid);
         goto error;
@@ -367,6 +368,7 @@ bool syscall_function(syscall_ctx_t *ctx, size_t function, size_t arg1, size_t a
     cpu_register_set(&regs, cpu_register_arg4, arg4);
     if (!resume_until_interrupt(ctx, &regs)) {
         TRACE_ERROR("function call failed");
+        return false;
     }
     if (ret) {
         *ret = cpu_register_get(&regs, cpu_register_retval);
