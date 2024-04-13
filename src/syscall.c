@@ -248,7 +248,7 @@ error:
 }
 
 static bool resume_until(const syscall_ctx_t *ctx, cpu_registers_t *regs, enum __ptrace_request ptrace_req) {
-    const struct timespec timeout = {.tv_sec = 15};
+    const struct timespec timeout = {.tv_sec = 10};
     int status = 0;
     int sig = 0;
     sigset_t sigmask = {0};
@@ -265,47 +265,64 @@ static bool resume_until(const syscall_ctx_t *ctx, cpu_registers_t *regs, enum _
         TRACE_ERROR("Failed to setregs for process %d (%m)", ctx->pid);
         goto error;
     }
-    if (ptrace(ptrace_req, ctx->pid, 0, 0) != 0) {
-        TRACE_ERROR("ptrace(SYSCALL, %d) failed: %m", ctx->pid);
-        goto error;
-    }
+    do {
+        if (ptrace(ptrace_req, ctx->pid, 0, 0) != 0) {
+            TRACE_ERROR("ptrace(SYSCALL, %d) failed: %m", ctx->pid);
+            goto error;
+        }
 
-    // Wait for next SYSCALL
-    if (sigtimedwait(&sigmask, &siginfo, &timeout) < 0) {
-        TRACE_ERROR("syscall execution timeout for %d: %m", ctx->pid);
-        goto error;
-    }
-    if (waitpid(ctx->pid, &status, 0) < 0) {
-        TRACE_ERROR("waitpid(%d) failed: %m", ctx->pid);
-        goto error;
-    }
-    if (!cpu_registers_get(regs, ctx->pid)) {
-        TRACE_ERROR("Failed to setregs for process %d (%m)", ctx->pid);
-        goto error;
-    }
-    if (WIFSIGNALED(status)) {
-        sig = WTERMSIG(status);
-        TRACE_ERROR("process terminated by signal:%d", sig);
-        goto error;
-    }
-    if (!WIFSTOPPED(status)) {
-        TRACE_ERROR("process was not stopped by a signal");
-        goto error;
-    }
-    sig = WSTOPSIG(status);
-    if (sig != (SIGTRAP|0x80) &&
-        sig != SIGTRAP &&
-        cpu_register_get(regs, cpu_register_pc) != MAGIC_RET_ADDR)
-    {
-        TRACE_ERROR("process was stopped by signal %d instead of %d (SIGTRAP)", sig, SIGTRAP);
-        goto error;
-    }
+        // Wait for next SYSCALL
+        if (sigtimedwait(&sigmask, &siginfo, &timeout) < 0) {
+            TRACE_ERROR("syscall execution timeout for %d: %m", ctx->pid);
+            goto error;
+        }
+        if (waitpid(ctx->pid, &status, 0) < 0) {
+            TRACE_ERROR("waitpid(%d) failed: %m", ctx->pid);
+            goto error;
+        }
+        if (!cpu_registers_get(regs, ctx->pid)) {
+            TRACE_ERROR("Failed to setregs for process %d (%m)", ctx->pid);
+            goto error;
+        }
+        if (WIFSIGNALED(status)) {
+            sig = WTERMSIG(status);
+            TRACE_ERROR("process terminated by signal:%d", sig);
+            goto error;
+        }
+        if (!WIFSTOPPED(status)) {
+            TRACE_ERROR("process was not stopped by a signal");
+            goto error;
+        }
+        sig = WSTOPSIG(status);
 
-    // process was well stopped by a PTRACE_SYSCALL event
-    // either we are entering the syscal, either we are exiting the syscall.
+        if (cpu_register_get(regs, cpu_register_pc) == MAGIC_RET_ADDR) {
+            // process has reached MAGIC_RET_ADDR
+            return true;
+        }
+        switch (sig) {
+            case (SIGTRAP|0x80):
+                // process was well stopped by a PTRACE_SYSCALL event
+                // either we are entering the syscal, either we are exiting the syscall.
+                return true;
+            case SIGTRAP:
+                // process was stopped by an interrupt
+                return true;
+            case SIGQUIT:
+            case SIGILL:
+            case SIGABRT:
+            case SIGBUS:
+            case SIGFPE:
+            case SIGKILL:
+            case SIGSEGV:
+            case SIGTERM:
+                TRACE_ERROR("process was stopped by signal %d instead of %d (SIGTRAP)", sig, SIGTRAP);
+                goto error;
+            default:
+                TRACE_WARNING("Ignoring received signal %d", sig);
+                break;
+        }
+    } while (true);
 
-    //size_t reg_ip = regs->raw.uregs[12];
-    //CONSOLE("%s syscall", reg_ip==0?"Entering":"Exiting");
     return true;
 
 error:

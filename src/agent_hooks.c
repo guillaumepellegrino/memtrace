@@ -27,6 +27,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <ucontext.h>
+#include <syslog.h>
 #include "agent_hooks.h"
 #include "agent.h"
 #include "arch.h"
@@ -41,6 +42,7 @@ static agent_t g_agent = {0};
 
 __attribute__((constructor))
 static void agent_dlopen() {
+    syslog(LOG_WARNING, "memtrace agent injected !");
     log_set_header("[memtrace-agent]");
     TRACE_WARNING("Library injected !");
 
@@ -57,6 +59,7 @@ static void agent_dlopen() {
         return;
     }
     TRACE_WARNING("Initialized !");
+    syslog(LOG_WARNING, "memtrace agent initialized !");
 }
 
 __attribute__((destructor))
