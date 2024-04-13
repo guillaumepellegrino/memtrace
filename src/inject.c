@@ -185,11 +185,19 @@ bool injecter_load_library(injecter_t *injecter, const char *libname) {
         return false;
     }
 
-    /*
     CONSOLE("Performing syscall sanity check on target process");
     int pid = syscall_getpid(&syscall);
     if (pid != injecter->pid) {
-        TRACE_ERROR("Failed to inject syscall in target process (pid != %d).", pid);
+        if (pid <= 0) {
+            TRACE_ERROR("Failed to inject syscall in target process (pid != %d).", pid);
+        }
+        else {
+            CONSOLE("Target process tell us its pid is %d instead of %d", pid, injecter->pid);
+            CONSOLE("Is the target process running in a container ?");
+            CONSOLE("");
+            CONSOLE("Please ensure than memtrace and target process are running on the same Linux namepaces");
+            CONSOLE("");
+        }
         return false;
     }
     if (syscall_getpid(&syscall) != injecter->pid) {
@@ -201,8 +209,6 @@ bool injecter_load_library(injecter_t *injecter, const char *libname) {
         return false;
     }
     CONSOLE("=> Sanity check okay: getpid() returned the correct pid");
-
-    */
 
 /*
 Page Size: 0x1000 bytes
