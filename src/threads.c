@@ -68,8 +68,13 @@ static bool thread_attach(int tid) {
         return false;
     }
     if (waitpid(tid, &status, 0) < 0) {
-        TRACE_ERROR("waitpid(%d) failed: %m", tid);
-        return false;
+        if (errno == ECHILD) {
+            TRACE_ERROR("waitpid(%d) warning: %m", tid);
+        }
+        else {
+            TRACE_ERROR("waitpid(%d) failed: %m", tid);
+            return false;
+        }
     }
     if (ptrace(PTRACE_SETOPTIONS, tid, 0, PTRACE_O_TRACESYSGOOD) != 0) {
         TRACE_ERROR("ptrace(SETOPTIONS, %d, 0, TRACESYSGOOD) failed: %m", tid);

@@ -832,6 +832,8 @@ static bool inject_memtrace_agent(int pid, const char *libname) {
         injecter_replace_function(injecter, alloc_functions[i].name, alloc_functions[i].inject);
     }
 
+    CONSOLE("[Functions replaced]");
+
     rt = true;
 
 error:
@@ -1069,6 +1071,9 @@ int main(int argc, char *argv[]) {
             CONSOLE("Failed to inject memtrace agent in target process");
             goto error;
         }
+        CONSOLE("");
+        CONSOLE("Agent control thread is not yet initialized:");
+        CONSOLE("-  Waiting for first memory allocation on target process");
         CONSOLE("");
     }
     else {
