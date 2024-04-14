@@ -36,6 +36,18 @@
 #define stack_pointer_address() (size_t) __builtin_frame_address(0)
 #define return_address()        (size_t) __builtin_return_address(0)
 
+/**
+ * memtrace read the ".memtrace_hooks" section from the agent library
+ * in order to know which functions from the target process should be overriden.
+ */
+__attribute__((section(".memtrace_hooks")))
+const char memtrace_hooks[] = "malloc:malloc_hook,"
+                              "calloc:calloc_hook,"
+                              "realloc:realloc_hook,"
+                              "reallocarray:reallocarray_hook,"
+                              "free:free_hook,"
+                              "fork:fork_hook,";
+
 __attribute__((aligned)) char g_buff[G_BUFF_SIZE];
 static pthread_mutex_t global_lock = PTHREAD_MUTEX_INITIALIZER;
 static agent_t g_agent = {0};

@@ -26,8 +26,7 @@ injecter_t *injecter_create(int pid);
 void injecter_destroy(injecter_t *injecter);
 bool injecter_load_library(injecter_t *injecter, const char *libname);
 bool injecter_replace_function(injecter_t *injecter, const char *program_fname, const char *inject_fname);
-
-
+bool injecter_setup_memtrace_hooks(injecter_t *injecter);
 
 bool memtrace_code_injection(int pid, libraries_t *libraries);
 

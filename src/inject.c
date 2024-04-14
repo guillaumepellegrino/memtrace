@@ -307,3 +307,42 @@ bool injecter_replace_function(injecter_t *injecter, const char *program_fname, 
     }
     return ret;
 }
+
+/**
+ * Setup memtrace agent hooks in the target process.
+ *
+ * The list of functions hooks are retrieved by reading section ".memtrace_hooks" from agent library.
+ */
+bool injecter_setup_memtrace_hooks(injecter_t *injecter) {
+    bool ret = false;
+    elf_t *elf = library_elf(injecter->inject_lib);
+    elf_file_t *hooks_section = elf_section_open_from_name(elf, ".memtrace_hooks");
+    char *hooks = NULL;
+    if (!hooks_section) {
+        TRACE_ERROR("%s does not contains '.memtrace_hooks' section");
+        goto error;
+    }
+    const char *_hooks = elf_file_read_strp(hooks_section);
+    if (!_hooks) {
+        TRACE_ERROR("'.memtrace_hooks' section does not contain a NULL terminated string");
+        goto error;
+    }
+    hooks = strdup(_hooks);
+
+    CONSOLE("[Replacing functions]");
+    char *saveptr1 = NULL;
+    for(char *hook = strtok_r(hooks, ",", &saveptr1); hook; hook = strtok_r(NULL, ",", &saveptr1)) {
+        char *saveptr2 = NULL;
+        char *program_fname = strtok_r(hook, ":", &saveptr2);
+        char *inject_fname = strtok_r(NULL, ":", &saveptr2);
+        CONSOLE("[Replacing %s by %s]", program_fname, inject_fname);
+        injecter_replace_function(injecter, program_fname, inject_fname);
+    }
+    CONSOLE("[Functions replaced]");
+    ret = true;
+error:
+    elf_file_close(hooks_section);
+    free(hooks);
+    return ret;
+}
+
