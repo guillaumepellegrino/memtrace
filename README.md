@@ -82,8 +82,13 @@ Listening on [0.0.0.0]:3002
 # memtrace will:
 # - inject the agent in target process to follow memory allocations
 # - connect to the agent through ipc socket
-# - query memtrace-server service with multicast and try to connect to it.
-/cfg/system/root # /tmp/memtrace -p $(pidof dnsmasq)
+# - discover server with a multicast query
+# - connect to the server
+/cfg/system/root # /tmp/memtrace -p $(pidof dnsmasq) --multicast
+
+
+# In case multicast is filtered on your network, you can specify directly the IP Address of the server:
+/cfg/system/root # /tmp/memtrace -p $(pidof dnsmasq) --connect 192.168.1.101:3002
 ```
 
 ### 4.3 Non local nework
@@ -258,7 +263,40 @@ Writing coredump done
 Detaching from 20328
 ```
 
-### 7. Experimental support with dataviewer
+### 5.6 Log reports periodically
+Let's say you have an hard time to track a memory leak which manifests after quite a long time.
+
+In this case, you may want to let run memtrace for few hours or even few days without any active supervision.
+
+For this purpose, you may simply ask memtrace to run reports periodically until you stop it or until OOM killer or kernel panic kicks-in.
+
+```
+> logreport -h
+Usage: log [OPTION].. [FILE]
+Log reports at a regular interval to the specified file. (default is /ext/memtrace-2630.log)
+  -h, --help             Display this help
+  -i, --interval=VALUE   Start monitoring at the specified interval value in seconds
+  -c, --count=VALUE      Count of print memory context in each report
+  -f, --foreground       Keep memtrace in foreground
+
+> logreport --interval 600 memtrace-endurance-test.log
+memtrace logs report every 600s in memtrace-endurance-test.log
+
+Daemonize memtrace
+```
+
+The report logger will run as a background task by default.
+You will need to kill it by hand if you want to stop it:
+```
+/cfg/system/root # ps | grep memt
+12232 root      1944 S    /tmp/memtrace -p 2630 
+12564 root      2004 S    grep memt 
+/cfg/system/root #
+/cfg/system/root # killall memtrace
+```
+
+
+### 6. Experimental support with dataviewer
 It is possible to plot the top 10 memory allocations usage over the time with dataviewer.
 For that purpose, you can use the 'dataviewer' command in memtrace's cli.
 
@@ -280,7 +318,7 @@ cargo install dataviewer --locked
 
 https://github.com/guillaumepellegrino/dataviewer
 
-### 6. Architecture
+### 7. Architecture
 ```mermaid
 sequenceDiagram
     actor User
