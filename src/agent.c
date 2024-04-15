@@ -591,6 +591,11 @@ bool agent_initialize(agent_t *agent) {
         timerfd_settime(agent->periodic_job_timerfd, 0, &itimer, NULL);
     }
 
+    if (pthread_create(&agent->thread, NULL, ipc_accept_loop, agent) != 0) {
+        TRACE_ERROR("Failed to create thread: %m");
+    }
+    libraries_update(agent->libraries);
+
     return true;
 }
 
@@ -624,14 +629,6 @@ void agent_alloc(agent_t *agent, cpu_registers_t *regs, size_t size, void *newpt
 
     if (agent->stats.alloc_count == 0) {
         TRACE_WARNING("Memory allocations are tracked !");
-    }
-
-    // let's start the control thread if not already done
-    if (!agent->thread) {
-        if (pthread_create(&agent->thread, NULL, ipc_accept_loop, agent) != 0) {
-            TRACE_ERROR("Failed to create thread: %m");
-        }
-        libraries_update(agent->libraries);
     }
 
     assert((callstack = calloc(agent->callstack_size, sizeof(size_t))));

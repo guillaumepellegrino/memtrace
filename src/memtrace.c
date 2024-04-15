@@ -830,12 +830,6 @@ static bool inject_memtrace_agent(int pid, const char *libname) {
         TRACE_ERROR("Failed to setup memtrace functions hooks inside pid %d", libname, pid);
         goto error;
     }
-    /*
-    for (size_t i = 0; i < countof(alloc_functions); i++) {
-        injecter_replace_function(injecter, alloc_functions[i].name, alloc_functions[i].inject);
-    }
-    */
-
 
     rt = true;
 
@@ -1074,10 +1068,6 @@ int main(int argc, char *argv[]) {
             CONSOLE("Failed to inject memtrace agent in target process");
             goto error;
         }
-        CONSOLE("");
-        CONSOLE("Agent control thread is not yet initialized:");
-        CONSOLE("-  Waiting for first memory allocation on target process");
-        CONSOLE("");
     }
     else {
         CONSOLE("Memtrace agent is already injected in target process");

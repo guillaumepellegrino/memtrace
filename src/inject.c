@@ -319,7 +319,7 @@ bool injecter_setup_memtrace_hooks(injecter_t *injecter) {
     elf_file_t *hooks_section = elf_section_open_from_name(elf, ".memtrace_hooks");
     char *hooks = NULL;
     if (!hooks_section) {
-        TRACE_ERROR("%s does not contains '.memtrace_hooks' section");
+        TRACE_ERROR("%s does not contains '.memtrace_hooks' section", injecter->inject_libname);
         goto error;
     }
     const char *_hooks = elf_file_read_strp(hooks_section);

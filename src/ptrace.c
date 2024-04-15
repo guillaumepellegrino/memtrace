@@ -92,6 +92,10 @@ bool ptrace_stopped_by_syscall(int status) {
 bool ptrace_step(pid_t pid) {
     int status = -1;
     if (ptrace(PTRACE_SINGLESTEP, pid, NULL, NULL) != 0) {
+        if (errno == EIO) {
+            TRACE_ERROR("singlestep operation is not supported by this platform: %m");
+            return false;
+        }
         TRACE_ERROR("singlestep failed for process %d: %m", pid);
         return false;
     }

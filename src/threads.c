@@ -109,7 +109,7 @@ void threads_detach(DIR *threads) {
     if (threads) {
         threads_for_each(tid, threads) {
             if (ptrace(PTRACE_DETACH, tid, NULL, NULL) != 0) {
-                TRACE_ERROR("ptrace(DETACH, %d) failed: %m", tid);
+                TRACE_LOG("ptrace(DETACH, %d) failed: %m", tid);
             }
         }
         closedir(threads);
@@ -130,7 +130,10 @@ bool threads_interrupt_except(DIR *threads, int exception) {
             rt = false;
         }
         if (waitpid(tid, &status, 0) < 0) {
-            TRACE_ERROR("wait(%d) failed: %m", tid);
+            if (errno != ECHILD) {
+                TRACE_ERROR("waitpid(%d) failed: %m", tid);
+                return false;
+            }
             rt = false;
         }
     }
