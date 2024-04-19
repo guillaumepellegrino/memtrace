@@ -1,0 +1,45 @@
+name: memtrace
+short_description: "memory leak cross-debugger"
+long_description: "memtrace is a memory leak cross-debugger for Linux Embedded Systems"
+
+type: application
+category: custom
+
+urls:
+  proprietary: "https://gitlabinternal.softathome.com/custom/services_memtrace"
+
+licenses:
+- name: "GPLv2"
+
+variables:
+- key: O
+  value: ../output/$(MACHINE)
+
+configs:
+  CONFIG_SAH_SERVICES_MEMTRACE:
+    super: True
+    default: y
+    type: bool
+    description: "Build memtrace, a memory leak cross-debugger"
+
+makefiles:
+  compile:
+    - directory: "memtrace"
+  clean:
+    - directory: "memtrace"
+
+artifacts:
+- source: "output/$(MACHINE)/libmemtrace-agent.so"
+  destination: "/usr/lib/libmemtrace-agent.so"
+  permissions: "0755"
+  version: False
+
+- source: "output/$(MACHINE)/$(COMPONENT)"
+  destination: "$(BINDIR)/$(COMPONENT)"
+  permissions: "0755"
+
+- source: "memtrace/scripts/memtrace-endurance"
+  destination: "$(BINDIR)/memtrace-endurance"
+  permissions: "0755"
+
+dependencies:

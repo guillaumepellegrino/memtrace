@@ -1,0 +1,20 @@
+variables:
+  # Pipeline configuration options
+  PC_ODL_CHECK: "off"
+  PC_DOC_CHECK: "off"
+  PC_ANALYSIS_DEPS: "off"
+  PC_ANALYSIS_CONFIG_OPTS: "off"
+  CI_PROJECT_REPOSITORY_LANGUAGES: c
+  PC_XC_ARC_QV860: "off"
+  PC_XC_DTAG_HU: "off"
+  PC_XC_FT_ONTBOXES: "off"
+  PC_XC_MT7986: "off"
+  PC_XC_SMART3: "off"
+  PC_XC_AARCH64: "off"
+  PC_XC_WNC: "off"
+  PC_XC_WNC_CHR2A: "off"
+
+include:
+  - project: 'sofa/gitlab-ci/yml-templates'
+    ref: master
+    file: '/.sah-component-build.yml'
