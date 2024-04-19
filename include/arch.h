@@ -27,6 +27,10 @@
 #include <sys/ptrace.h>
 #include "types.h"
 
+#ifdef __aarch64__
+#error aarc64_platform_is_not_supported
+#endif
+
 typedef struct _arch arch_t;
 
 typedef enum {
@@ -46,7 +50,7 @@ typedef enum {
 } cpu_register_name_t;
 
 struct _cpu_registers {
-#if defined(__x86_64__)
+#if defined(__x86_64__) || defined(__aarch64__)
     struct user_regs_struct raw;
 #elif defined(__mips__)
     struct user raw;

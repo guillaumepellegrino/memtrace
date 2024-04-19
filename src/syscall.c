@@ -25,6 +25,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <time.h>
+#include <fcntl.h>
 #include <signal.h>
 #include "syscall.h"
 #include "libraries.h"
@@ -478,8 +479,13 @@ static bool syscall_hijack(syscall_ctx_t *ctx, size_t syscall, size_t arg1, size
 int syscall_open(syscall_ctx_t *ctx, void *path, int flags, mode_t mode) {
     size_t ret = 0;
 
+#ifdef SYS_open
+     syscall_hijack(ctx,
+         SYS_open, (size_t) path, flags, mode, 0, 0, 0, &ret);
+#else
     syscall_hijack(ctx,
-        SYS_open, (size_t) path, flags, mode, 0, 0, 0, &ret);
+        SYS_openat, AT_FDCWD, (size_t) path, flags, mode, 0, 0, &ret);
+#endif
 
     return (ssize_t) ret;
 }
