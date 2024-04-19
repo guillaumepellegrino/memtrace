@@ -107,19 +107,13 @@ static bool library_replace_function(int pid, library_t *target, library_t *inje
     CONSOLE("  - Relocation Address for %s() is 0x%zx (+0x%zx)", fname, rela_fn_addr, rela_fn_offset);
 
     // Compute inject function offset
-    elf_file_t *symtab = library_get_elf_section(inject, library_section_symtab);
-    elf_file_t *strtab = library_get_elf_section(inject, library_section_strtab);
-    if (!symtab || !strtab) {
-        TRACE_ERROR(".symtab or .strtab sections not found in %s", library_name(inject));
-        return false;
-    }
-    elf_sym_t sym = elf_sym_from_name(symtab, strtab, inject_fname);
+    library_symbol_t sym = library_find_symbol(inject, inject_fname);
     if (!sym.name) {
         TRACE_ERROR("%s() not found in %s", inject_fname, library_name(inject));
         return false;
     }
-    size_t fn_addr = library_absolute_address(inject, sym.offset);
-    CONSOLE("  - %s() address is 0x%zx (+0x%"PRIx64")", inject_fname, fn_addr, sym.offset);
+    size_t fn_addr = sym.addr;
+    CONSOLE("  - %s() address is 0x%"PRIx64" (+0x%"PRIx64")", sym.name, sym.addr, sym.offset);
     CONSOLE("  - Set *0x%zx = 0x%zx", rela_fn_addr, fn_addr);
     if (ptrace(PTRACE_POKETEXT, pid, rela_fn_addr, fn_addr) != 0) {
         TRACE_ERROR("Failed to replace function: ptrace(POKETEXT, %d, 0x%zx, 0x%zx) -> %m",
@@ -262,13 +256,21 @@ b6f38000-b6f39000 r--p b6ea6ee4000 00:14 437     /ext/libmemtrace-agent.so
     CONSOLE("Library name (%s) is stored at %p in target process", injecter->inject_libname, injecter->straddr);
 
     library_symbol_t dlopen = libraries_find_symbol(injecter->libraries, "dlopen");
-    if (!dlopen.name) {
-        TRACE_ERROR("Failed to find dlopen");
-        return false;
+    if (dlopen.name) {
+        CONSOLE("dlopen() is at 0x%"PRIx64" in target process", dlopen.addr);
     }
-    CONSOLE("dlopen() is at 0x%"PRIx64" in target process", dlopen.addr);
+    else {
+        dlopen = libraries_find_symbol(injecter->libraries, "__libc_dlopen_mode");
+        if (dlopen.name) {
+            CONSOLE("__libc_dlopen_mode() is at 0x%"PRIx64" in target process", dlopen.addr);
+        }
+        else {
+            TRACE_ERROR("Failed to find dlopen() or __libc_dlopen_mode()");
+            return false;
+        }
+    }
 
-    CONSOLE("Call dlopen(%s, RTLD_LAZY) in target process", injecter->inject_libname);
+    CONSOLE("Call %s(%s, RTLD_LAZY) in target process", dlopen.name, injecter->inject_libname);
 
     size_t rt = 0;
     if (!syscall_function(&syscall, dlopen.addr, (size_t) injecter->straddr, RTLD_LAZY, 0, 0, &rt)) {
