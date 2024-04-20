@@ -170,6 +170,9 @@ static char *get_topic(const char *line, const char *topic) {
         if ((sep = strchr(value, '\n'))) {
             *sep = 0;
         }
+        if ((sep = strchr(value, '\r'))) {
+            *sep = 0;
+        }
     }
 
     return value;

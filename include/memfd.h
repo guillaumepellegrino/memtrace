@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022 Guillaume Pellegrino
+ * Copyright (C) 2021 Guillaume Pellegrino
  * This file is part of memtrace <https://github.com/guillaumepellegrino/memtrace>.
  *
  * This program is free software: you can redistribute it and/or modify
@@ -16,12 +16,28 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#ifndef COREDUMP_H
-#define COREDUMP_H
+#ifndef MEMFD_H
+#define MEMFD_H
 
-#include "types.h"
+/**
+ * Open a file descriptor pointing on pid's memory
+ * for read and write access.
+ */
+int memfd_open(int pid);
 
-void coredump_write(int pid, int memfd, FILE *fp, cpu_registers_t *regs);
-void coredump_write_file(const char *filename, int pid, cpu_registers_t *regs);
+/**
+ * Write buffer at the specified offset in the target's process memory, referenced by memfd.
+ */
+bool memfd_write(int memfd, const void *buf, size_t count, off64_t offset);
+
+/**
+ * Read buffer at the specified offset in the target's process memory, referenced by memfd.
+ */
+bool memfd_read(int memfd, void *buf, size_t count, off64_t offset);
+
+/**
+ * Read string at the specified offset in the target's process memory, referenced by memfd.
+ */
+bool memfd_readstr(int memfd, char *buf, size_t count, off64_t offset);
 
 #endif

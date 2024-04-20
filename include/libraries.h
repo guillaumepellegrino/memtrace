@@ -32,6 +32,7 @@ typedef enum {
     library_section_rela_dyn,
     library_section_rela_plt,
     library_section_bss,
+    library_section_got,
     library_section_end,
 } library_section_t;
 

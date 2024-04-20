@@ -509,6 +509,7 @@ elf_file_t *library_get_elf_section(library_t *library, library_section_t sectio
         [library_section_rela_dyn] = ".rela.dyn",
         [library_section_rela_plt] = ".rela.plt",
         [library_section_bss] = ".bss",
+        [library_section_got] = ".got",
     };
 
     if (section >= library_section_end) {

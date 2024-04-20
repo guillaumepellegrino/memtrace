@@ -19,8 +19,6 @@
 #ifndef SELFTEST_H
 #define SELFTEST_H
 
-#include "types.h"
-
 int selftest_main(int argc, char *argv[]);
 
 #endif
