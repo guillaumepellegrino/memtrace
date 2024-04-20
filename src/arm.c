@@ -68,12 +68,19 @@ static size_t *arm_cpu_register_reference(cpu_registers_t *registers, cpu_regist
         case cpu_register_fp:       return (size_t *) &registers->raw.uregs[13];
         case cpu_register_ra:       return (size_t *) &registers->raw.uregs[14];
         case cpu_register_syscall:  return (size_t *) &registers->raw.uregs[7];
+        case cpu_register_syscall_arg1:
         case cpu_register_arg1:     return (size_t *) &registers->raw.uregs[0];
+        case cpu_register_syscall_arg2:
         case cpu_register_arg2:     return (size_t *) &registers->raw.uregs[1];
+        case cpu_register_syscall_arg3:
         case cpu_register_arg3:     return (size_t *) &registers->raw.uregs[2];
+        case cpu_register_syscall_arg4:
         case cpu_register_arg4:     return (size_t *) &registers->raw.uregs[3];
+        case cpu_register_syscall_arg5:
         case cpu_register_arg5:     return (size_t *) &registers->raw.uregs[4];
+        case cpu_register_syscall_arg6:
         case cpu_register_arg6:     return (size_t *) &registers->raw.uregs[5];
+        case cpu_register_syscall_arg7:
         case cpu_register_arg7:     return (size_t *) &registers->raw.uregs[6];
         case cpu_register_retval:   return (size_t *) &registers->raw.uregs[0];
         default: return NULL;

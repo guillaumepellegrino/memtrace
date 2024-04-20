@@ -20,236 +20,112 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/ptrace.h>
+#include <linux/ptrace.h>
 #include <sys/mman.h>
 #include <sys/user.h>
 #include <unistd.h>
 #include <string.h>
+#include <stdlib.h>
 #include <time.h>
 #include <fcntl.h>
 #include <signal.h>
 #include "syscall.h"
 #include "libraries.h"
 #include "ptrace.h"
+#include "breakpoint.h"
+#include "coredump.h"
+#include "memfd.h"
 #include "arch.h"
 #include "log.h"
 
 #define MAGIC_RET_ADDR 0x00
 
-#if 0
-static bool memfd_write(int memfd, const void *buf, size_t count, off64_t offset) {
-    if (lseek64(memfd, offset, SEEK_SET) < 0) {
-        TRACE_ERROR("Failed lseek %p: %m", offset);
-        return false;
+void syscall_registers_print(cpu_registers_t *regs) {
+    size_t number = cpu_register_get(regs, cpu_register_syscall);
+    const char *syscall = syscall_name(number);
+    if (!syscall) {
+        syscall = "??";
     }
-    if (write(memfd, buf, count) < 0) {
-        TRACE_ERROR("Failed write(memfd) at 0x%zx: %m", offset);
-        return false;
-    }
+    CONSOLE("scn:%zd(%s) pc:0x%zx r0:%zx, r1:%zx, r2: %zx, r3: %zx, r4: %zx, lr:0x%zx, sp:%zx(rt:%zx)",
+        number, syscall,
+        cpu_register_get(regs, cpu_register_pc),
+        cpu_register_get(regs, cpu_register_syscall_arg1),
+        cpu_register_get(regs, cpu_register_syscall_arg2),
+        cpu_register_get(regs, cpu_register_syscall_arg3),
+        cpu_register_get(regs, cpu_register_syscall_arg4),
+        cpu_register_get(regs, cpu_register_syscall_arg5),
+        cpu_register_get(regs, cpu_register_ra),
+        cpu_register_get(regs, cpu_register_sp),
+        cpu_register_get(regs, cpu_register_retval));
 
-    return true;
+#if 0
+    int64_t *r = (int64_t *) regs->raw.regs;
+    for (int i = 0; i < 32; i++) {
+        CONSOLE(" - r%d=%"PRId64, i, r[i]);
+    }
+#endif
 }
 
-static bool memfd_read(int memfd, void *buf, size_t count, off64_t offset) {
-    if (lseek64(memfd, offset, SEEK_SET) < 0) {
-        TRACE_ERROR("Failed lseek %p: %m", offset);
-        return false;
-    }
-    if (read(memfd, buf, count) < 0) {
-        TRACE_ERROR("Failed read(memfd) at 0x%zx: %m", offset);
-        return false;
+
+static void TRACE_CPUREG_IMPL(int pid, const char *fmt) {
+    char s[64];
+    time_t now = time(NULL);
+    strftime(s, sizeof(s), "%Hh%M %Ss", localtime(&now));
+    CONSOLE_RAW("[%s]", s);
+
+    cpu_registers_t regs = {0};
+    cpu_registers_get(&regs, pid);
+#ifdef PTRACE_GET_SYSCALL_INFO
+    struct ptrace_syscall_info info = {0};
+    if (ptrace(PTRACE_GET_SYSCALL_INFO, pid, (void *) sizeof(info), &info) != 0) {
+        //TRACE_ERROR("Failed to get SYSCALL info for pid %d: %m", pid);
     }
 
-    return true;
+    const char *op = "unknown";
+    switch (info.op) {
+        case PTRACE_SYSCALL_INFO_ENTRY:
+            op = "SYSCALL-Enter";
+            break;
+        case PTRACE_SYSCALL_INFO_EXIT:
+            op = "SYSCALL-Exit";
+            break;
+        case PTRACE_SYSCALL_INFO_SECCOMP:
+            op = "SECCOMP";
+            break;
+        case PTRACE_SYSCALL_INFO_NONE:
+            op = "Interrupt";
+            break;
+        default:
+            break;
+    }
+    CONSOLE_RAW("[%s]", op);
+#elif __arm__
+    /*
+     * On ARM CPU, IP is used to denote syscall entry/exit:
+     * IP = 0 -> entry, =1 -> exit
+     */
+    size_t reg_ip = regs.raw.uregs[12];
+    const char *op = (reg_ip == 0) ? "SYSCALL-Enter" : "SYSCALL-Exit";
+    CONSOLE_RAW("[%s]", op);
+#endif
+    CONSOLE_RAW(" %s\n  ", fmt);
+    syscall_registers_print(&regs);
 }
 
 static void TRACE_CPUREG(int pid, const char *fmt) {
-    time_t now = time(NULL);
-    cpu_registers_t regs = {0};
-    cpu_registers_get(&regs, pid);
-    printf("%s: ", fmt);
-    cpu_registers_print(&regs);
-    printf(" @%s", asctime(localtime(&now)));
-}
+    static int tristate;
 
-static bool syscall_trace(syscall_ctx_t *ctx) {
-    int status = 0;
-
-    // Enter SYSCALL
-    TRACE_CPUREG(ctx->pid, "Resume execution ...");
-    if (ptrace(PTRACE_SYSCALL, ctx->pid, 0, 0) != 0) {
-        TRACE_ERROR("Failed STEP: %m");
-        return false;
+    if (tristate == 0) {
+        tristate = getenv("CPUREG") ? 1 : 2;
     }
-    if (waitpid(ctx->pid, &status, 0) < 0) {
-        TRACE_ERROR("waitpid(%d) failed: %m", ctx->pid);
-        return false;
+    if (tristate == 1) {
+        TRACE_CPUREG_IMPL(pid, fmt);
     }
-    TRACE_CPUREG(ctx->pid, "Paused:Enter SYSCALL");
-
-    TRACE_CPUREG(ctx->pid, "Resume execution ...");
-    if (ptrace(PTRACE_SYSCALL, ctx->pid, 0, 0) != 0) {
-        TRACE_ERROR("Failed STEP: %m");
-        return false;
-    }
-    if (waitpid(ctx->pid, &status, 0) < 0) {
-        TRACE_ERROR("waitpid(%d) failed: %m", ctx->pid);
-        return false;
-    }
-    TRACE_CPUREG(ctx->pid, "Paused: Exit SYSCALL");
-
-    return true;
-}
-
-typedef struct {
-    size_t regs[7];
-    size_t number;
-} syscall_args_t;
-
-// On some old kernels r4, r5, r6 are not passed by PTRACE_SETREGS.
-// We must find another way to pass syscall with more than 4x arguments
-void arm_syscall32(const syscall_args_t *args) {
-    asm volatile(
-        // set syscall number
-        "ldr r7, [r0, #28]\n\t"
-
-        // set syscall args from r0 to r5.
-        // r0 must be set at last (since it contains args)
-        "ldr r6, [r0, #24]\n\t"
-        "ldr r5, [r0, #20]\n\t"
-        "ldr r4, [r0, #16]\n\t"
-        "ldr r3, [r0, #12]\n\t"
-        "ldr r2, [r0, #8]\n\t"
-        "ldr r1, [r0, #4]\n\t"
-        "ldr r0, [r0]\n\t"
-
-        // perform the syscall
-        // expected to be catched by PTRACE_SYSCALL, here.
-        "svc 0\n\t"
-
-        : /* No outputs */
-        : "r" (args));
-}
-
-bool syscall_hijack2(syscall_ctx_t *ctx, size_t syscall, size_t arg1, size_t arg2, size_t arg3, size_t arg4, size_t arg5, size_t arg6, size_t *ret) {
-
-    CONSOLE("syscall_hijack2()");
-
-    syscall_args_t args = {0};
-    args.regs[0] = arg1;
-    args.regs[1] = arg2;
-    args.regs[2] = arg3;
-    args.regs[3] = arg4;
-    args.regs[4] = arg5;
-    args.regs[5] = arg6;
-    args.regs[6] = 0;
-    args.number = syscall;
-
-
-    void *rw_mem = syscall_mmap(ctx, NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, 0, 0);
-    if (((ssize_t) rw_mem) < 0 && ((ssize_t) rw_mem) > -255) {
-        TRACE_ERROR("mmap() failed: %p", rw_mem);
-        return false;
-    }
-    void *exe_mem = syscall_mmap(ctx, NULL, 4096, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE|MAP_ANONYMOUS, 0, 0);
-    if (((ssize_t) exe_mem) < 0 && ((ssize_t) rw_mem) > -255) {
-        TRACE_ERROR("mmap() failed: %p", exe_mem);
-        return false;
-    }
-    CONSOLE("rw_mem: %p", rw_mem);
-    CONSOLE("exe_mem: %p", exe_mem);
-
-    if (!memfd_write(ctx->memfd, &args, sizeof(args), (size_t) rw_mem)) {
-        CONSOLE("Failed to write syscall arguments at %p", rw_mem);
-        return false;
-    }
-    if (!memfd_write(ctx->memfd, (void *) arm_syscall32, 4096, (size_t) exe_mem)) {
-        CONSOLE("Failed to write syscall program at %p", exe_mem);
-        return false;
-    }
-
-
-    cpu_registers_t regs = {0};
-    cpu_registers_t save_regs = {0};
-    size_t pc = 0;
-
-    // Read and save registers
-    cpu_registers_get(&regs, ctx->pid);
-    save_regs = regs;
-
-    // Resume execution and wait for SYSCALL-Exit
-    cpu_register_set(&regs, cpu_register_syscall, (size_t) SYS_getppid);
-    if (!resume_execution(ctx, &regs)) {
-        TRACE_ERROR("SYS_getppid failed");
-        return false;
-    }
-
-    // Resume execution and wait for SYSCALL-Enter
-    cpu_register_set(&regs, cpu_register_pc, ((size_t) exe_mem));
-    cpu_register_set(&regs, cpu_register_arg1, (size_t) rw_mem);
-    if (!resume_execution(ctx, &regs)) {
-        TRACE_ERROR("Entering function call failed");
-        return false;
-    }
-    // Resume execution and wait for SYSCALL-Exit
-    if (!resume_execution(ctx, &regs)) {
-        TRACE_ERROR("Function call failed");
-        return false;
-    }
-    cpu_registers_get(&regs, ctx->pid);
-    if (ret) {
-        *ret = cpu_register_get(&regs, cpu_register_retval);
-    }
-    cpu_registers_print(&regs);
-
-    // Rewind to syscall instruction
-    // and restore registers
-    pc = cpu_register_get(&save_regs, cpu_register_pc);
-    cpu_register_set(&save_regs, cpu_register_pc, (pc - arch.syscall_rewind_size));
-
-    // Resume execution and wait for SYSCALL-Enter event
-    if (!resume_execution(ctx, &save_regs)) {
-        TRACE_ERROR("failed");
-        return false;
-    }
-
-    CONSOLE("syscall_hijack2() DONE");
-
-    return true;
-}
-
-#endif
-
-/**
- * We wait to enter a SYSCALL instruction for initialization.
- * We can then alterate the registers to hijack the syscall.
- */
-bool syscall_init(syscall_ctx_t *ctx, int pid, int memfd) {
-    cpu_registers_t syscall_regs = {0};
-    int status = 0;
-
-    ctx->pid = pid;
-    ctx->memfd = memfd;
-
-    // Resume execution and wait for SYSCALL-Enter event
-    //TRACE_CPUREG(pid, "[INIT] Resume execution ...");
-    if (ptrace(PTRACE_SYSCALL, pid, 0, 0) != 0) {
-        TRACE_ERROR("Failed STEP: %m");
-        goto error;
-    }
-    if (waitpid(pid, &status, 0) < 0) {
-        TRACE_ERROR("waitpid(%d) failed: %m", pid);
-        goto error;
-    }
-    cpu_registers_get(&syscall_regs, pid);
-
-    //TRACE_CPUREG(pid, "[INIT] Paused:Enter SYSCALL");
-
-error:
-    return true;
 }
 
 static bool resume_until(const syscall_ctx_t *ctx, cpu_registers_t *regs, enum __ptrace_request ptrace_req) {
     const struct timespec timeout = {.tv_sec = 10};
+    cpu_registers_t local = {0};
     int status = 0;
     int sig = 0;
     sigset_t sigmask = {0};
@@ -261,10 +137,11 @@ static bool resume_until(const syscall_ctx_t *ctx, cpu_registers_t *regs, enum _
     sigprocmask(SIG_BLOCK, &sigmask, NULL);
 
     // Set registers and resume SYSCALL
-    regs->set_return_addr = true;
-    if (!cpu_registers_set(regs, ctx->pid)) {
-        TRACE_ERROR("Failed to setregs for process %d (%m)", ctx->pid);
-        goto error;
+    if (regs) {
+        if (!cpu_registers_set(regs, ctx->pid)) {
+            TRACE_ERROR("Failed to setregs for process %d (%m)", ctx->pid);
+            goto error;
+        }
     }
     do {
         if (ptrace(ptrace_req, ctx->pid, 0, 0) != 0) {
@@ -281,9 +158,13 @@ static bool resume_until(const syscall_ctx_t *ctx, cpu_registers_t *regs, enum _
             TRACE_ERROR("waitpid(%d) failed: %m", ctx->pid);
             goto error;
         }
-        if (!cpu_registers_get(regs, ctx->pid)) {
-            TRACE_ERROR("Failed to setregs for process %d (%m)", ctx->pid);
-            goto error;
+        if (regs) {
+            if (!cpu_registers_get(regs, ctx->pid)) {
+                TRACE_ERROR("Failed to getregs for process %d (%m)", ctx->pid);
+            }
+            if (cpu_register_get(regs, cpu_register_pc) == 0) {
+                return true;
+            }
         }
         if (WIFSIGNALED(status)) {
             sig = WTERMSIG(status);
@@ -296,10 +177,6 @@ static bool resume_until(const syscall_ctx_t *ctx, cpu_registers_t *regs, enum _
         }
         sig = WSTOPSIG(status);
 
-        if (cpu_register_get(regs, cpu_register_pc) == MAGIC_RET_ADDR) {
-            // process has reached MAGIC_RET_ADDR
-            return true;
-        }
         switch (sig) {
             case (SIGTRAP|0x80):
                 // process was well stopped by a PTRACE_SYSCALL event
@@ -327,81 +204,207 @@ static bool resume_until(const syscall_ctx_t *ctx, cpu_registers_t *regs, enum _
     return true;
 
 error:
-    cpu_registers_print(regs);
+    cpu_registers_get(&local, ctx->pid);
+    syscall_registers_print(&local);
+    coredump_write_file("memtrace-error.core", ctx->pid, NULL);
     return false;
 }
 
-static bool resume_until_syscall(const syscall_ctx_t *ctx, cpu_registers_t *regs) {
+static inline bool resume_until_syscall(const syscall_ctx_t *ctx, cpu_registers_t *regs) {
     return resume_until(ctx, regs, PTRACE_SYSCALL);
 }
 
-static bool resume_until_interrupt(const syscall_ctx_t *ctx, cpu_registers_t *regs) {
+static inline bool resume_until_interrupt(const syscall_ctx_t *ctx, cpu_registers_t *regs) {
     return resume_until(ctx, regs, PTRACE_CONT);
 }
 
-#if 0
-bool resume_execution_until_syscall_enter(const syscall_ctx_t *ctx, cpu_registers_t *regs) {
-    bool rt = false;
-
-    while (true) {
-        rt = resume_execution(ctx, regs);
-
-        /*
-         * On ARM CPU, IP is used to denote syscall entry/exit:
-         * IP = 0 -> entry, =1 -> exit
-         */
-        size_t reg_ip = regs->raw.uregs[12];
-        if (reg_ip == 0) {
-            break;
+void stepbystep(syscall_ctx_t *ctx) {
+    while(resume_until(ctx, NULL, PTRACE_SINGLESTEP)) {
+        TRACE_CPUREG(ctx->pid, "SINGLESTEP");
+        cpu_registers_t regs = {0};
+        cpu_registers_get(&regs, ctx->pid);
+        if (ctx->bp_addr == cpu_register_get(&regs, cpu_register_pc)) {
+            CONSOLE("Breakpoint reached !");
+            return;
         }
     }
-
-    return rt;
+    TRACE_CPUREG(ctx->pid, "SINGLESTEP END");
 }
+
+/**
+ * We wait to enter a SYSCALL instruction for initialization.
+ * We can then alterate the registers to hijack the syscall.
+ */
+bool syscall_initialize(syscall_ctx_t *ctx, int pid, libraries_t *libraries) {
+    assert(ctx);
+    assert(pid);
+    assert(libraries);
+
+    //const cpu_registers_t save_regs = {0};
+
+    ctx->memfd = memfd_open(pid);
+    if (ctx->memfd < 0) {
+        goto error;
+    }
+    ctx->pid = pid;
+    ctx->libraries = libraries;
+    ctx->bp_addr = 0;
+
+    TRACE_CPUREG(pid, "Process has been interrupted");
+
+#ifdef __mips__
+
+#else
+    // Resume execution until SYSCALL-Enter event
+    // others functions, like syscall_hijack() expect to be in this state.
+    cpu_registers_t regs = {0};
+    cpu_registers_get(&regs, pid);
+    //save_regs = regs;
+    resume_until_syscall(ctx, &regs);
+
+    TRACE_CPUREG(pid, "Entering in a SYSCALL");
 #endif
+    /*
+    while(true) {
+        cpu_registers_t regs = {0};
+        cpu_registers_get(&regs, ctx->pid);
+        if (!resume_until_syscall(ctx, &regs)) {
+            return false;
+        }
+        TRACE_CPUREG(ctx->pid, "EXIT-SYSCALL");
+
+        cpu_registers_get(&regs, ctx->pid);
+        if (!resume_until_syscall(ctx, &regs)) {
+            return false;
+        }
+        TRACE_CPUREG(ctx->pid, "ENTER-SYSCALL");
+    }
+    */
+error:
+    return true;
+}
+
+void syscall_cleanup(syscall_ctx_t *ctx) {
+    if (ctx->pid) {
+        close(ctx->memfd);
+        ctx->memfd = -1;
+        ctx->pid = 0;
+    }
+}
+
+int syscall_memfd(syscall_ctx_t *ctx) {
+    return ctx && ctx->pid ? ctx->memfd : -1;
+}
+
+/**
+ * Very simply mark the syscall context to generate a coredump
+ * the next time we temper the registers in order to perform a syscall
+ * or a function call.
+ * It may be used for debugging syscall or function injection.
+ *
+ * set the env var FCALL_CORE=1 for debugging function injection.
+ */
+void syscall_do_coredump_at_next_tampering(syscall_ctx_t *ctx) {
+    ctx->do_coredump = true;
+}
+
+/**
+ * Punch a breakpoint instruction in the target process.
+ * We punch the breakpoint that at _start() to function to be sure it will not be called.
+ */
+size_t syscall_punch_breakpoint(syscall_ctx_t *ctx) {
+    breakpoint_t bp = {0};
+    library_symbol_t sym = libraries_find_symbol(ctx->libraries, "sched_setparam");
+
+    if (!sym.name) {
+        TRACE_ERROR("Could not find _start() function in target process");
+        return 0;
+    }
+    if (!arch.breakpoint_set(&bp, ctx->memfd, sym.addr)) {
+        TRACE_ERROR("Failed to set breakpoint _start() function at %p", sym.addr);
+        return 0;
+    }
+    CONSOLE("Breakpoint set at 0x%"PRIx64" in _start()", sym.addr);
+
+    return sym.addr;
+}
 
 bool syscall_function(syscall_ctx_t *ctx, size_t function, size_t arg1, size_t arg2, size_t arg3, size_t arg4, size_t *ret) {
     cpu_registers_t regs = {0};
-    cpu_registers_t save_regs = {0};
-    size_t pc = 0;
 
     // Read and save registers
     cpu_registers_get(&regs, ctx->pid);
-    save_regs = regs;
+    const cpu_registers_t save_regs = regs;
 
-    // We are entering a SYSCALL.
+    TRACE_CPUREG(ctx->pid, "Original syscall is");
+
+#ifndef __mips__
+    // We are entering a SYSCALL. PC should be equals to pc = &syscall + syscall_opcode_size;
     // Resume execution with a dummy SYS_getpid syscall and wait for SYSCALL-Exit.
     cpu_register_set(&regs, cpu_register_syscall, (size_t) SYS_getppid);
+
+    cpu_registers_set(&regs, ctx->pid); TRACE_CPUREG(ctx->pid, "Perform dummy syscall");
+
     if (!resume_until_syscall(ctx, &regs)) {
         TRACE_ERROR("SYS_getppid failed");
         return false;
     }
+    TRACE_CPUREG(ctx->pid, "Perform dummy syscall - DONE");
+#endif
 
-    // Run our function until the program stop at MAGIC_RET_ADDR
+    if (!ctx->bp_addr && arch.breakpoint_set) {
+        ctx->bp_addr = syscall_punch_breakpoint(ctx);
+        if (!ctx->bp_addr) {
+            TRACE_ERROR("Could not punch a breakpoint in target process");
+            return false;
+        }
+    }
+
+    // Run our function until the program hit the breakpoint in RA register.
     cpu_register_set(&regs, cpu_register_pc, function);
-    cpu_register_set(&regs, cpu_register_ra, MAGIC_RET_ADDR);
+    cpu_register_set(&regs, cpu_register_ra, ctx->bp_addr);
     cpu_register_set(&regs, cpu_register_arg1, arg1);
     cpu_register_set(&regs, cpu_register_arg2, arg2);
     cpu_register_set(&regs, cpu_register_arg3, arg3);
     cpu_register_set(&regs, cpu_register_arg4, arg4);
+    //cpu_register_set(&regs, cpu_register_retval, 0);
+    if (arch.prepare_function_call) {
+        arch.prepare_function_call(&regs, ctx->pid);
+    }
+    if (ctx->do_coredump) {
+        cpu_registers_set(&regs, ctx->pid);
+        coredump_write_file("memtrace-fcall.core", ctx->pid, NULL);
+        ctx->do_coredump = false;
+    }
+
+
+    cpu_registers_set(&regs, ctx->pid); TRACE_CPUREG(ctx->pid, "Call function");
     if (!resume_until_interrupt(ctx, &regs)) {
         TRACE_ERROR("function call failed");
         return false;
     }
+
     if (ret) {
         *ret = cpu_register_get(&regs, cpu_register_retval);
     }
 
-    // Rewind to syscall instruction
-    // and restore registers
-    pc = cpu_register_get(&save_regs, cpu_register_pc);
-    cpu_register_set(&save_regs, cpu_register_pc, (pc - arch.syscall_rewind_size));
-
+#ifndef __mips__
     // Resume execution and wait for SYSCALL-Enter event
-    if (!resume_until_syscall(ctx, &save_regs)) {
+    regs = save_regs;
+    size_t pc = cpu_register_get(&regs, cpu_register_pc);
+    cpu_register_set(&regs, cpu_register_pc, (pc - arch.syscall_rewind_size));
+    cpu_registers_set(&regs, ctx->pid);
+    TRACE_CPUREG(ctx->pid, "Resume original syscall");
+    if (!resume_until_syscall(ctx, &regs)) {
         TRACE_ERROR("failed to resume program");
         return false;
     }
+    TRACE_CPUREG(ctx->pid, "Entering original syscall");
+#endif
+
+    regs = save_regs;
+    cpu_registers_set(&regs, ctx->pid);
+    TRACE_CPUREG(ctx->pid, "Just to be sure..");
 
     return true;
 }
@@ -416,31 +419,32 @@ bool syscall_function(syscall_ctx_t *ctx, size_t function, size_t arg1, size_t a
  * - Rewind back from one instruction and restore the original instructions.
  * - Resume execution and wait for the SYSCALL-Enter event.
  */
-static bool syscall_hijack(syscall_ctx_t *ctx, size_t syscall, size_t arg1, size_t arg2, size_t arg3, size_t arg4, size_t arg5, size_t arg6, size_t *ret) {
+bool syscall_hijack(syscall_ctx_t *ctx, size_t syscall, size_t arg1, size_t arg2, size_t arg3, size_t arg4, size_t arg5, size_t arg6, size_t *ret) {
     cpu_registers_t regs = {0};
-    cpu_registers_t save_regs = {0};
     size_t pc = 0;
     int status = 0;
 
+    CONSOLE("syscall_hijack(%zu(%s))", syscall, syscall_name(syscall));
+
     // Save current registers
     cpu_registers_get(&regs, ctx->pid);
-    save_regs = regs;
+    const cpu_registers_t save_regs = regs;
 
     // Set registers for SYSCALL instruction
     cpu_register_set(&regs, cpu_register_syscall, syscall);
-    cpu_register_set(&regs, cpu_register_arg1, arg1);
-    cpu_register_set(&regs, cpu_register_arg2, arg2);
-    cpu_register_set(&regs, cpu_register_arg3, arg3);
-    cpu_register_set(&regs, cpu_register_arg4, arg4);
-    cpu_register_set(&regs, cpu_register_arg5, arg5);
-    cpu_register_set(&regs, cpu_register_arg6, arg6);
+    cpu_register_set(&regs, cpu_register_syscall_arg1, arg1);
+    cpu_register_set(&regs, cpu_register_syscall_arg2, arg2);
+    cpu_register_set(&regs, cpu_register_syscall_arg3, arg3);
+    cpu_register_set(&regs, cpu_register_syscall_arg4, arg4);
+    cpu_register_set(&regs, cpu_register_syscall_arg5, arg5);
+    cpu_register_set(&regs, cpu_register_syscall_arg6, arg6);
     if (!cpu_registers_set(&regs, ctx->pid)) {
         TRACE_ERROR("Failed to setregs for process %d (%m)", ctx->pid);
         return false;
     }
 
     // Resume execution and wait for SYSCALL-Exit event
-    //TRACE_CPUREG(ctx->pid, "[HIJACK] Resume execution ...");
+    TRACE_CPUREG(ctx->pid, "Tempering SYSCALL");
     if (ptrace(PTRACE_SYSCALL, ctx->pid, 0, 0) != 0) {
         TRACE_ERROR("Failed STEP: %m");
         return false;
@@ -453,16 +457,17 @@ static bool syscall_hijack(syscall_ctx_t *ctx, size_t syscall, size_t arg1, size
     if (ret) {
         *ret = cpu_register_get(&regs, cpu_register_retval);
     }
-    //TRACE_CPUREG(ctx->pid, "[HIJACK] Paused:Exit SYSCALL");
+    TRACE_CPUREG(ctx->pid, "Tempered SYSCALL done");
 
     // Rewind to syscall instruction
     // and restore registers
-    pc = cpu_register_get(&save_regs, cpu_register_pc);
-    cpu_register_set(&save_regs, cpu_register_pc, (pc - arch.syscall_rewind_size));
-    cpu_registers_set(&save_regs, ctx->pid);
+    regs = save_regs;
+    pc = cpu_register_get(&regs, cpu_register_pc);
+    cpu_register_set(&regs, cpu_register_pc, (pc - arch.syscall_rewind_size));
+    cpu_registers_set(&regs, ctx->pid);
 
     // Resume execution and wait for SYSCALL-Enter event
-    //TRACE_CPUREG(ctx->pid, "[INIT] Resume execution ...");
+    TRACE_CPUREG(ctx->pid, "Resume original syscall");
     if (ptrace(PTRACE_SYSCALL, ctx->pid, 0, 0) != 0) {
         TRACE_ERROR("Failed STEP: %m");
         return false;
@@ -471,7 +476,11 @@ static bool syscall_hijack(syscall_ctx_t *ctx, size_t syscall, size_t arg1, size
         TRACE_ERROR("waitpid(%d) failed: %m", ctx->pid);
         return false;
     }
-    //TRACE_CPUREG(ctx->pid, "[INIT] Paused:Enter SYSCALL");
+    TRACE_CPUREG(ctx->pid, "Entering original syscall");
+
+    regs = save_regs;
+    cpu_registers_set(&regs, ctx->pid);
+    TRACE_CPUREG(ctx->pid, "Just to be sure..");
 
     return true;
 }
@@ -522,3 +531,20 @@ int syscall_getpid(syscall_ctx_t *ctx) {
     return (ssize_t) ret;
 }
 
+int syscall_number(const char *name) {
+    for (size_t i = 0; syscall_table[i].name; i++) {
+        if (!strcmp(name, syscall_table[i].name)) {
+            return syscall_table[i].number;
+        }
+    }
+    return 0;
+}
+
+const char *syscall_name(int number) {
+    for (size_t i = 0; syscall_table[i].name; i++) {
+        if (syscall_table[i].number == number) {
+            return syscall_table[i].name;
+        }
+    }
+    return 0;
+}

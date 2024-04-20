@@ -30,6 +30,7 @@
 #include "log.h"
 #include "list.h"
 #include "coredump.h"
+#include "memfd.h"
 #include "arch.h"
 #include "elf_main.h"
 
@@ -781,3 +782,34 @@ void coredump_write(int pid, int memfd, FILE *fp, cpu_registers_t *regs) {
     elf_coredump_cleanup(&coredump);
 }
 
+
+void coredump_write_file(const char *filename, int pid, cpu_registers_t *regs) {
+    char defaultfile[64];
+    int memfd = -1;
+    FILE *core = NULL;
+
+    if (!filename) {
+        snprintf(defaultfile, sizeof(defaultfile), "memtrace-%d.core", pid);
+        filename = defaultfile;
+    }
+    if (!(core = fopen(filename, "w"))) {
+        TRACE_ERROR("Failed to open %s: %m", filename);
+        goto error;
+    }
+
+    if ((memfd = memfd_open(pid)) < 0) {
+        goto error;
+    }
+
+    fprintf(stderr, "Writing coredump to %s\n", filename);
+    coredump_write(pid, memfd, core, regs);
+    fprintf(stderr, "Writing coredump done\n");
+
+error:
+    if (memfd >= 0) {
+        close(memfd);
+    }
+    if (core) {
+        fclose(core);
+    }
+}

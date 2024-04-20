@@ -16,490 +16,533 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <stdarg.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
 #include <getopt.h>
 #include <time.h>
+#include <signal.h>
+#include <limits.h>
 #include "log.h"
 #include "selftest.h"
 #include "process.h"
+#include "agent.h"
 
-#define selftest_assert(st, rt, fmt, ...) \
-    do { \
-        if (!(rt)) {CONSOLE("[%2zu][scenario:%s][test:" fmt "] FAILED", st->idx, st->scenario, ##__VA_ARGS__); st->count++;} \
-        else {CONSOLE("[%2zu][scenario:%s][test:" fmt "] OK", st->idx, st->scenario, ##__VA_ARGS__); st->success++; st->count++;} \
-    } while (0)
+#define fatal_error(fmt, ...) selftest_error(__FUNCTION__, __LINE__, fmt, ##__VA_ARGS__)
 
 typedef struct {
-    const char *scenario;
-    process_t process;
-    size_t idx;
+    char me[PATH_MAX];
+    process_t victim;
     size_t success;
-    size_t count;
 } selftest_t;
 
-typedef struct {
-    const char *name;
-    bool (*action)();
-    void (*test)(selftest_t *st);
-} test_scenario_t;
+static selftest_t st = {0};
 
-typedef struct {
-    size_t inuse_bytes;
-    size_t inuse_blocks;
-    size_t alloc_count;
-    size_t free_count;
-    size_t alloc_bytes;
-} selftest_heap_summary_t;
+/** Print the fatal error and exit selftest application */
+static void selftest_error(const char *func, int line, const char *fmt, ...) {
+    char buff[1024];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buff, sizeof(buff), fmt, ap);
+    va_end(ap);
 
-static char *me;
-static const char *connectarg;
-
-static char *selftest_readline(process_t *process) {
-    static char line[4096];
-    char *sep = NULL;
-
-    if (!fgets(line, sizeof(line), process->output)) {
-        return NULL;
-    }
-
-    if ((sep = strchr(line, '\n'))) {
-        *sep = 0;
-    }
-
-    CONSOLE("[memtrace:%d] %s", process->pid, line);
-
-    return line;
+    CONSOLE("\e[0;31m[selftest][Fatal Error] %s in %s:%d", buff, func, line);
+    CONSOLE("\e[m");
+    exit(1);
 }
 
-static char *selftest_strstr(process_t *process, const char *needle) {
-    char *line = NULL;
-    while ((line = selftest_readline(process))) {
-        if (strstr(line, needle)) {
-            return line;
-        }
-    }
-
-    return NULL;
-}
-
-static bool selftest_memtrace_report_summary(process_t *process, selftest_heap_summary_t *summary) {
-    char *line = NULL;
-
-    memset(summary, 0, sizeof(*summary));
-
-    if (!selftest_strstr(process, "HEAP SUMMARY:")) {
-        TRACE_ERROR("memtrace report not generated");
-        return false;
-    }
-
-    if (!(line = selftest_readline(process))) {
-        TRACE_ERROR("memtrace report sumarry not generated");
-        return false;
-    }
-
-    if (sscanf(line, "    in use at exit: %zu bytes in %zu blocks", &summary->inuse_bytes, &summary->inuse_blocks) != 2) {
-        TRACE_ERROR("Failed to parse memtrace report");
-        return false;
-    }
-
-    if (!(line = selftest_readline(process))) {
-        TRACE_ERROR("memtrace report sumarry not generated");
-        return false;
-    }
-
-    if (sscanf(line, "    total heap usage: %zu allocs, %zu frees, %zu bytes allocated", &summary->alloc_count, &summary->free_count, &summary->alloc_bytes) != 3) {
-        TRACE_ERROR("Failed to parse memtrace report");
-        return false;
-    }
-
-    return true;
-}
-
-static void selftest_summary_assert(selftest_t *st, const selftest_heap_summary_t *expected) {
-    selftest_heap_summary_t summary = {0};
-    selftest_assert(st, selftest_memtrace_report_summary(&st->process, &summary), "summary.parse()");
-    selftest_assert(st, summary.inuse_bytes == expected->inuse_bytes, "summary.inuse_bytes");
-    selftest_assert(st, summary.inuse_blocks == expected->inuse_blocks, "summary.inuse_blocks");
-    selftest_assert(st, summary.alloc_count == expected->alloc_count, "summary.alloc_count");
-    selftest_assert(st, summary.free_count == expected->free_count, "summary.free_count");
-    selftest_assert(st, summary.alloc_bytes == expected->alloc_bytes, "summary.alloc_bytes");
-}
-
-static bool action_calloc() {
-    int *ptr = calloc(7*3, 11);
-    TRACE_DEBUG("%p", ptr);
-    return ptr != NULL;
-}
-
-static void test_calloc(selftest_t *st) {
-    selftest_heap_summary_t summary = {
-        .inuse_bytes = 231,
-        .inuse_blocks = 1,
-        .alloc_count = 1,
-        .free_count = 0,
-        .alloc_bytes = 231,
-    };
-    selftest_summary_assert(st, &summary);
-}
-
-static bool action_malloc() {
-    TRACE_DEBUG("do_malloc");
-    int *ptr = malloc(7*3*13);
-    TRACE_DEBUG("malloc=%p", malloc);
-    TRACE_DEBUG("ptr=%p", ptr);
-    return ptr != NULL;
-}
-
-static void test_malloc(selftest_t *st) {
-    selftest_heap_summary_t summary = {
-        .inuse_bytes = 273,
-        .inuse_blocks = 1,
-        .alloc_count = 1,
-        .free_count = 0,
-        .alloc_bytes = 273,
-    };
-    selftest_summary_assert(st, &summary);
-}
-
-static bool action_strdup() {
-    TRACE_DEBUG("do_strdup");
-    char *ptr = strdup("test");
-    TRACE_DEBUG("ptr=%p", ptr);
-    TRACE_DEBUG("malloc=%p", malloc);
-    TRACE_DEBUG("strdup=%p", strdup);
-    return ptr != NULL;
-}
-
-static void test_strdup(selftest_t *st) {
-    selftest_heap_summary_t summary = {
-        .inuse_bytes = 5,
-        .inuse_blocks = 1,
-        .alloc_count = 1,
-        .free_count = 0,
-        .alloc_bytes = 5,
-    };
-    selftest_summary_assert(st, &summary);
-}
-
-static bool action_free() {
-    int *ptr = malloc(7*3*13);
-    TRACE_DEBUG("%p", ptr);
-    free(ptr);
-    return ptr;
-}
-
-static void test_free(selftest_t *st) {
-    selftest_heap_summary_t summary = {
-        .inuse_bytes = 0,
-        .inuse_blocks = 0,
-        .alloc_count = 1,
-        .free_count = 1,
-        .alloc_bytes = 273,
-    };
-    selftest_summary_assert(st, &summary);
-}
-
-static bool action_realloc() {
-    int *ptr = malloc(138);
-    TRACE_DEBUG("%p", ptr);
-    ptr = realloc(ptr, 67);
-    TRACE_DEBUG("%p", ptr);
-    return true;
-}
-
-static void test_realloc(selftest_t *st) {
-    selftest_heap_summary_t summary = {
-        .inuse_bytes = 67,
-        .inuse_blocks = 1,
-        .alloc_count = 2,
-        .free_count = 1,
-        .alloc_bytes = 138+67,
-    };
-    selftest_summary_assert(st, &summary);
-}
-
-static bool action_reallocarray() {
-    int *ptr = calloc(138, 3);
-    TRACE_DEBUG("%p", ptr);
-    ptr = reallocarray(ptr, 138, 7);
-    TRACE_DEBUG("%p", ptr);
-    return true;
-}
-
-static void test_reallocarray(selftest_t *st) {
-    selftest_heap_summary_t summary = {
-        .inuse_bytes = 138*7,
-        .inuse_blocks = 1,
-        .alloc_count = 2,
-        .free_count = 1,
-        .alloc_bytes = 138*(3+7),
-    };
-    selftest_summary_assert(st, &summary);
-}
-
-void *action_do_alloc_1(size_t size) {
-    return malloc(size);
-}
-
-void *action_do_alloc_2(size_t size) {
-    return calloc(1, size);
-}
-
-static bool action_multimalloc() {
-    int i = 0;
-
-    for (i = 0; i < 10; i++) {
-        int *ptr = action_do_alloc_1(53);
-        TRACE_DEBUG("%p", ptr);
-
-        if (i % 2) {
-            free(ptr);
-        }
-    }
-
-    for (i = 0; i < 100; i++) {
-        int *ptr = action_do_alloc_2(3);
-        TRACE_DEBUG("%p", ptr);
-        if (i % 2) {
-            free(ptr);
-        }
-    }
-
-    int *ptr = malloc(137);
-    TRACE_DEBUG("%p", ptr);
-
-    return ptr;
-}
-
-static void test_multimalloc(selftest_t *st) {
-    selftest_heap_summary_t summary = {
-        .inuse_bytes = (5*53) + (50*3) + 137,
-        .inuse_blocks = 5+50+1,
-        .alloc_count = 10+100+1,
-        .free_count = 5+50,
-        .alloc_bytes = (10*53) + (100*3) + 137,
-    };
-    selftest_summary_assert(st, &summary);
-}
-
-static inline void timespec_sub(struct timespec *a, struct timespec *b, struct timespec *result) {
-    result->tv_sec  = a->tv_sec  - b->tv_sec;
-    result->tv_nsec = a->tv_nsec - b->tv_nsec;
-    if (result->tv_nsec < 0) {
-        --result->tv_sec;
-        result->tv_nsec += 1000000000L;
-    }
-}
-
-static bool action_hugecalloc() {
-    int i = 0;
-
-    struct timespec start = {0};
-    struct timespec stop  = {0};
-    struct timespec diff  = {0};
-
-    clock_gettime(CLOCK_MONOTONIC, &start);
-
-    for (i = 0; i < 5000; i++) {
-        int *ptr = calloc(1, 10);
-        TRACE_DEBUG("%p", ptr);
-        if (i != 0) {
-            free(ptr);
-        }
-    }
-
-    clock_gettime(CLOCK_MONOTONIC, &stop);
-    timespec_sub(&stop, &start, &diff);
-
-    CONSOLE("hugecalloc done in %lld.%06lldms", (long long) diff.tv_sec, (long long) diff.tv_nsec);
-
-    return true;
-}
-
-static void test_hugecalloc(selftest_t *st) {
-    /*
-    selftest_heap_summary_t summary = {
-        .inuse_bytes = (5*53) + (50*3) + 137,
-        .inuse_blocks = 5+50+1,
-        .alloc_count = 10+100+1,
-        .free_count = 5+50,
-        .alloc_bytes = (10*53) + (100*3) + 137,
-    };
-    selftest_summary_assert(st, &summary);
-    */
-}
-
-static bool action_loop() {
-    CONSOLE("malloc=%p", malloc);
-    while (true) {
-        size_t i = 0;
-        for (i = 0; i < 3; i++) {
-            int *ptr = action_do_alloc_2(4);
-            TRACE_DEBUG("%p", ptr);
-        }
-        sleep(1);
-        int *ptr = malloc(8);
-        TRACE_DEBUG("%p", ptr);
-    }
-    return true;
-}
-
-
-
-static test_scenario_t test_scenarios[] = {
-    {"calloc", action_calloc, test_calloc},
-    {"malloc", action_malloc, test_malloc},
-    {"strdup", action_strdup, test_strdup},
-    {"free", action_free, test_free},
-    {"realloc", action_realloc, test_realloc},
-    {"reallocarray", action_reallocarray, test_reallocarray},
-    {"multimalloc", action_multimalloc, test_multimalloc},
-    {"hugecalloc", action_hugecalloc, test_hugecalloc},
-    {"loop", action_loop, NULL},
-};
-
-static bool run_action(const char *action) {
-    size_t i = 0;
-    test_scenario_t *scenario = NULL;
-
-    for (i = 0; i < countof(test_scenarios); i++) {
-        scenario = &test_scenarios[i];
-
-        if (!strcmp(scenario->name, action)) {
-            return scenario->action();
-        }
-    }
-
-    TRACE_ERROR("Unknown action %s", action);
-    return false;
-}
-
-static bool selftest_run_scenario(selftest_t *st, test_scenario_t *scenario) {
+/*
+ * Run the main function of the victim process.
+ *
+ * The victim process will be injected the memtrace agent and
+ * simply await for instructions (do a malloc, a calloc, ..)
+ * from the selftest process on the standard input.
+ */
+static bool selftest_victim_main() {
+    char line[1024];
     bool rt = false;
-   /* 
-    const char *cmd[] = {
-        me,
-        //(verbose>1?"-v":""),
-        //(verbose>2?"-v":""),
-        me, "--selftest", "--action", scenario->name, NULL};
-    */
 
-    const char *cmd[16];
-    const char **arg = cmd;
-    *arg++ = me;
-    if (verbose >= 1) {
-        *arg++ = "-v";
+    void *ptr = malloc(4);
+    //printf("ptr=%p\n", ptr);
+    free(ptr);
+
+    printf("started\n");
+    fflush(stdout);
+
+    while (true) {
+        void *ptr = NULL;
+        size_t arg1 = 0;
+        size_t arg2 = 0;
+        if (!fgets(line, sizeof(line), stdin)) {
+            TRACE_ERROR("Failed to read line from stdin: %m");
+            break;
+        }
+
+        if (sscanf(line, "malloc %zu", &arg1) == 1) {
+            ptr = malloc(arg1);
+            printf("malloc->%p\n", ptr);
+        }
+        else if (sscanf(line, "calloc %zu %zu", &arg1, &arg2) == 2) {
+            ptr = calloc(arg1, arg2);
+            printf("calloc->%p\n", ptr);
+        }
+        else if (sscanf(line, "free %p", &ptr) == 1) {
+            free(ptr);
+            printf("free 1\n");
+        }
+        else if (sscanf(line, "sleep_and_abort %zu", &arg1) == 1) {
+            printf("sleep_and_abort->1\n");
+            fflush(stdout);
+            sleep(arg1);
+            abort();
+        }
+        else if (sscanf(line, "exit %zu", &arg1) == 1) {
+            printf("exit 1\n");
+            rt = arg1;
+            break;
+        }
+        else {
+            printf("error. line='%s'\n", line);
+        }
+        fflush(stdout);
     }
-    if (verbose >= 2) {
-        *arg++ = "-v";
-    }
-    if (connectarg) {
-        *arg++ = "--connect";
-        *arg++ = connectarg;
-    }
-    *arg++ = me;
-    *arg++ = "--selftest";
-    *arg++ = "--action";
-    *arg++ = scenario->name;
-    *arg++ = NULL;
 
-    if (!process_start(&st->process, cmd)) {
-        TRACE_ERROR("Failed to start process");
-        return false;
-    }
-
-    st->scenario = scenario->name;
-
-    size_t p_success = st->success;
-    size_t p_count = st->count;
-
-    scenario->test(st);
-
-    size_t success = st->success - p_success;
-    size_t count = st->count - p_count;
-    rt = (success == count);
-
-    while (selftest_readline(&st->process));
-
-    process_stop(&st->process);
+    TRACE_WARNING("process_exit");
 
     return rt;
 }
 
-static bool selftest(const char *scenario_name) {
-    selftest_t st = {0};
+/** Start the victim process: memtrace will attach to it */
+static void selftest_victim_start() {
+    const char *args[] = {
+        st.me,
+        "--selftest",
+        "--victim",
+        NULL
+    };
+    char line[64];
 
-    CONSOLE("Running selftest");
+    alarm(2);
+    if (!process_start(&st.victim, args)) {
+        fatal_error("Failed to start process");
+    }
+    if (!fgets(line, sizeof(line), st.victim.output)) {
+        fatal_error("Failed to read line from process: %m");
+    }
+    if (strcmp(line, "started\n") != 0) {
+        fatal_error("Unexpected '%s'", line);
+    }
+}
 
+/** Write a message to the victim process */
+static void selftest_victim_write(const char *fmt, ...) {
+    char line[1024];
+    va_list ap;
 
-    for (st.idx = 0; st.idx < countof(test_scenarios); st.idx++) {
-        test_scenario_t *scenario = &test_scenarios[st.idx];
+    va_start(ap, fmt);
+    vsnprintf(line, sizeof(line), fmt, ap);
+    va_end(ap);
 
-        if (scenario_name && strcmp(scenario->name, scenario_name)) {
-            continue;
+    TRACE_WARNING("target performs '%s'", line);
+    if (fprintf(st.victim.input, "%s\n", line) <= 0) {
+        fatal_error("Failed to write line: %m");
+    }
+    if (fflush(st.victim.input) != 0) {
+        fatal_error("Failed to write to target process");
+    }
+}
+
+/** Read a message from the victim process */
+static void selftest_victim_read(const char *fmt, ...) {
+    char line[512];
+    va_list ap;
+
+    va_start(ap, fmt);
+
+    alarm(2);
+    while (true) {
+        if (!fgets(line, sizeof(line), st.victim.output)) {
+            va_end(ap);
+            fatal_error("Failed to read line from target process: %m");
         }
-        if (!scenario->action || !scenario->test) {
-            continue;
-        }
-
-        CONSOLE("[%2zu] Run scenario %s", st.idx, scenario->name);
-
-        if (selftest_run_scenario(&st, scenario)) {
-            CONSOLE("[%2zu] Scenario %s: SUCCESS", st.idx, scenario->name);
-        }
-        else {
-            CONSOLE("[%2zu] Scenario %s: FAILURE", st.idx, scenario->name);
+        //TRACE_WARNING("read: %s", line);
+        if (vsscanf(line, fmt, ap) > 0) {
+            break;
         }
     }
 
-    CONSOLE("self tests run: %zu/%zu", st.success, st.count);
+    va_end(ap);
+}
 
-    return st.success == st.count;
+static void selftest_read(FILE *fp, const char *fmt, ...) {
+    char line[512];
+    va_list ap;
+
+    va_start(ap, fmt);
+
+    alarm(2);
+    while (true) {
+        if (!fgets(line, sizeof(line), fp)) {
+            va_end(ap);
+            fatal_error("Failed to read line from target process: %m");
+        }
+        CONSOLE_RAW("\e[0;35m[memtrace]\e[m %s", line);
+        if (vsscanf(line, fmt, ap) > 0) {
+            break;
+        }
+    }
+
+    va_end(ap);
+}
+
+/** Retrieve victim process's pid */
+static int selftest_pid() {
+    return process_get_pid(&st.victim);
+}
+
+static FILE *selftest_memtrace_call(const char *fmt, ...) {
+    char cmd[PATH_MAX + 1400];
+    char buff[1024];
+    va_list ap;
+    int pid = process_get_pid(&st.victim);
+
+    va_start(ap, fmt);
+    vsnprintf(buff, sizeof(buff), fmt, ap);
+    va_end(ap);
+
+    snprintf(cmd, sizeof(cmd), "%s --pid %d %s 2>&1", st.me, pid, buff);
+
+    TRACE_WARNING("Run '%s'", cmd);
+    return popen(cmd, "r");
+}
+
+/*
+static void selftest_memtrace_syscall_getpid() {
+    FILE *fp = selftest_memtrace_call("--syscall getpid");
+    if (!fp) {
+        fatal_error("Failed to start memtrace process: %m");
+    }
+
+    int pid = 0;
+    selftest_read(fp, "syscall returned 0x%x", &pid);
+    pclose(fp);
+
+    if (pid != selftest_pid()) {
+        fatal_error("getpid syscall returned unexpected result");
+    }
+    TRACE_WARNING("getpid syscall returned the expected pid");
+}
+*/
+
+static void selftest_memtrace_call_getpid() {
+    FILE *fp = selftest_memtrace_call("--call getpid");
+    if (!fp) {
+        fatal_error("Failed to start memtrace process: %m");
+    }
+
+    int pid = 0;
+    selftest_read(fp, "getpid() returned 0x%x", &pid);
+    pclose(fp);
+
+    if (pid != selftest_pid()) {
+        fatal_error("Call to getpid() function returned unexpected result");
+    }
+    TRACE_WARNING("Call to getpid() function returned the expected pid");
+}
+
+/**
+ * Run memtrace command to retrieve a memory status of the target process.
+ *
+ * On the first run, memtrace will attach to the target process
+ * and load the agent library in the target process.
+ */
+static void selftest_memtrace_status(stats_t *stats) {
+    char line[512];
+
+    // Ensure we are not stuck forever in case memtrace is not responding.
+    alarm(10);
+
+    FILE *fp = selftest_memtrace_call("-x status");
+    if (!fp) {
+        fatal_error("Failed to start memtrace process: %m");
+    }
+
+    while (true) {
+        long long arg1 = 0;
+        long long arg2 = 0;
+        long long arg3 = 0;
+        if (!fgets(line, sizeof(line), fp)) {
+            fatal_error("Failed to read line from stdin: %m");
+        }
+        CONSOLE_RAW("\e[0;35m[memtrace]\e[m %s", line);
+
+        // status command has the following format:
+        //> status
+        //HEAP SUMMARY Mon May  6 18:55:48 2024
+        //
+        //    in use: 2 allocs, 16 bytes in 1 contexts
+        //    total heap usage: 4 allocs, 2 frees, 26 bytes allocated
+        //    memory leaked since last hour: 0 allocs, 0 bytes
+        if (sscanf(line, "    in use: %lld allocs, %lld bytes in %lld contexts", &arg1, &arg2, &arg3) == 3) {
+            stats->count_inuse = arg1;
+            stats->byte_inuse = arg2;
+            stats->block_inuse = arg3;
+        }
+        if (sscanf(line, "    total heap usage: %lld allocs, %lld frees, %lld bytes allocated", &arg1, &arg2, &arg3) == 3) {
+            stats->alloc_count = arg1;
+            stats->free_count = arg2;
+            stats->alloc_size = arg3;
+            break;
+        }
+    }
+
+    pclose(fp);
+}
+
+/** Verify than memtrace status correspond to what is expected */
+static void selftest_status_expect(const stats_t *expected) {
+    stats_t stats = {0};
+    selftest_memtrace_status(&stats);
+    if (memcmp(&stats, expected, sizeof(stats)) != 0) {
+        TRACE_ERROR("Unexpected memtrace status");
+        TRACE_ERROR("Expected in use: %zu allocs, %zu bytes in %zu contexts",
+            expected->count_inuse, expected->byte_inuse, expected->block_inuse);
+        TRACE_ERROR("Expected total heap usage: %zu allocs, %zu frees, %zu bytes allocated",
+            expected->alloc_count, expected->free_count, expected->alloc_size);
+        fatal_error("Unexpected memtrace status");
+    }
+    TRACE_WARNING("Got expected memtrace status");
+}
+
+/** SIGALRM signal handler */
+static void selftest_timeout(int sig, siginfo_t *info, void *arg) {
+    TRACE_ERROR("Test timeout");
+}
+
+/** Cleanup the test suite: called at process exit */
+static void selftest_cleanup() {
+    process_stop(&st.victim);
+    CONSOLE("###");
+    if (st.success) {
+        CONSOLE("\e[0;32m");
+        CONSOLE("Self tests successful !");
+        CONSOLE("Your platform is supported by memtrace.");
+    }
+    else {
+        CONSOLE("\e[0;31m");
+        CONSOLE("Self tests have failed");
+        CONSOLE("Your platform is currently not supported by memtrace");
+    }
+    CONSOLE("\e[m");
+}
+
+/** Initialize the test suite. */
+void selftest_initialize() {
+    log_set_header("\e[0;33m[selftest]\e[m");
+
+    // retrieve memtrace program path
+    assert(readlink("/proc/self/exe", st.me, sizeof(st.me)) >= 0);
+
+    // configure SIGALRM for handling syscall timeout
+    struct sigaction action = {
+        .sa_sigaction = selftest_timeout,
+        .sa_flags = SA_SIGINFO,
+    };
+    assert(sigaction(SIGALRM, &action, NULL) == 0);
+
+    atexit(selftest_cleanup);
+}
+
+/**
+ * Run self integration tests.
+ *
+ * The goal of these self tests is to perform basic integration tests:
+ * - Attach memtrace to a process succesfully
+ * - Retrieve memtrace status from a process
+ * - Ensure than allocations are well tracked by memtrace
+ *   => memtrace status should show memory increase !
+ *
+ * If these basics tests are succeful, we can consider than memtrace
+ * is supported by the platform on which it is running.
+ *
+ * syscall injection, function injection, function overide are covered
+ * by these tests.
+ */
+static bool selftest() {
+    stats_t stats = {0};
+    void *ptr1 = NULL;
+    void *ptr2 = NULL;
+    void *ptr3 = NULL;
+    int rt = 0;
+
+    selftest_initialize();
+
+    TRACE_WARNING("Running self integration tests");
+
+    // start the victim process
+    selftest_victim_start();
+    TRACE_WARNING("Target process has started with pid %d", selftest_pid());
+
+    // check we can perform a simple SYSCALL in victim process
+    //selftest_memtrace_syscall_getpid();
+    //selftest_memtrace_syscall_getpid();
+    //selftest_memtrace_syscall_getpid();
+
+    // check we can perform a simple function call in victim process
+    selftest_memtrace_call_getpid();
+    selftest_memtrace_call_getpid();
+    selftest_memtrace_call_getpid();
+
+    // attach to the victim process
+    TRACE_WARNING("Attaching memtrace to pid %d", selftest_pid());
+    selftest_memtrace_status(&stats);
+    TRACE_WARNING("memtrace succesfully attached to pid %d", selftest_pid());
+
+    // verify we can retrieve memtrace status from the victim process
+    TRACE_WARNING("Retrieving memtrace status");
+    {
+        const stats_t expected = {
+            .count_inuse = 0,
+            .byte_inuse = 0,
+            .block_inuse = 0,
+            .alloc_count = 0,
+            .free_count = 0,
+            .alloc_size = 0,
+        };
+        selftest_status_expect(&expected);
+    }
+    TRACE_WARNING("memtrace status succesfully retrieved");
+
+    // perform a malloc allocation and retrieve new memtrace status
+    selftest_victim_write("malloc 64");
+    selftest_victim_read("malloc->%p", &ptr1);
+    {
+        const stats_t expected = {
+            .count_inuse = 1,
+            .byte_inuse = 64,
+            .block_inuse = 1,
+            .alloc_count = 1,
+            .free_count = 0,
+            .alloc_size = 64,
+        };
+        selftest_status_expect(&expected);
+    }
+
+    // perform another malloc allocation and retrieve new memtrace status
+    selftest_victim_write("malloc 36");
+    selftest_victim_read("malloc->%p", &ptr2);
+    {
+        const stats_t expected = {
+            .count_inuse = 2,
+            .byte_inuse = 100,
+            .block_inuse = 1,
+            .alloc_count = 2,
+            .free_count = 0,
+            .alloc_size = 100,
+        };
+        selftest_status_expect(&expected);
+    }
+
+    // perform a calloc allocation and retrieve new memtrace status
+    selftest_victim_write("calloc 10 4");
+    selftest_victim_read("calloc->%p", &ptr3);
+    {
+        const stats_t expected = {
+            .count_inuse = 3,
+            .byte_inuse = 140,
+            .block_inuse = 2,
+            .alloc_count = 3,
+            .free_count = 0,
+            .alloc_size = 140,
+        };
+        selftest_status_expect(&expected);
+    }
+
+    // free memory and retrieve new memtrace status
+    selftest_victim_write("free %p", ptr3);
+    selftest_victim_read("free %d", &rt);
+    {
+        const stats_t expected = {
+            .count_inuse = 2,
+            .byte_inuse = 100,
+            .block_inuse = 1,
+            .alloc_count = 3,
+            .free_count = 1,
+            .alloc_size = 140,
+        };
+        selftest_status_expect(&expected);
+    }
+
+    // free all and retrieve new memtrace status
+    selftest_victim_write("free %p", ptr2);
+    selftest_victim_read("free %d", &rt);
+    selftest_victim_write("free %p", ptr1);
+    selftest_victim_read("free %d", &rt);
+    {
+        const stats_t expected = {
+            .count_inuse = 0,
+            .byte_inuse = 0,
+            .block_inuse = 0,
+            .alloc_count = 3,
+            .free_count = 3,
+            .alloc_size = 140,
+        };
+        selftest_status_expect(&expected);
+    }
+
+    // ask victim process to sleep and abort
+    // => this will allow us to check than we don't SKIP
+    // the current sleep syscall if we inject another syscall or call a function
+    selftest_victim_write("sleep_and_abort 10");
+    selftest_victim_read("sleep_and_abort->%p", &ptr1);
+
+    // check we can perform a simple SYSCALL in victim process
+    //selftest_memtrace_syscall_getpid();
+    //selftest_memtrace_syscall_getpid();
+    //usleep(1000);
+    //selftest_memtrace_syscall_getpid();
+
+    // check we can perform a simple function call in victim process
+    selftest_memtrace_call_getpid();
+    selftest_memtrace_call_getpid();
+    usleep(1000);
+    selftest_memtrace_call_getpid();
+
+    TRACE_WARNING("All tests done");
+    st.success = true;
+    return true;
 }
 
 static void help() {
     CONSOLE("Usage: memtrace --selftest [OPTION]...");
-    CONSOLE("Run memtrace self test");
+    CONSOLE("Run memtrace self integration tests");
     CONSOLE("");
     CONSOLE("Options:");
-    CONSOLE("   -c, --connect=HOST[:PORT]   Connect to specified HOST and PORT");
-    CONSOLE("   -s, --scenario=VALUE        Run specified scenario");
-    CONSOLE("   -a, --action=VALUE          Run specified action");
-    CONSOLE("   -v, --verbose               Increase logging verbosity");
+    CONSOLE("   -d, --debug                 Increase logging verbosity");
     CONSOLE("   -h, --help                  Display this help");
 }
 
+/** The main entry point for self tests */
 int selftest_main(int argc, char *argv[]) {
-    const char *short_options = "+sacvhV";
+    const char *short_options = "+vdh";
     const struct option long_options[] = {
-        {"scenario",    required_argument,  0, 's'},
-        {"action",      required_argument,  0, 'a'},
-        {"connect",     required_argument,  0, 'c'},
-        {"verbose",     no_argument,        0, 'v'},
+        {"victim",      no_argument,        0, 'v'},
+        {"debug",       no_argument,        0, 'd'},
         {"help",        no_argument,        0, 'h'},
         {0}
     };
     int opt = -1;
-    const char *action = NULL;
-    const char *scenario = NULL;
+    bool is_victim = false;
 
-    me = argv[0];
-
+    optind = 0;
     while ((opt = getopt_long(argc, argv, short_options, long_options, NULL)) != -1) {
         switch (opt) {
-            case 'a':
-                action = optarg;
-                break;
-            case 's':
-                scenario = optarg;
-                break;
-            case 'c':
-                connectarg = optarg;
-                break;
             case 'v':
-                verbose++;
+                is_victim = true;
+                break;
+            case 'd':
+                log_more_verbose();
                 break;
             default:
                 help();
@@ -507,11 +550,11 @@ int selftest_main(int argc, char *argv[]) {
         }
     }
 
-    if (action) {
-        return run_action(action) ? 0 : 1;
+    if (is_victim) {
+        return selftest_victim_main() ? 0 : 1;
     }
     else {
-        return selftest(scenario) ? 0 : 1;
+        return selftest() ? 0 : 1;
     }
 
     return 0;

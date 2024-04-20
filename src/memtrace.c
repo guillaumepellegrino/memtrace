@@ -46,6 +46,8 @@
 #include "coredump.h"
 #include "elf_main.h"
 #include "elf_sym.h"
+#include "memfd.h"
+#include "selftest.h"
 #include "arch.h"
 #include "log.h"
 
@@ -83,19 +85,6 @@ static const char *defaultdir() {
     struct stat stbuf;
     bool ext = stat("/ext", &stbuf) == 0;
     return ext ? "/ext" : "/tmp";
-}
-
-static int memfd_open(int pid) {
-    char memfile[64];
-    int memfd = -1;
-
-    snprintf(memfile, sizeof(memfile), "/proc/%d/mem", pid);
-    if ((memfd = open(memfile, O_RDWR)) < 0) {
-        TRACE_ERROR("Failed to open /proc/%d/mem: %m", pid);
-        return -1;
-    }
-
-    return memfd;
 }
 
 static bool connect_to_memtrace_agent(bus_t *bus, int pid) {
@@ -146,6 +135,7 @@ error:
 }
 
 static void memtrace_stop_evlp() {
+    CONSOLE("Stoping EVLP");
     // gently ask the event loop to exit
     kill(getpid(), SIGINT);
 }
@@ -215,6 +205,7 @@ static void memtrace_console_forward(console_t *console, int argc, char *argv[])
         }
         CONSOLE_RAW("%s", line);
     }
+    fflush(stderr);
 }
 
 static void memtrace_console_monitor(console_t *console, int argc, char *argv[]) {
@@ -429,37 +420,6 @@ static void memtrace_console_report(console_t *console, int argc, char *argv[]) 
     memtrace_report(memtrace, count, stderr);
 }
 
-static void memtrace_coredump(const char *filename, int pid, cpu_registers_t *regs) {
-    char defaultfile[64];
-    int memfd = -1;
-    FILE *core = NULL;
-
-    if (!filename) {
-        snprintf(defaultfile, sizeof(defaultfile), "%s/memtrace-%d.core", defaultdir(), pid);
-        filename = defaultfile;
-    }
-    if (!(core = fopen(filename, "w"))) {
-        TRACE_ERROR("Failed to open %s: %m", filename);
-        goto error;
-    }
-
-    if ((memfd = memfd_open(pid)) < 0) {
-        goto error;
-    }
-
-    fprintf(stderr, "Writing coredump to %s\n", filename);
-    coredump_write(pid, memfd, core, regs);
-    fprintf(stderr, "Writing coredump done\n");
-
-error:
-    if (memfd >= 0) {
-        close(memfd);
-    }
-    if (core) {
-        fclose(core);
-    }
-}
-
 static void memtrace_console_coredump(console_t *console, int argc, char *argv[]) {
     const char *short_options = "+c:f:hn";
     const struct option long_options[] = {
@@ -509,7 +469,7 @@ static void memtrace_console_coredump(console_t *console, int argc, char *argv[]
     }
 
     if (now) {
-        memtrace_coredump(filename, pid, NULL);
+        coredump_write_file(filename, pid, NULL);
         goto error;
     }
 
@@ -588,7 +548,7 @@ static void memtrace_console_coredump(console_t *console, int argc, char *argv[]
     cpu_registers_t regs;
     cpu_registers_get(&regs, pid);
     cpu_register_set(&regs, cpu_register_pc, malloc_sym.addr);
-    memtrace_coredump(filename, pid, &regs);
+    coredump_write_file(filename, pid, &regs);
 
 error:
     if (memfd >= 0) {
@@ -692,7 +652,7 @@ static void memtrace_console_breakpoint(console_t *console, int argc, char *argv
     cpu_registers_print(&regs);
 
     if (do_coredump) {
-        memtrace_coredump(filename, pid, NULL);
+        coredump_write_file(filename, pid, NULL);
     }
 
 error:
@@ -809,13 +769,7 @@ error:
 
 static bool inject_memtrace_agent(int pid, const char *libname) {
     bool rt = false;
-    DIR *threads = NULL;
     injecter_t *injecter = NULL;
-
-    if (!(threads = threads_attach(pid))) {
-        CONSOLE("Failed to get thread list from pid %d", pid);
-        goto error;
-    }
 
     if (!(injecter = injecter_create(pid))) {
         TRACE_ERROR("Failed to create code injecter");
@@ -825,20 +779,59 @@ static bool inject_memtrace_agent(int pid, const char *libname) {
         TRACE_ERROR("Failed to load %s inside pid %d", libname, pid);
         goto error;
     }
-
     if (!injecter_setup_memtrace_hooks(injecter)) {
         TRACE_ERROR("Failed to setup memtrace functions hooks inside pid %d", libname, pid);
         goto error;
     }
-
     rt = true;
 
 error:
     if (injecter) {
         injecter_destroy(injecter);
     }
-    if (threads) {
-        threads_detach(threads);
+    return rt;
+}
+
+static int memtrace_call_function(int pid, const char *function, int argc, char *argv[]) {
+    int rt = 1;
+    injecter_t *injecter = NULL;
+    size_t retval = 0;
+
+    if (!(injecter = injecter_create(pid))) {
+        TRACE_ERROR("Failed to create code injecter");
+        goto error;
+    }
+    if (!injecter_call(injecter, function, argc, (const char **) argv, &retval)) {
+        TRACE_ERROR("Failed to call %s()", function);
+        goto error;
+    }
+    rt = 0;
+
+error:
+    if (injecter) {
+        injecter_destroy(injecter);
+    }
+    return rt;
+}
+
+static int memtrace_syscall_function(int pid, const char *syscall, int argc, char *argv[]) {
+    int rt = 1;
+    injecter_t *injecter = NULL;
+    size_t retval = 0;
+
+    if (!(injecter = injecter_create(pid))) {
+        TRACE_ERROR("Failed to create code injecter");
+        goto error;
+    }
+    if (!injecter_syscall(injecter, syscall, argc, (const char **) argv, &retval)) {
+        TRACE_ERROR("syscall %s failed", syscall);
+        goto error;
+    }
+    rt = 0;
+
+error:
+    if (injecter) {
+        injecter_destroy(injecter);
     }
     return rt;
 }
@@ -846,6 +839,7 @@ error:
 static void stdin_handler(evlp_handler_t *self, int events) {
     memtrace_t *memtrace = container_of(self, memtrace_t, stdin_handler);
     if (!console_poll(&memtrace->console)) {
+        CONSOLE("Standard input closed");
         memtrace_stop_evlp();
     }
 }
@@ -933,18 +927,22 @@ static void help() {
     CONSOLE("Usage: memtrace [OPTION]..");
     CONSOLE("A cross-debugging tool to trace memory allocations for debugging memory leaks");
     CONSOLE("Options: ");
-    CONSOLE("  -p, --pid=VALUE      PID of the target process. MANDATORY.");
-    CONSOLE("  -L, --library=PATH   Library to inject in the target process. By default, memtrace inject itself.");
+    CONSOLE("  -p, --pid=VALUE              PID of the target process. MANDATORY.");
+    CONSOLE("  -L, --library=PATH           Library to inject in the target process (default: libmemtrace-agent.so)");
     if (is_cross_compiled()) {
-        CONSOLE("  -m, --multicast      Auto-discover memtrace-server with multicast and connect to it");
-        CONSOLE("  -c, --connect=HOST:PORT TCP connect to memtrace-server on the specified host and port");
-        CONSOLE("  -l, --listen=HOST:PORT TCP listen on the specified host and port and wait for memtrace-server to connect");
+        CONSOLE("  -m, --multicast              Auto-discover memtrace-server with multicast and connect to it");
+        CONSOLE("  -c, --connect=HOST:PORT      TCP connect to memtrace-server on the specified host and port");
+        CONSOLE("  -l, --listen=HOST:PORT       TCP listen on the specified host and port and wait for memtrace-server to connect");
     }
-    CONSOLE("  -x, --command        Execute memtrace command and exit");
-    CONSOLE("  -C, --coredump=PATH  Generate a coredump and exit");
-    CONSOLE("  -d, --debug          Enable debug logs");
-    CONSOLE("  -h, --help           Display this help");
-    CONSOLE("  -v, --version        Display program version");
+    CONSOLE("  -x, --command=CMD            Execute memtrace command and exit");
+    CONSOLE("  -C, --coredump=PATH          Generate a coredump and exit");
+    CONSOLE("  -e, --elfdump=PATH           Dump ELF file info");
+    CONSOLE("  -f, --call=FUNCTION [ARG]..  Call function with specified arguments");
+    CONSOLE("  -s, --syscall=NAME [ARG]..   Perform syscall with specified arguments");
+    CONSOLE("  -t, --selftest [ARG]..       Run self tests to verify your platform is supported");
+    CONSOLE("  -d, --debug                  Enable debug logs");
+    CONSOLE("  -h, --help                   Display this help");
+    CONSOLE("  -v, --version                Display program version");
 }
 
 static void version() {
@@ -952,7 +950,7 @@ static void version() {
 }
 
 int main(int argc, char *argv[]) {
-    const char *short_options = "+p:L:C:mc:l:x:e:dhv";
+    const char *short_options = "+p:L:C:mc:l:x:e:f:s:tdhv";
     const struct option long_options[] = {
         {"pid",         required_argument,  0, 'p'},
         {"library",     required_argument,  0, 'L'},
@@ -962,6 +960,9 @@ int main(int argc, char *argv[]) {
         {"listen",      required_argument,  0, 'l'},
         {"command",     required_argument,  0, 'x'},
         {"elfdump",     required_argument,  0, 'e'},
+        {"call",        required_argument,  0, 'f'},
+        {"syscall",     required_argument,  0, 's'},
+        {"selftest",    no_argument,        0, 't'},
         {"debug",       no_argument,        0, 'd'},
         {"help",        no_argument,        0, 'h'},
         {"version",     no_argument,        0, 'v'},
@@ -982,6 +983,9 @@ int main(int argc, char *argv[]) {
     };
     const char *coredump_path = NULL;
 
+    setvbuf(stdin, NULL, _IONBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
 
     while ((opt = getopt_long(argc, argv, short_options, long_options, NULL)) != -1) {
         switch (opt) {
@@ -1014,6 +1018,18 @@ int main(int argc, char *argv[]) {
                 break;
             case 'e':
                 return elf_dump(optarg);
+            case 'f':
+                return memtrace_call_function(memtrace.pid, optarg,
+                    (argc - optind),
+                    (argv + optind));
+            case 's':
+                return memtrace_syscall_function(memtrace.pid, optarg,
+                    (argc - optind),
+                    (argv + optind));
+            case 't':
+                return selftest_main(
+                    (argc - optind + 1),
+                    (argv + optind - 1));
             case 'h':
                 help();
                 goto error;
@@ -1050,7 +1066,7 @@ int main(int argc, char *argv[]) {
             CONSOLE("Failed to get thread list from pid %d", memtrace.pid);
             return false;
         }
-        memtrace_coredump(coredump_path, memtrace.pid, NULL);
+        coredump_write_file(coredump_path, memtrace.pid, NULL);
         threads_detach(threads);
         rt = 0;
         goto error;

@@ -51,6 +51,23 @@ char *alloc_toto() {
     return strdup("toto");
 }
 
+
+void do_calloc_before() {
+
+}
+
+char *do_calloc() {
+    return calloc(0xBE, 0xCA);
+}
+
+void do_calloc_after() {
+
+}
+
+char *do_do_calloc() {
+    return do_calloc();
+}
+
 int main(int argc, char *argv[]) {
     int loop = 1;
     pthread_t thread;
@@ -72,6 +89,7 @@ int main(int argc, char *argv[]) {
     printf("alloc_toto() is @%p\n", (void *)alloc_toto);
     printf("strdup() is @%p\n", (void *)strdup);
     printf("malloc() is @%p\n", (void *)malloc);
+    printf("calloc() is @%p\n", (void *)calloc);
 
     while (!exit_loop) {
         int *num = calloc(1, sizeof(num));
@@ -88,11 +106,11 @@ int main(int argc, char *argv[]) {
         char *toto = alloc_toto();
         printf("strdup() -> %s (%p)\n", toto, toto);
         free(toto);
-        //time_t now = time(NULL);
-        //printf("sleep() IN @%s", asctime(localtime(&now)));
-        sleep(1);
-        //now = time(NULL);
-        //printf("sleep() OUT @%s", asctime(localtime(&now)));
+        time_t now = time(NULL);
+        printf("sleep() IN @%s", asctime(localtime(&now)));
+        sleep(4);
+        now = time(NULL);
+        printf("sleep() OUT @%s", asctime(localtime(&now)));
         loop++;
     }
 

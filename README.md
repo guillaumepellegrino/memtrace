@@ -378,4 +378,9 @@ sequenceDiagram
 
 
 ## 7. TODO
-- Add support for IFUNC
+- Improvement idea: provide a cli command which allow to generate a tar.gz archive containing:
+-- the memtrace report
+-- the coredump(s) of the context(s) with the highest memory usage.
+-- maybe some details about the tracked process and the OS version
+-- => it may be useful for support team which could simply run the tool offline and provide the full report to the DEV team.
+

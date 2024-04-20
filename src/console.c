@@ -171,11 +171,11 @@ static void console_add_history(console_t *console, const char *cmd) {
     }
 }
 
-static void console_eol(console_t *console, int c) {
+static void console_eol(console_t *console) {
     size_t i;
     const console_cmd_t *cmd = NULL;
 
-    assert(write(1, &c, 1) > 0);
+    assert(write(1, "\r\n", 2) > 0);
 
     if (console->bufflen >= sizeof(console->buff)) {
         TRACE_ERROR("command line too long");
@@ -191,6 +191,10 @@ static void console_eol(console_t *console, int c) {
             break;
         }
         console->argv[console->argc++] = it;
+    }
+    if (console->argc == 0) {
+        console_reset(console);
+        return;
     }
 
     TRACE_LOG("cmd:");
@@ -273,8 +277,8 @@ bool console_initiliaze(console_t *console, const console_cmd_t *cmd_list) {
 
         // Read char by char
         termios.c_lflag &= ~(ECHO | ECHONL | ICANON);
-        if (tcsetattr(0, 0, &termios) < 0) {
-            TRACE_ERROR("Failed to set console attr: %m");
+        if (tcsetattr(0, TCSANOW, &termios) < 0) {
+            TRACE_ERROR("Failed to set console attributes 0x%x: %m", termios.c_lflag);
             return false;
         }
         console->is_tty = true;
@@ -290,8 +294,8 @@ void console_cleanup(console_t *console) {
     }
 
     TRACE_LOG("cleanup");
-    if (console->is_tty && tcsetattr(0, 0, &console->backup) < 0) {
-        TRACE_ERROR("Failed to set console attr: %m");
+    if (console->is_tty && tcsetattr(0, TCSANOW, &console->backup) < 0) {
+        TRACE_ERROR("Failed to set console attributes 0x%x: %m", console->backup.c_lflag);
     }
     strlist_cleanup(&console->history);
 }
@@ -379,7 +383,7 @@ bool console_poll(console_t *console) {
             console_backspace(console);
             break;
         case '\n':
-            console_eol(console, c);
+            console_eol(console);
             break;
         case '\t':
             console_autocomplete(console);

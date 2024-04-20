@@ -39,6 +39,13 @@ typedef enum {
     cpu_register_fp,
     cpu_register_ra,
     cpu_register_syscall,
+    cpu_register_syscall_arg1,
+    cpu_register_syscall_arg2,
+    cpu_register_syscall_arg3,
+    cpu_register_syscall_arg4,
+    cpu_register_syscall_arg5,
+    cpu_register_syscall_arg6,
+    cpu_register_syscall_arg7,
     cpu_register_arg1,
     cpu_register_arg2,
     cpu_register_arg3,
@@ -58,7 +65,6 @@ struct _cpu_registers {
     struct user_regs raw;
 #endif
     size_t extra[1];
-    bool set_return_addr;
 };
 
 struct _breakpoint {
@@ -76,6 +82,7 @@ struct _arch {
     size_t *(*cpu_register_reference)(cpu_registers_t *regs, cpu_register_name_t name);
 
     // optionals
+    void (*prepare_function_call)(cpu_registers_t *regs, int pid);
     bool (*breakpoint_set)(breakpoint_t *bp, int memfd, size_t addr);
     const size_t syscall_rewind_size;
 };
@@ -102,14 +109,16 @@ static inline void cpu_register_set(cpu_registers_t *regs, cpu_register_name_t n
 }
 
 static inline void cpu_registers_print(cpu_registers_t *regs) {
-    printf("arg1:%zu, arg2:%zu, arg3: %zu, arg4: %zu, arg5: %zu, pc:0x%zx, lr:0x%zx\n",
-        cpu_register_get(regs, cpu_register_arg1),
-        cpu_register_get(regs, cpu_register_arg2),
-        cpu_register_get(regs, cpu_register_arg3),
-        cpu_register_get(regs, cpu_register_arg4),
-        cpu_register_get(regs, cpu_register_arg5),
+    printf("arg1:%zu, arg2:%zu, arg3: %zu, arg4: %zu, arg5: %zu, pc:0x%zx, lr:0x%zx (syscall:%zu/rt:%zu)\n",
+        cpu_register_get(regs, cpu_register_syscall_arg1),
+        cpu_register_get(regs, cpu_register_syscall_arg2),
+        cpu_register_get(regs, cpu_register_syscall_arg3),
+        cpu_register_get(regs, cpu_register_syscall_arg4),
+        cpu_register_get(regs, cpu_register_syscall_arg5),
         cpu_register_get(regs, cpu_register_pc),
-        cpu_register_get(regs, cpu_register_ra));
+        cpu_register_get(regs, cpu_register_ra),
+        cpu_register_get(regs, cpu_register_syscall),
+        cpu_register_get(regs, cpu_register_retval));
 }
 
 #endif
