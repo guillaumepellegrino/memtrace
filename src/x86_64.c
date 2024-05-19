@@ -15,8 +15,6 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-
-#define BREAKPOINT_PRIVATE
 #include <errno.h>
 #include <sys/ptrace.h>
 #include <sys/types.h>
@@ -25,7 +23,53 @@
 #include "arch.h"
 #include "log.h"
 #include "ptrace.h"
+#include "syscall.h"
 #include "memfd.h"
+
+// Interrupt the process in a SYSCALL-Exit event
+// since we can't directly call a function if we are in a SYSCALL-Enter event
+static bool x86_64_ptrace_interrupt(syscall_ctx_t *ctx) {
+    int pid = syscall_pid(ctx);
+
+    // Resume execution until SYSCALL-Enter event
+    cpu_registers_t regs = {0};
+    cpu_registers_get(&regs, pid);
+    syscall_resume_until_syscall(ctx, &regs);
+
+    TRACE_CPUREG(pid, "Entering SYSCALL");
+    *syscall_save_regs(ctx) = regs;
+
+    // let's not do a blocking syscall: do something non-blocling like SYS_getppid
+    cpu_register_set(&regs, cpu_register_syscall, (size_t) SYS_getppid);
+    cpu_registers_set(&regs, pid);
+    TRACE_CPUREG(pid, "Perform dummy SYSCALL");
+    syscall_resume_until_syscall(ctx, &regs);
+
+    TRACE_CPUREG(pid, "Exiting SYSCALL");
+    return true;
+}
+
+static bool x86_64_ptrace_resume(syscall_ctx_t *ctx) {
+    int pid = syscall_pid(ctx);
+
+    // Rewind to the interrupt SYSCALL instruction
+    cpu_registers_t regs = *syscall_save_regs(ctx);
+    size_t pc = cpu_register_get(&regs, cpu_register_pc);
+    pc -= arch.syscall_rewind_size;
+    cpu_register_set(&regs, cpu_register_pc, pc);
+    cpu_registers_set(&regs, pid);
+    TRACE_CPUREG(pid, "Restoring registers");
+    syscall_resume_until_syscall(ctx, &regs);
+
+    // We are entering SYSCALL
+    TRACE_CPUREG(pid, "Entering original syscall");
+    regs = *syscall_save_regs(ctx);
+    cpu_registers_set(&regs, pid);
+    TRACE_CPUREG(pid, "Just to be sure..");
+
+    return true;
+}
+
 
 static bool x86_cpu_registers_get(cpu_registers_t *regs, int pid) {
     if (ptrace(PTRACE_GETREGS, pid, NULL, &regs->raw) != 0) {
@@ -115,6 +159,8 @@ static bool x86_breakpoint_set(breakpoint_t *bp, int memfd, size_t breakpoint_ad
 }
 
 arch_t arch = {
+    .ptrace_interrupt = x86_64_ptrace_interrupt,
+    .ptrace_resume = x86_64_ptrace_resume,
     .cpu_registers_get = x86_cpu_registers_get,
     .cpu_registers_set = x86_cpu_registers_set,
     .cpu_register_reference = x86_cpu_register_reference,

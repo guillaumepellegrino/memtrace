@@ -55,6 +55,7 @@ struct _injecter {
     syscall_ctx_t syscall; /** Context to perform syscall or function call */
     libraries_t *libraries; /** Shared libraries from the target process */
     library_t *inject_lib; /** Injected library */
+    int replaced_functions; /** Count of replaced functions */
 };
 
 /**
@@ -165,6 +166,8 @@ static bool library_replace_function(injecter_t *injecter, library_t *target, co
         sleep(10);
         return false;
     }
+
+    injecter->replaced_functions++;
     return true;
 }
 
@@ -670,6 +673,7 @@ bool injecter_setup_memtrace_hooks(injecter_t *injecter) {
     hooks = strdup(_hooks);
 
     CONSOLE("[Replacing functions]");
+    injecter->replaced_functions = 0;
     char *saveptr1 = NULL;
     for(char *hook = strtok_r(hooks, ",", &saveptr1); hook; hook = strtok_r(NULL, ",", &saveptr1)) {
         char *saveptr2 = NULL;
@@ -678,7 +682,14 @@ bool injecter_setup_memtrace_hooks(injecter_t *injecter) {
         CONSOLE("[Replacing %s by %s]", program_fname, inject_fname);
         injecter_replace_function(injecter, program_fname, inject_fname);
     }
-    CONSOLE("[Functions replaced]");
+    ret = injecter->replaced_functions > 0;
+    if (ret) {
+        CONSOLE("[%d locations were changed]", injecter->replaced_functions);
+        CONSOLE("[Functions replaced]");
+    }
+    else {
+        CONSOLE("[Failed to replace any function]");
+    }
     ret = true;
 error:
     elf_file_close(hooks_section);

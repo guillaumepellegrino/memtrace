@@ -23,6 +23,7 @@
 #include <sys/user.h>
 #include "arch.h"
 #include "memfd.h"
+#include "syscall.h"
 #include "log.h"
 
 /** MIPS General Purpose Registers */
@@ -66,6 +67,26 @@
 /** Program Counter */
 #define pc 34
 
+
+// There is not need to interrupt the process in a specific place:
+// just just save the current registers
+static bool mips_ptrace_interrupt(syscall_ctx_t *ctx) {
+    cpu_registers_t *save_regs = syscall_save_regs(ctx);
+    int pid = syscall_pid(ctx);
+
+    return cpu_registers_get(save_regs, pid);
+}
+
+static bool mips_ptrace_resume(syscall_ctx_t *ctx) {
+    cpu_registers_t *save_regs = syscall_save_regs(ctx);
+    int pid = syscall_pid(ctx);
+
+    cpu_registers_set(save_regs, pid);
+    TRACE_CPUREG(pid, "Restoring registers");
+
+    return true;
+}
+
 static bool mips_cpu_registers_get(cpu_registers_t *regs, int pid) {
     if (ptrace(PTRACE_GETREGS, pid, NULL, &regs->raw) != 0) {
         TRACE_ERROR("ptrace(GETREGS, %d) failed: %m", pid);
@@ -80,6 +101,10 @@ static bool mips_cpu_registers_set(cpu_registers_t *regs, int pid) {
         TRACE_ERROR("ptrace(SETREGS, %d) failed: %m", pid);
         return false;
     }
+
+    // PTRACE_SET_SYSCALL is not implemented on old MIPS kernel.
+    // and it does not seem to be possible to override a syscall
+    // at the beginning of an SYSCALL-Enter event.
 
     return true;
 }
@@ -119,14 +144,11 @@ static void mips_prepare_function_call(cpu_registers_t *regs, int pid) {
     TRACE_WARNING("Prepare to call pc=0x%zx",cpu_register_get(regs, cpu_register_pc));
     regs->raw.regs[2*t9+1] = cpu_register_get(regs, cpu_register_pc);
 
-    /*
     size_t rsp = cpu_register_get(regs, cpu_register_sp);
     rsp /= 0x1000;
     rsp *= 0x1000;
     rsp -= 0x1000;
     cpu_register_set(regs, cpu_register_sp, rsp);
-
-    */
 }
 
 /*
@@ -161,6 +183,8 @@ static bool mips_breakpoint_set(breakpoint_t *bp, int memfd, size_t breakpoint_a
 */
 
 arch_t arch = {
+    .ptrace_interrupt = mips_ptrace_interrupt,
+    .ptrace_resume = mips_ptrace_resume,
     .cpu_registers_get = mips_cpu_registers_get,
     .cpu_registers_set = mips_cpu_registers_set,
     .cpu_register_reference = mips_cpu_register_reference,
