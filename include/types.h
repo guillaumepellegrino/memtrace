@@ -67,7 +67,8 @@ typedef struct _console console_t;
 typedef struct _cpu_registers cpu_registers_t;
 typedef struct _strmap strmap_t;
 typedef struct _strmap_iterator strmap_iterator_t;
-
+typedef struct _syscall_ctx syscall_ctx_t;
+typedef struct _syscall_table syscall_table_t;
 
 union _variant_value {
     uint8_t  u8;

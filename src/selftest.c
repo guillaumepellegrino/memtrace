@@ -52,6 +52,10 @@ static void selftest_error(const char *func, int line, const char *fmt, ...) {
     exit(1);
 }
 
+void useptr(uint32_t *ptr) {
+    (void) ptr;
+}
+
 /*
  * Run the main function of the victim process.
  *
@@ -63,8 +67,12 @@ static bool selftest_victim_main() {
     char line[1024];
     bool rt = false;
 
-    void *ptr = malloc(4);
-    //printf("ptr=%p\n", ptr);
+    // call alloc functions before memtrace attach:
+    // this will help MIPS tests to pass
+    // TODO: we probably needs to improve
+    // function replacement on MIPS.
+    uint32_t *ptr = calloc(4, 1);
+    useptr(ptr);
     free(ptr);
 
     printf("started\n");
@@ -217,7 +225,6 @@ static FILE *selftest_memtrace_call(const char *fmt, ...) {
     return popen(cmd, "r");
 }
 
-/*
 static void selftest_memtrace_syscall_getpid() {
     FILE *fp = selftest_memtrace_call("--syscall getpid");
     if (!fp) {
@@ -233,7 +240,6 @@ static void selftest_memtrace_syscall_getpid() {
     }
     TRACE_WARNING("getpid syscall returned the expected pid");
 }
-*/
 
 static void selftest_memtrace_call_getpid() {
     FILE *fp = selftest_memtrace_call("--call getpid");
@@ -385,9 +391,9 @@ static bool selftest() {
     TRACE_WARNING("Target process has started with pid %d", selftest_pid());
 
     // check we can perform a simple SYSCALL in victim process
-    //selftest_memtrace_syscall_getpid();
-    //selftest_memtrace_syscall_getpid();
-    //selftest_memtrace_syscall_getpid();
+    selftest_memtrace_syscall_getpid();
+    selftest_memtrace_syscall_getpid();
+    selftest_memtrace_syscall_getpid();
 
     // check we can perform a simple function call in victim process
     selftest_memtrace_call_getpid();
@@ -498,10 +504,10 @@ static bool selftest() {
     selftest_victim_read("sleep_and_abort->%p", &ptr1);
 
     // check we can perform a simple SYSCALL in victim process
-    //selftest_memtrace_syscall_getpid();
-    //selftest_memtrace_syscall_getpid();
-    //usleep(1000);
-    //selftest_memtrace_syscall_getpid();
+    selftest_memtrace_syscall_getpid();
+    selftest_memtrace_syscall_getpid();
+    usleep(1000);
+    selftest_memtrace_syscall_getpid();
 
     // check we can perform a simple function call in victim process
     selftest_memtrace_call_getpid();

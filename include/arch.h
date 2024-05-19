@@ -77,6 +77,8 @@ struct _breakpoint {
 /** CPU Architecture specific functions */
 struct _arch {
     // mandatory
+    bool (*ptrace_interrupt)(syscall_ctx_t *ctx);
+    bool (*ptrace_resume)(syscall_ctx_t *ctx);
     bool (*cpu_registers_get)(cpu_registers_t *regs, int pid);
     bool (*cpu_registers_set)(cpu_registers_t *regs, int pid);
     size_t *(*cpu_register_reference)(cpu_registers_t *regs, cpu_register_name_t name);
