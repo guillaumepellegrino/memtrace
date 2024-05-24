@@ -378,9 +378,12 @@ sequenceDiagram
 
 
 ## 7. TODO
-- Improvement idea: provide a cli command which allow to generate a tar.gz archive containing:
+- Improvement idea: provide a cli command which allow to automatically generate a tar.gz archive containing:
 -- the memtrace report
 -- the coredump(s) of the context(s) with the highest memory usage.
 -- maybe some details about the tracked process and the OS version
--- => it may be useful for support team which could simply run the tool offline and provide the full report to the DEV team.
+-- maybe something to plot the memory usage with dataviewer ?
+-- the likelyhood of a memory leak (yes or not, percentage ?)
+-- => autoreport --file report.tar.gz --duration TIME --maxcores 3 --coretimeout TIMEOUT
+-- => it may be useful for support team which could simply run this command and provide the detailed report to the DEV team. It may even allow to automate things.
 

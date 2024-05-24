@@ -119,9 +119,9 @@ static size_t library_seek_got_addr(injecter_t *injecter, library_t *target, con
         CONSOLE("  - .got section not found in %s", library_name(target));
         return 0;
     }
-    //CONSOLE(".got section offset: 0x%"PRIx64, got->sh_addr);
+    CONSOLE(".got section offset: 0x%"PRIx64, got->sh_addr);
     uint64_t got_addr = library_get_elf_section_addr(target, elf, got);
-    //CONSOLE(".got section : 0x%"PRIx64" : 0x%"PRIx64, got_addr, got_addr + got->sh_size);
+    CONSOLE(".got section : 0x%"PRIx64" : 0x%"PRIx64, got_addr, got_addr + got->sh_size);
 
     size_t addr = injecter_seek_addr(injecter, (void *)(size_t) got_addr, (void*)(size_t)(got_addr + got->sh_size), sym.addr);
     if (!addr) {
@@ -536,108 +536,6 @@ bool injecter_load_library(injecter_t *injecter, const char *libname) {
 
     return true;
 }
-
-#if 0
-bool injecter_load_library(injecter_t *injecter, const char *libname) {
-    void *straddr;
-    size_t retval = 0;
-
-    assert(injecter);
-    assert(libname);
-    int memfd = syscall_memfd(&injecter->syscall);
-
-    //injecter_find_function(injecter);
-
-    // Sanity check
-    /*
-       CONSOLE("Performing syscall sanity check on target process");
-       int pid = syscall_getpid(&syscall);
-       if (pid != injecter->pid) {
-       if (pid <= 0) {
-       TRACE_ERROR("Failed to inject syscall in target process (pid != %d).", pid);
-       }
-       else {
-       CONSOLE("Target process tell us its pid is %d instead of %d", pid, injecter->pid);
-       CONSOLE("Is the target process running in a container ?");
-       CONSOLE("");
-       CONSOLE("Please ensure than memtrace and target process are running on the same Linux namepaces");
-       CONSOLE("");
-       }
-       return false;
-       }
-       if (syscall_getpid(&syscall) != injecter->pid) {
-       TRACE_ERROR("Failed to inject syscall in target process");
-       return false;
-       }
-       if (syscall_getpid(&syscall) != injecter->pid) {
-       TRACE_ERROR("Failed to inject syscall in target process");
-       return false;
-       }
-       CONSOLE("=> Sanity check okay: getpid() returned the correct pid");
-       */
-
-
-    CONSOLE("Performing function call sanity check on target process");
-    if (!injecter_call_raw(injecter, "getpid", 0, 0, 0, 0, &retval)) {
-        TRACE_ERROR("Failed to call getpid in target process");
-        return false;
-    }
-    if ((int) retval != injecter->pid) {
-        TRACE_ERROR("Failed to call getpid in target process");
-        return false;
-    }
-    if (!injecter_call_raw(injecter, "getppid", 0, 0, 0, 0, &retval)) {
-        TRACE_ERROR("Failed to call getpid in target process");
-        return false;
-    }
-    CONSOLE("=> Sanity check okay");
-
-    if (!injecter_call_raw(injecter, "calloc", 256, 1, 0, 0, &retval)) {
-        TRACE_ERROR("Failed to call calloc(256, 1) in target process");
-        return false;
-    }
-    straddr = (void *) retval;
-    CONSOLE("Memory allocated at %p in target process", straddr);
-
-    // Write library name in target memory
-    if (!memfd_write(memfd, libname, strlen(libname) + 1, (size_t) straddr)) {
-        TRACE_ERROR("Failed to write library name in target process at %p", straddr);
-        return false;
-    }
-    CONSOLE("Library name (%s) is stored at %p in target process", libname, straddr);
-
-    // FIXME: dlopen() crash on x86_64 if the call to getpid() is removed
-    injecter_call_raw(injecter, "getpid", 0, 0, 0, 0, &retval);
-
-    CONSOLE("Call dlopen(%s, RTLD_LAZY) in target process", libname);
-    if (!injecter_call_raw(injecter, "__libc_dlopen_mode", (size_t) straddr, RTLD_LAZY, 0, 0, &retval)) {
-        if (!injecter_call_raw(injecter, "dlopen", (size_t) straddr, RTLD_LAZY, 0, 0, &retval)) {
-            TRACE_ERROR("Failed to call dlopen() and __libc_dlopen_mode() in target process");
-            return false;
-        }
-    }
-    if (retval == 0) {
-        TRACE_ERROR("dlopen() could not open library");
-        return false;
-    }
-    if (!injecter_call_raw(injecter, "free", (size_t)straddr, 0, 0, 0, &retval)) {
-        TRACE_ERROR("Failed to call free() in target process");
-        return false;
-    }
-
-    libraries_update(injecter->libraries);
-    injecter->inject_lib = libraries_find_by_name(injecter->libraries, libname);
-    if (!injecter->inject_lib) {
-        TRACE_ERROR("Failed to find injected library in target process mapping");
-        libraries_print(injecter->libraries, stdout);
-        return false;
-    }
-    CONSOLE("Library injected with success in target process !");
-    libraries_print(injecter->libraries, stdout);
-    close(memfd);
-    return true;
-}
-#endif
 
 bool injecter_replace_function(injecter_t *injecter, const char *program_fname, const char *inject_fname) {
     bool ret = false;
