@@ -99,10 +99,6 @@ static bool elf_section_parse(elf_t *elf, elf_file_t *fp, size_t i) {
     section->sh_addralign = elf_file_read_addr(fp);
     section->sh_entsize = elf_file_read_addr(fp);
 
-    if (section->sh_type == sh_type_strtab) {
-        elf->section_shstrtab = section;
-    }
-
     return true;
 }
 
@@ -241,13 +237,15 @@ elf_t *elf_open(const char *name) {
 
     // Populate ELF Section names
     char section_name[64] = "";
-
-    if (elf->section_shstrtab) {
-        elf_file_close(fp);
-        if (!(fp = elf_section_open(elf, elf->section_shstrtab))) {
-            TRACE_ERROR("Failed to seek to Section header %zu: %m", i);
-            goto error;
-        }
+    if (elf->header.e_shstrndx >= elf->header.e_shnum) {
+        TRACE_ERROR("%s: .shstrtab section out of bound", name);
+        goto error;
+    }
+    elf->section_shstrtab = &elf->sections[elf->header.e_shstrndx];
+    elf_file_close(fp);
+    if (!(fp = elf_section_open(elf, elf->section_shstrtab))) {
+        TRACE_ERROR("Failed to seek to Section header %zu: %m", i);
+        goto error;
     }
     for (i = 0; i < elf->header.e_shnum; i++) {
         section_header_t *section = &elf->sections[i];
