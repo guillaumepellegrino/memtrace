@@ -328,7 +328,16 @@ static void selftest_timeout(int sig, siginfo_t *info, void *arg) {
 
 /** Cleanup the test suite: called at process exit */
 static void selftest_cleanup() {
+    // print memtrace last lines and exit memtrace
+    char line[1024];
+    while (st.victim.output) {
+        if (!fgets(line, sizeof(line), st.victim.output)) {
+            break;
+        }
+        CONSOLE_RAW("\e[0;35m[memtrace]\e[m %s", line);
+    }
     process_stop(&st.victim);
+
     CONSOLE("###");
     if (st.success) {
         CONSOLE("\e[0;32m");

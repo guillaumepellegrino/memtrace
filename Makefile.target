@@ -53,7 +53,7 @@ $(O)/libmemtrace-agent.so: $(addprefix $(O)/,agent.o agent_hooks.o evlp.o bus.o 
 $(O)/dummy: $(O)/dummy.o
 	$(CC) -o $(@) $(^) $(LDFLAGS) -ldl
 
--include $(willdcard $(O)/*.d)
+-include $(wildcard $(O)/*.d)
 
 $(O)/%.o: src/%.c | $(O)/
 	$(CC) -c -MD $(CFLAGS) $(<) -o $(@)

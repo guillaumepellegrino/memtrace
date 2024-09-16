@@ -22,7 +22,7 @@ install:
 $(BUILD)/memtrace-server: $(addprefix $(BUILD)/,memtrace-server.o evlp.o bus.o net.o strmap.o strlist.o elf.o elf_file.o process.o addr2line.o gdb.o log.o)
 	$(CC_HOST) -o $(@) $(^) $(LDFLAGS_HOST)
 
--include $(willdcard $(BUILD)/*.d)
+-include $(wildcard $(BUILD)/*.d)
 
 $(BUILD)/%.o: src/%.c | $(BUILD)/
 	$(CC_HOST) -c -MD $(CFLAGS_HOST) $(<) -o $(@)

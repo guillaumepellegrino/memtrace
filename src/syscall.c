@@ -76,7 +76,7 @@ static void TRACE_CPUREG_IMPL(int pid, const char *fmt) {
     cpu_registers_t regs = {0};
     cpu_registers_get(&regs, pid);
 #ifdef PTRACE_GET_SYSCALL_INFO
-    struct ptrace_syscall_info info = {0};
+    struct __ptrace_syscall_info info = {0};
     if (ptrace(PTRACE_GET_SYSCALL_INFO, pid, (void *) sizeof(info), &info) != 0) {
         //TRACE_ERROR("Failed to get SYSCALL info for pid %d: %m", pid);
     }
@@ -253,11 +253,42 @@ error:
 
 void syscall_cleanup(syscall_ctx_t *ctx) {
     if (ctx->pid) {
-
+        bool rt = false;
+        int status = 0;
         if (!arch.ptrace_resume(ctx)) {
             TRACE_ERROR("Failed to resume process");
+            goto error;
         }
 
+        // Check process did not crash just after resuming execution
+        if (ptrace(PTRACE_CONT, ctx->pid, 0, 0) != 0) {
+            TRACE_ERROR("ptrace(SYSCALL, %d) failed: %m", ctx->pid);
+            goto error;
+        }
+        usleep(10*1000);
+        int pid = waitpid(ctx->pid, &status, WNOHANG);
+        if (pid < 0) {
+            TRACE_ERROR("waitpid(%d) failed: %m", ctx->pid);
+            goto error;
+        }
+        if (pid > 0) {
+            if (WIFSIGNALED(status)) {
+                TRACE_ERROR("process terminated by signal:%d", WTERMSIG(status));
+                goto error;
+            }
+            if (!WIFSTOPPED(status)) {
+                TRACE_ERROR("process was stopped by signal %d", WSTOPSIG(status));
+                goto error;
+            }
+        }
+        rt = true;
+error:
+        if (!rt) {
+            cpu_registers_t local = {0};
+            cpu_registers_get(&local, ctx->pid);
+            syscall_registers_print(&local);
+            coredump_write_file("memtrace-error.core", ctx->pid, NULL);
+        }
 #if 0
         while(true) {
             cpu_registers_t regs = {0};
@@ -312,16 +343,18 @@ void syscall_do_coredump_at_next_tampering(syscall_ctx_t *ctx) {
 size_t syscall_punch_breakpoint(syscall_ctx_t *ctx) {
     breakpoint_t bp = {0};
     library_symbol_t sym = libraries_find_symbol(ctx->libraries, "_start");
-
-    if (!sym.name) {
-        TRACE_ERROR("Could not find _start() function in target process");
-        return 0;
+    if (!sym.addr) {
+        sym = libraries_find_symbol(ctx->libraries, "__libc_start_main");
+        if (!sym.addr) {
+            TRACE_ERROR("Could not find _start() or __libc_start_main() function in target process");
+            return 0;
+        }
     }
     if (!arch.breakpoint_set(&bp, ctx->memfd, sym.addr)) {
-        TRACE_ERROR("Failed to set breakpoint _start() function at %p", sym.addr);
+        TRACE_ERROR("Failed to set breakpoint %s() function at %p", sym.name, sym.addr);
         return 0;
     }
-    CONSOLE("Breakpoint set at 0x%"PRIx64" in _start()", sym.addr);
+    CONSOLE("Breakpoint set at 0x%"PRIx64" in %s()", sym.addr, sym.name);
 
     return sym.addr;
 }

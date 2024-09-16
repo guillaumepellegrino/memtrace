@@ -132,6 +132,15 @@ static size_t *arm_cpu_register_reference(cpu_registers_t *registers, cpu_regist
     }
 }
 
+static void arm_prepare_function_call(cpu_registers_t *regs, int pid) {
+    TRACE_WARNING("Prepare to call pc=0x%zx",cpu_register_get(regs, cpu_register_pc));
+    size_t rsp = cpu_register_get(regs, cpu_register_sp);
+    rsp /= 0x1000;
+    rsp *= 0x1000;
+    rsp -= 0x1000;
+    cpu_register_set(regs, cpu_register_sp, rsp);
+}
+
 //gdb implementation
 //calloc: 0xb6f338fd (0xb6ede000 + 0x558fd)
 //ptrace(PTRACE_PEEKTEXT, 12092, 0xb6f338fc, [0x201ea40]) = 0
@@ -222,6 +231,7 @@ arch_t arch = {
     .cpu_registers_get = arm_cpu_registers_get,
     .cpu_registers_set = arm_cpu_registers_set,
     .cpu_register_reference = arm_cpu_register_reference,
+    .prepare_function_call = arm_prepare_function_call,
     .breakpoint_set = arm_breakpoint_set,
     .syscall_rewind_size = 2,
 };
