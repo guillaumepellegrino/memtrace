@@ -247,7 +247,19 @@ static void server_parse_report(memtrace_server_t *server, FILE *in, FILE *out) 
     char *binary = NULL;
     char *dataview = NULL;
     FILE *dataviewer = NULL;
+    strlist_iterator_t *it = NULL;
     addr2line_t addr2line = {0};
+
+    fprintf(out, "Memtrace report decoded using:\n");
+
+    strlist_for_each(it, &server->files) {
+        const char *file = strlist_iterator_value(it);
+        fprintf(out, "- File: '%s'\n", file);
+    }
+    strlist_for_each(it, &server->directories) {
+        const char *dir = strlist_iterator_value(it);
+        fprintf(out, "- Directory: '%s'\n", dir);
+    }
 
     while (fgets(line, sizeof(line), in)) {
         bool show2user = true;
@@ -262,6 +274,7 @@ static void server_parse_report(memtrace_server_t *server, FILE *in, FILE *out) 
                     sysroot = NULL;
                 }
                 show2user = false;
+                fprintf(out, "- Sysroot: '%s'\n", sysroot);
             }
         }
         if (!toolchain) {
@@ -276,6 +289,7 @@ static void server_parse_report(memtrace_server_t *server, FILE *in, FILE *out) 
                     addr2line_initialize(&addr2line, binary);
                 }
                 show2user = false;
+                fprintf(out, "- Addr2line: '%s'\n", binary);
             }
         }
         if (!dataview) {
