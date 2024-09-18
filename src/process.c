@@ -92,12 +92,15 @@ void process_stop(process_t *process) {
     if (process->pid > 0) {
         kill(process->pid, SIGKILL);
         waitpid(process->pid, NULL, 0);
+        process->pid = 0;
     }
     if (process->input) {
         fclose(process->input);
+        process->input = NULL;
     }
     if (process->output) {
         fclose(process->output);
+        process->output = NULL;
     }
 }
 

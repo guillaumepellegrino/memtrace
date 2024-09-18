@@ -69,6 +69,7 @@ static const char *addr2line_process_readline(addr2line_process_t *addr2line) {
     if (addr2line->process.output) {
         if (!fgets(line, sizeof(line), addr2line->process.output)) {
             TRACE_ERROR("Failed to read line from %s: %m", addr2line->so);
+            process_stop(&addr2line->process);
         }
 
         char *eol = strchr(line, '\n');
@@ -85,7 +86,8 @@ static void addr2line_resolve(addr2line_process_t *addr2line, uint64_t address, 
     const char *line = NULL;
 
     if (process_get_pid(&addr2line->process) <= 0) {
-        fprintf(out, "%s:0x%"PRIx64" (shared libary not found)\n", addr2line->so, address);
+        fprintf(out, "%s:0x%"PRIx64" (addr2line error)\n", addr2line->so, address);
+        return;
     }
 
     fprintf(addr2line->process.input, "0x%"PRIx64"\n", address);
@@ -137,6 +139,7 @@ void addr2line_print(addr2line_t *ctx, const char *so, uint64_t address, FILE *o
     assert(so);
     assert(out);
 
+    TRACE_LOG("%s -e %s -f 0x%"PRIx64, ctx->binary, so, address);
     if (!(addr2line = addr2line_find_by_so(ctx, so))) {
         addr2line = addr2line_create(ctx, so);
     }

@@ -175,11 +175,12 @@ static char *get_topic(const char *line, const char *topic) {
     return value;
 }
 
-static bool server_report_parse_addr(memtrace_server_t *server, FILE *out, addr2line_t *addr2line, char *addrstr, const char *sysroot) {
+static bool server_report_parse_addr(memtrace_server_t *server, FILE *out, addr2line_t *addr2line, const char *line, const char *sysroot) {
     char *sep = NULL;
     const char *tgtpath = NULL;
     char *hostpath = NULL;
     size_t address = 0;
+    char *addrstr = strdup(line);
 
     tgtpath = addrstr;
     if ((sep = strchr(addrstr, '+'))) {
@@ -188,8 +189,7 @@ static bool server_report_parse_addr(memtrace_server_t *server, FILE *out, addr2
     }
 
     if (!(hostpath = target2host_path(sysroot, &server->files, &server->directories, &server->acls, tgtpath))) {
-        TRACE_ERROR("%s: not found", tgtpath);
-        fprintf(out, "%s", addrstr);
+        fprintf(out, "%s (shared library file not found)\n", line);
         goto exit;
     }
     addr2line_print(addr2line, hostpath, address, out);
