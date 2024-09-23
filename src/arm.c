@@ -51,7 +51,7 @@ static bool arm_ptrace_interrupt(syscall_ctx_t *ctx) {
     TRACE_CPUREG(pid, "Entering SYSCALL");
     *syscall_save_regs(ctx) = regs;
 
-    // let's not do a blocking syscall: do something non-blocling like SYS_getppid
+    // let's not do a blocking syscall: do something non-blocking like SYS_getppid
     cpu_register_set(&regs, cpu_register_syscall, (size_t) SYS_getppid);
     cpu_registers_set(&regs, pid);
     TRACE_CPUREG(pid, "Perform dummy SYSCALL");
@@ -59,6 +59,16 @@ static bool arm_ptrace_interrupt(syscall_ctx_t *ctx) {
 
     TRACE_CPUREG(pid, "Exiting SYSCALL");
     return true;
+}
+
+static bool ptrace_resumed_dbg_enabled() {
+    static int tristate = -1;
+    if (tristate >= 0) {
+        return tristate;
+    }
+    tristate = (getenv("RESUMEDBG") != NULL);
+
+    return tristate;
 }
 
 static bool arm_ptrace_resume(syscall_ctx_t *ctx) {
@@ -78,6 +88,14 @@ static bool arm_ptrace_resume(syscall_ctx_t *ctx) {
     regs = *syscall_save_regs(ctx);
     cpu_registers_set(&regs, pid);
     TRACE_CPUREG(pid, "Just to be sure..");
+
+    if (ptrace_resumed_dbg_enabled()) {
+        int i = 0;
+        for (i = 0; i < 10; i++) {
+            syscall_resume_until_syscall(ctx, &regs);
+            TRACE_CPUREG(pid, "Resume DBG");
+        }
+    }
 
     return true;
 }

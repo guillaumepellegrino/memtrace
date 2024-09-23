@@ -103,6 +103,7 @@ static bool selftest_victim_main() {
             printf("sleep_and_abort->1\n");
             fflush(stdout);
             sleep(arg1);
+            printf("sleep(%zu) done => aborting\n", arg1);
             abort();
         }
         else if (sscanf(line, "exit %zu", &arg1) == 1) {
