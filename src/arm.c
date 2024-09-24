@@ -48,7 +48,7 @@ static bool arm_ptrace_interrupt(syscall_ctx_t *ctx) {
     cpu_registers_get(&regs, pid);
     syscall_resume_until_syscall(ctx, &regs);
 
-    TRACE_CPUREG(pid, "Entering SYSCALL");
+    TRACE_CPUREG(pid, "Entering SYSCALL and saving registers");
     *syscall_save_regs(ctx) = regs;
 
     // let's not do a blocking syscall: do something non-blocking like SYS_getppid
@@ -110,6 +110,21 @@ static bool arm_cpu_registers_get(cpu_registers_t *regs, int pid) {
 }
 
 static bool arm_cpu_registers_set(cpu_registers_t *regs, int pid) {
+    // [WORKAROUND]
+    // On some old kernels (3.4.11), PTRACE_GETREGS does not return SYS_restart_syscall as it should.
+    size_t syscall = cpu_register_get(regs, cpu_register_syscall);
+    switch (syscall) {
+        case SYS_poll:
+        case SYS_nanosleep:
+        case SYS_clock_nanosleep:
+        case SYS_futex:
+            TRACE_LOG("Replacing syscall %zu by SYS_restart_syscall", syscall);
+            cpu_register_set(regs, cpu_register_syscall, SYS_restart_syscall);
+            break;
+        default:
+            break;
+    }
+
     if (ptrace(PTRACE_SETREGS, pid, NULL, &regs->raw) != 0) {
         TRACE_ERROR("ptrace(SETREGS, %d) failed: %m", pid);
         return false;
