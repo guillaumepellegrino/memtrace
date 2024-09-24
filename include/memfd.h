@@ -40,4 +40,6 @@ bool memfd_read(int memfd, void *buf, size_t count, off64_t offset);
  */
 bool memfd_readstr(int memfd, char *buf, size_t count, off64_t offset);
 
+uint32_t memfd_read32(int memfd, off64_t offset);
+
 #endif

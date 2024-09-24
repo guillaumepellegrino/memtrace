@@ -95,3 +95,8 @@ bool memfd_readstr(int memfd, char *buf, size_t count, off64_t offset) {
     return true;
 }
 
+uint32_t memfd_read32(int memfd, off64_t offset) {
+    uint32_t value = 0;
+    memfd_read(memfd, &value, sizeof(value), offset);
+    return value;
+}
