@@ -27,6 +27,11 @@ CFLAGS+=
 ARCH_OBJECT=arm.o
 endif
 
+ifneq (,$(findstring aarch64,$(MACHINE)))
+CFLAGS+=
+ARCH_OBJECT=aarch64.o
+endif
+
 ifneq (,$(findstring mips,$(MACHINE)))
 CFLAGS+=
 ARCH_OBJECT=mips.o

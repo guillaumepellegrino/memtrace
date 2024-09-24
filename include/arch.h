@@ -27,10 +27,6 @@
 #include <sys/ptrace.h>
 #include "types.h"
 
-#ifdef __aarch64__
-#error aarc64_platform_is_not_supported
-#endif
-
 typedef struct _arch arch_t;
 
 typedef enum {
