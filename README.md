@@ -11,7 +11,7 @@ It's main advantages are:
 - It can be attached to a process already running
 - Cross-debugging (No debug symbols needed on the target process)
 - gdb support for inspecting memory allocation context
-- Supported Platforms: x64, arm
+- Supported Platforms: x64, arm, aarch64 (arm64)
 
 ## 2 Compilation
 ```
