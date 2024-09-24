@@ -24,6 +24,7 @@
 #include <time.h>
 #include <signal.h>
 #include <limits.h>
+#include <poll.h>
 #include "log.h"
 #include "selftest.h"
 #include "process.h"
@@ -104,6 +105,25 @@ static bool selftest_victim_main() {
             fflush(stdout);
             sleep(arg1);
             printf("sleep(%zu) done => aborting\n", arg1);
+            abort();
+        }
+        else if (sscanf(line, "poll_and_abort %zu", &arg1) == 1) {
+            printf("poll_and_abort->1\n");
+            fflush(stdout);
+            struct pollfd fds = {
+                .fd = 0,
+                .events = POLLIN,
+            };
+            poll(&fds, 1, 10000);
+            printf("poll() done => aborting\n");
+            abort();
+        }
+        else if (sscanf(line, "read_and_abort %zu", &arg1) == 1) {
+            printf("read_and_abort->1\n");
+            fflush(stdout);
+            size_t rt = read(0, line, 4);
+            (void) rt;
+            printf("read(0) done => aborting\n");
             abort();
         }
         else if (sscanf(line, "exit %zu", &arg1) == 1) {
