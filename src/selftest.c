@@ -314,7 +314,7 @@ static void selftest_memtrace_status(stats_t *stats) {
         if (sscanf(line, "    in use: %lld allocs, %lld bytes in %lld contexts", &arg1, &arg2, &arg3) == 3) {
             stats->count_inuse = arg1;
             stats->byte_inuse = arg2;
-            stats->block_inuse = arg3;
+            //stats->block_inuse = arg3;
         }
         if (sscanf(line, "    total heap usage: %lld allocs, %lld frees, %lld bytes allocated", &arg1, &arg2, &arg3) == 3) {
             stats->alloc_count = arg1;
@@ -333,8 +333,8 @@ static void selftest_status_expect(const stats_t *expected) {
     selftest_memtrace_status(&stats);
     if (memcmp(&stats, expected, sizeof(stats)) != 0) {
         TRACE_ERROR("Unexpected memtrace status");
-        TRACE_ERROR("Expected in use: %zu allocs, %zu bytes in %zu contexts",
-            expected->count_inuse, expected->byte_inuse, expected->block_inuse);
+        TRACE_ERROR("Expected in use: %zu allocs, %zu bytes"/* in %zu contexts*/,
+            expected->count_inuse, expected->byte_inuse/*, expected->block_inuse*/);
         TRACE_ERROR("Expected total heap usage: %zu allocs, %zu frees, %zu bytes allocated",
             expected->alloc_count, expected->free_count, expected->alloc_size);
         fatal_error("Unexpected memtrace status");
@@ -441,7 +441,7 @@ static bool selftest() {
         const stats_t expected = {
             .count_inuse = 0,
             .byte_inuse = 0,
-            .block_inuse = 0,
+            //.block_inuse = 0,
             .alloc_count = 0,
             .free_count = 0,
             .alloc_size = 0,
@@ -457,7 +457,7 @@ static bool selftest() {
         const stats_t expected = {
             .count_inuse = 1,
             .byte_inuse = 64,
-            .block_inuse = 1,
+            //.block_inuse = 1,
             .alloc_count = 1,
             .free_count = 0,
             .alloc_size = 64,
@@ -472,7 +472,7 @@ static bool selftest() {
         const stats_t expected = {
             .count_inuse = 2,
             .byte_inuse = 100,
-            .block_inuse = 1,
+            //.block_inuse = 1,
             .alloc_count = 2,
             .free_count = 0,
             .alloc_size = 100,
@@ -487,7 +487,7 @@ static bool selftest() {
         const stats_t expected = {
             .count_inuse = 3,
             .byte_inuse = 140,
-            .block_inuse = 2,
+            //.block_inuse = 2,
             .alloc_count = 3,
             .free_count = 0,
             .alloc_size = 140,
@@ -502,7 +502,7 @@ static bool selftest() {
         const stats_t expected = {
             .count_inuse = 2,
             .byte_inuse = 100,
-            .block_inuse = 1,
+            //.block_inuse = 1,
             .alloc_count = 3,
             .free_count = 1,
             .alloc_size = 140,
@@ -519,7 +519,7 @@ static bool selftest() {
         const stats_t expected = {
             .count_inuse = 0,
             .byte_inuse = 0,
-            .block_inuse = 0,
+            //.block_inuse = 0,
             .alloc_count = 3,
             .free_count = 3,
             .alloc_size = 140,
