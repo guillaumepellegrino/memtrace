@@ -1019,10 +1019,20 @@ int main(int argc, char *argv[]) {
             case 'e':
                 return elf_dump(optarg);
             case 'f':
+                if (memtrace.pid <= 0) {
+                    CONSOLE("PID not provided");
+                    help();
+                    goto error;
+                }
                 return memtrace_call_function(memtrace.pid, optarg,
                     (argc - optind),
                     (argv + optind));
             case 's':
+                if (memtrace.pid <= 0) {
+                    CONSOLE("PID not provided");
+                    help();
+                    goto error;
+                }
                 return memtrace_syscall_function(memtrace.pid, optarg,
                     (argc - optind),
                     (argv + optind));
