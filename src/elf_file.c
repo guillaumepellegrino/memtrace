@@ -227,6 +227,14 @@ elf_file_t *elf_section_open(elf_t *elf, const section_header_t *section) {
     return file;
 }
 
+elf_file_t *elf_program_open(elf_t *elf, const program_header_t *program) {
+    elf_file_t *file = NULL;
+
+    file = elf_file_open(elf, program->p_filesz, program->p_offset);
+
+    return file;
+}
+
 elf_file_t *elf_section_open_from_name(elf_t *elf, const char *name) {
     elf_file_t *file = NULL;
     const section_header_t *section = NULL;

@@ -35,6 +35,7 @@ struct _elf_file {
 
 elf_file_t *elf_file_open(elf_t *elf, uint64_t size, uint64_t offset);
 elf_file_t *elf_section_open(elf_t *elf, const section_header_t *section);
+elf_file_t *elf_program_open(elf_t *elf, const program_header_t *program);
 elf_file_t *elf_section_open_from_name(elf_t *elf, const char *name);
 void elf_file_close(elf_file_t *file);
 void elf_file_set64bit(elf_file_t *file, bool elf64);

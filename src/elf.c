@@ -162,10 +162,14 @@ elf_t *elf_open(const char *name) {
     elf_file_t *fp = NULL;
     size_t i = 0;
 
+    TRACE_LOG("elf_open(%s)", name);
+
     if (!(elf = calloc(1, sizeof(elf_t)))) {
+        TRACE_ERROR("calloc() err");
         goto error;
     }
     if (!name) {
+        TRACE_ERROR("name=NULL");
         goto error;
     }
     assert((elf->name = strdup(name)));
@@ -219,44 +223,47 @@ elf_t *elf_open(const char *name) {
 
     // Open ELF Section Headers
     elf_file_close(fp);
-    if (!(fp = elf_file_open(elf, elf->header.e_shnum * elf->header.e_shentsize, elf->header.e_shoff))) {
-        TRACE_ERROR("Failed to open %s: %m", name);
-        goto error;
-    }
-    // Parse ELF Section headers
-    if (!(elf->sections = calloc(elf->header.e_shnum, sizeof(section_header_t)))) {
-        TRACE_ERROR("%s: calloc failed: %m", name);
-        goto error;
-    }
-    for (i = 0; i < elf->header.e_shnum; i++) {
-        if (!elf_section_parse(elf, fp, i)) {
-            TRACE_ERROR("%s: Failed to parse Section Header %zu", name, i);
+    size_t sh_totsize = elf->header.e_shnum * elf->header.e_shentsize;
+    if (sh_totsize > 0) {
+        if (!(fp = elf_file_open(elf, sh_totsize, elf->header.e_shoff))) {
+            TRACE_ERROR("Failed to open %s: %m", name);
             goto error;
         }
-    }
-
-    // Populate ELF Section names
-    char section_name[64] = "";
-    if (elf->header.e_shstrndx >= elf->header.e_shnum) {
-        TRACE_ERROR("%s: .shstrtab section out of bound", name);
-        goto error;
-    }
-    elf->section_shstrtab = &elf->sections[elf->header.e_shstrndx];
-    elf_file_close(fp);
-    if (!(fp = elf_section_open(elf, elf->section_shstrtab))) {
-        TRACE_ERROR("Failed to seek to Section header %zu: %m", i);
-        goto error;
-    }
-    for (i = 0; i < elf->header.e_shnum; i++) {
-        section_header_t *section = &elf->sections[i];
-        if (elf->section_shstrtab) {
-            elf_file_seek(fp, section->sh_name);
-            elf_file_read_string(fp, section_name, sizeof(section_name));
+        // Parse ELF Section headers
+        if (!(elf->sections = calloc(elf->header.e_shnum, sizeof(section_header_t)))) {
+            TRACE_ERROR("%s: calloc failed: %m", name);
+            goto error;
         }
-        section->sh_strname = strdup(section_name);
-    }
+        for (i = 0; i < elf->header.e_shnum; i++) {
+            if (!elf_section_parse(elf, fp, i)) {
+                TRACE_ERROR("%s: Failed to parse Section Header %zu", name, i);
+                goto error;
+            }
+        }
 
-    elf_file_close(fp);
+        // Populate ELF Section names
+        char section_name[64] = "";
+        if (elf->header.e_shstrndx >= elf->header.e_shnum) {
+            TRACE_ERROR("%s: .shstrtab section out of bound", name);
+            goto error;
+        }
+        elf->section_shstrtab = &elf->sections[elf->header.e_shstrndx];
+        elf_file_close(fp);
+        if (!(fp = elf_section_open(elf, elf->section_shstrtab))) {
+            TRACE_ERROR("Failed to seek to Section header %zu: %m", i);
+            goto error;
+        }
+        for (i = 0; i < elf->header.e_shnum; i++) {
+            section_header_t *section = &elf->sections[i];
+            if (elf->section_shstrtab) {
+                elf_file_seek(fp, section->sh_name);
+                elf_file_read_string(fp, section_name, sizeof(section_name));
+            }
+            section->sh_strname = strdup(section_name);
+        }
+
+        elf_file_close(fp);
+    }
     return elf;
 
 error:
@@ -396,6 +403,16 @@ const program_header_t *elf_program_header_executable(elf_t *elf) {
         return program;
     }
 
+    return NULL;
+}
+
+const program_header_t *elf_program_header_get(elf_t *elf, p_type_t type) {
+    const program_header_t *ph = NULL;
+    for (ph = elf_program_header_first(elf); ph; ph = elf_program_header_next(elf, ph)) {
+        if (ph->p_type == type) {
+            return ph;
+        }
+    }
     return NULL;
 }
 

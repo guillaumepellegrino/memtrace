@@ -498,6 +498,168 @@ size_t library_offset(const library_t *library) {
     return library->offset;
 }
 
+/*
+typedef struct {
+        Elf32_Sword d_tag; // 32 bits
+        union {
+                Elf32_Word      d_val; // 32bits
+                Elf32_Addr      d_ptr;
+                Elf32_Off       d_off;
+        } d_un;
+} Elf32_Dyn;
+
+typedef struct {
+        Elf64_Xword d_tag; // 64 bits
+        union {
+                Elf64_Xword     d_val; //64 bits
+                Elf64_Addr      d_ptr;
+        } d_un;
+} Elf64_Dyn;
+*/
+
+#include "elf.h"
+typedef struct {
+    size_t tag;
+    size_t val;
+} elf_dynamic_entry_t;
+
+bool elf_dynamic_get_entry(elf_file_t *dynamic, size_t tag, size_t *val) {
+    elf_file_seek(dynamic, 0);
+    while (true) {
+        elf_dynamic_entry_t entry = {0};
+        entry.tag = elf_file_read_addr(dynamic);
+        entry.val = elf_file_read_addr(dynamic);
+
+        if (entry.tag == 0) {
+            return false;
+        }
+        if (entry.tag == tag) {
+            *val = entry.val;
+            return true;
+        }
+    }
+}
+
+elf_file_t *library_ph_open_symtab(elf_t *elf, elf_file_t *dynamic) {
+    size_t hash_offset = 0;
+    size_t symtab_offset = 0;
+    size_t sym_entry_size = 0;
+
+    if (!elf_dynamic_get_entry(dynamic, DT_HASH, &hash_offset)) {
+        TRACE_WARNING("DT_HASH not found in %s", elf_name(elf));
+        return NULL;
+    }
+    if (!elf_dynamic_get_entry(dynamic, DT_SYMTAB, &symtab_offset)) {
+        TRACE_WARNING("DT_SYMTAB not found in %s", elf_name(elf));
+        return NULL;
+    }
+    if (!elf_dynamic_get_entry(dynamic, DT_SYMENT, &sym_entry_size)) {
+        TRACE_WARNING("DT_SYMENT not found in %s", elf_name(elf));
+        return NULL;
+    }
+
+    elf_file_t *hash = elf_file_open(elf, sym_entry_size/8, hash_offset);
+    elf_file_read_addr(dynamic);
+    size_t nchain = elf_file_read_addr(dynamic);
+    elf_file_close(hash);
+
+    //printf("%s (hash: %zx, symtab: %zx, size: %zu)\n", elf_name(elf), hash_offset, symtab_offset, nchain);
+
+    return elf_file_open(elf, nchain, symtab_offset);
+}
+
+elf_file_t *library_ph_open_rela(elf_t *elf, elf_file_t *dynamic) {
+    size_t rela = 0;
+    size_t relasz = 0;
+    size_t relaent = 0;
+
+    if (!elf_dynamic_get_entry(dynamic, DT_RELA, &rela)) {
+        TRACE_LOG("DT_RELA not found in %s", elf_name(elf));
+        return NULL;
+    }
+    if (!elf_dynamic_get_entry(dynamic, DT_RELASZ, &relasz)) {
+        TRACE_LOG("DT_RELASZ not found in %s", elf_name(elf));
+        return NULL;
+    }
+    if (!elf_dynamic_get_entry(dynamic, DT_RELAENT, &relaent)) {
+        TRACE_LOG("DT_RELAENT not found in %s", elf_name(elf));
+        return NULL;
+    }
+
+    return elf_file_open(elf, relasz*relaent/8, rela);
+}
+
+elf_file_t *library_ph_open_rel(elf_t *elf, elf_file_t *dynamic) {
+    size_t rel = 0;
+    size_t relsz = 0;
+    size_t relent = 0;
+
+    if (!elf_dynamic_get_entry(dynamic, DT_REL, &rel)) {
+        TRACE_LOG("DT_REL not found in %s", elf_name(elf));
+        return NULL;
+    }
+    if (!elf_dynamic_get_entry(dynamic, DT_RELSZ, &relsz)) {
+        TRACE_LOG("DT_RELSZ not found in %s", elf_name(elf));
+        return NULL;
+    }
+    if (!elf_dynamic_get_entry(dynamic, DT_RELENT, &relent)) {
+        TRACE_LOG("DT_RELENT not found in %s", elf_name(elf));
+        return NULL;
+    }
+
+    return elf_file_open(elf, relsz*relent/8, rel);
+}
+
+elf_file_t *library_ph_open_strtab(elf_t *elf, elf_file_t *dynamic) {
+    size_t strtab_offset = 0;
+    size_t strsz_offset = 0;
+
+    if (!elf_dynamic_get_entry(dynamic, DT_STRTAB, &strtab_offset)) {
+        TRACE_WARNING("DT_STRTAB not found in %s", elf_name(elf));
+        return NULL;
+    }
+    if (!elf_dynamic_get_entry(dynamic, DT_STRSZ, &strsz_offset)) {
+        TRACE_WARNING("DT_STRSZ not found in %s", elf_name(elf));
+        return NULL;
+    }
+
+    return elf_file_open(elf, strsz_offset, strtab_offset);
+}
+
+elf_file_t *library_ph_open(elf_t *elf, library_section_t section) {
+    const program_header_t *ph = elf_program_header_get(elf, p_type_dynamic);
+    if (!ph) {
+        TRACE_WARNING("DYNAMIC program header not found in %s", elf_name(elf));
+        return NULL;
+    }
+    elf_file_t *dynamic = elf_program_open(elf, ph);
+    elf_file_t *file = NULL;
+
+    switch (section) {
+        case library_section_symtab:
+        //case library_section_dynsym:
+            file = library_ph_open_symtab(elf, dynamic);
+            break;
+        case library_section_strtab:
+        //case library_section_dynstr:
+            file = library_ph_open_strtab(elf, dynamic);
+            break;
+        case library_section_rela_dyn:
+            file = library_ph_open_rela(elf, dynamic);
+            break;
+        case library_section_rel_dyn:
+            file = library_ph_open_rel(elf, dynamic);
+            break;
+        default:
+            //printf("section %d is not handled by %s\n", section, elf_name(elf));
+            break;
+    }
+
+    elf_file_close(dynamic);
+
+    return file;
+}
+
 elf_file_t *library_get_elf_section(library_t *library, library_section_t section) {
     static const char *names[] = {
         [library_section_dynsym] = ".dynsym",
@@ -519,6 +681,9 @@ elf_file_t *library_get_elf_section(library_t *library, library_section_t sectio
 
     if (!library->files[section]) {
         library->files[section] = elf_section_open_from_name(library->elf, names[section]);
+    }
+    if (!library->files[section]) {
+        library->files[section] = library_ph_open(library->elf, section);
     }
 
     return library->files[section];

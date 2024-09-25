@@ -187,6 +187,7 @@ const elf_header_t *elf_header(elf_t *elf);
 const program_header_t *elf_program_header_first(elf_t *elf);
 const program_header_t *elf_program_header_next(elf_t *elf, const program_header_t *program);
 const program_header_t *elf_program_header_executable(elf_t *elf);
+const program_header_t *elf_program_header_get(elf_t *elf, p_type_t type);
 
 /** Get ELF Section Header by name */
 const section_header_t *elf_section_header_get(elf_t *elf, const char *name);

@@ -104,12 +104,17 @@ static bool rel_read(elf_t *elf, elf_file_t *rela_file, elf_file_t *symtab, elf_
 
 /* https://refspecs.linuxbase.org/elf/gabi4+/ch4.reloc.html */
 bool elf_relocate_read(elf_t *elf, elf_file_t *rela_file, elf_file_t *symtab, elf_file_t *strtab, elf_relocate_handler_t handler, void *userdata) {
+    sh_type_t type = sh_type_rela;
     const section_header_t *hdr = NULL;
 
     hdr = elf_file_section(rela_file);
     elf_file_seek(rela_file, 0);
 
-    switch (hdr->sh_type) {
+    if (hdr) {
+        type = hdr->sh_type;
+    }
+
+    switch (type) {
         case sh_type_rela:
             return rela_read(elf, rela_file, symtab, strtab, handler, userdata);
         case sh_type_rel:

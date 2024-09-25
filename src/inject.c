@@ -71,11 +71,17 @@ static int64_t library_get_rela_offset(library_t *target, const char *fname) {
 
     if (!rela_plt) {
         rela_plt = library_get_elf_section(target, library_section_rel_plt);
+    }
+    if (!rela_dyn) {
         rela_dyn = library_get_elf_section(target, library_section_rel_dyn);
     }
     if (!rela_plt && !rela_dyn) {
         CONSOLE("  - No relocation address section in %s", library_name(target));
         return -ENOTSUP;
+    }
+    if (!dynsym || !dynstr) {
+        dynsym = library_get_elf_section(target, library_section_symtab);
+        dynstr = library_get_elf_section(target, library_section_strtab);
     }
     if (!dynsym || !dynstr) {
         TRACE_ERROR("Failed to open .dynsym and .dynstr sections for %s", library_name(target));

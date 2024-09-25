@@ -105,6 +105,8 @@ elf_sym_t elf_sym_from_name(elf_file_t *symtab, elf_file_t *strtab, const char *
 
     elf_file_seek(symtab, 0);
 
+    //printf("elf_sym_from_name(%s)\n", name);
+    //size_t i =0;
     do {
         const char *symname = NULL;
 
@@ -119,6 +121,9 @@ elf_sym_t elf_sym_from_name(elf_file_t *symtab, elf_file_t *strtab, const char *
             default:
                 break;
         }
+
+        //printf(" %zu: 0x%zx=%s\n", i, sym.st_value, symname?symname:"");
+        //i+=1;
 
         if (symname && !strcmp(symname, name)) {
             result.name = symname;
