@@ -17,6 +17,7 @@
  */
 
 #define TRACE_ZONE TRACE_ZONE_COREDUMP
+#define _LARGEFILE64_SOURCE
 #include <sys/procfs.h>
 #include <sys/types.h>
 #include "elf.h"

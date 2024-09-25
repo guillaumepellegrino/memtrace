@@ -1,9 +1,10 @@
+#define _LARGEFILE64_SOURCE
 #include <stddef.h>
 #include <stdbool.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <wait.h>
+#include <sys/wait.h>
 #include "breakpoint.h"
 #include "threads.h"
 #include "evlp.h"

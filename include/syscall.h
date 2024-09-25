@@ -46,15 +46,8 @@ extern const syscall_table_t syscall_table[];
 
 bool syscall_initialize(syscall_ctx_t *ctx, int pid, libraries_t *libraries);
 void syscall_cleanup(syscall_ctx_t *ctx);
-bool syscall_resume_until(const syscall_ctx_t *ctx, cpu_registers_t *regs, enum __ptrace_request ptrace_req);
-
-static inline bool syscall_resume_until_syscall(const syscall_ctx_t *ctx, cpu_registers_t *regs) {
-    return syscall_resume_until(ctx, regs, PTRACE_SYSCALL);
-}
-
-static inline bool syscall_resume_until_interrupt(const syscall_ctx_t *ctx, cpu_registers_t *regs) {
-    return syscall_resume_until(ctx, regs, PTRACE_CONT);
-}
+bool syscall_resume_until_syscall(const syscall_ctx_t *ctx, cpu_registers_t *regs);
+bool syscall_resume_until_interrupt(const syscall_ctx_t *ctx, cpu_registers_t *regs);
 void TRACE_CPUREG(int pid, const char *fmt);
 
 

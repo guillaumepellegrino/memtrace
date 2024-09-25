@@ -25,7 +25,7 @@
 #include <stdio.h>
 #include <fcntl.h>
 #include <pthread.h>
-#include <sys/signal.h>
+#include <signal.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/stat.h>

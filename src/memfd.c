@@ -16,6 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#define _LARGEFILE64_SOURCE
 #include <assert.h>
 #include <errno.h>
 #include <stdbool.h>

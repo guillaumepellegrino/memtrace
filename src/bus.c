@@ -293,7 +293,7 @@ static bool bus_mcast_read(int mcast, mcast_msg_t *msg) {
     memset(msg, 0, sizeof(*msg));
 
     msg->sockaddrlen = sizeof(msg->sockaddr);
-    if ((len = recvfrom(mcast, buff, sizeof(buff), 0, &msg->sockaddr, &msg->sockaddrlen)) <= 0) {
+    if ((len = recvfrom(mcast, buff, sizeof(buff), 0, (struct sockaddr *) &msg->sockaddr, &msg->sockaddrlen)) <= 0) {
         TRACE_ERROR("Failed to read multicast message: %m");
         return false;
     }

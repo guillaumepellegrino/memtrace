@@ -792,6 +792,27 @@ error:
     return rt;
 }
 
+static bool update_memtrace_hooks(int pid, const char *libname) {
+    bool rt = false;
+    injecter_t *injecter = NULL;
+
+    if (!(injecter = injecter_create(pid))) {
+        TRACE_ERROR("Failed to create code injecter");
+        goto error;
+    }
+    if (!injecter_setup_memtrace_hooks(injecter)) {
+        TRACE_ERROR("Failed to setup memtrace functions hooks inside pid %d", libname, pid);
+        goto error;
+    }
+    rt = true;
+
+error:
+    if (injecter) {
+        injecter_destroy(injecter);
+    }
+    return rt;
+}
+
 static int memtrace_call_function(int pid, const char *function, int argc, char *argv[]) {
     int rt = 1;
     injecter_t *injecter = NULL;
@@ -950,7 +971,7 @@ static void version() {
 }
 
 int main(int argc, char *argv[]) {
-    const char *short_options = "+p:L:C:mc:l:x:e:f:s:tdhv";
+    const char *short_options = "+p:L:C:mc:l:x:e:f:s:tudhv";
     const struct option long_options[] = {
         {"pid",         required_argument,  0, 'p'},
         {"library",     required_argument,  0, 'L'},
@@ -975,6 +996,7 @@ int main(int argc, char *argv[]) {
     const char *port = "3002";
     bool client = false;
     bool multicast = false;
+    bool update_hooks = false;
     int memtrace_server_pid = -1;
     memtrace_t memtrace = {
         .stdin_handler = {.fn = stdin_handler},
@@ -1018,6 +1040,9 @@ int main(int argc, char *argv[]) {
                 break;
             case 'e':
                 return elf_dump(optarg);
+            case 'u':
+                update_hooks = true;
+                break;
             case 'f':
                 if (memtrace.pid <= 0) {
                     CONSOLE("PID not provided");
@@ -1094,6 +1119,10 @@ int main(int argc, char *argv[]) {
             CONSOLE("Failed to inject memtrace agent in target process");
             goto error;
         }
+    }
+    else if (update_hooks) {
+        CONSOLE("Update memtrace hooks");
+        update_memtrace_hooks(memtrace.pid, libname);
     }
     else {
         CONSOLE("Memtrace agent is already injected in target process");

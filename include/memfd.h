@@ -19,6 +19,10 @@
 #ifndef MEMFD_H
 #define MEMFD_H
 
+#ifndef off64_t
+#define off64_t uint64_t
+#endif
+
 /**
  * Open a file descriptor pointing on pid's memory
  * for read and write access.

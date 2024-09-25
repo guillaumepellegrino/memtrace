@@ -125,7 +125,7 @@ void TRACE_CPUREG(int pid, const char *fmt) {
 }
 
 /** Resume process until it is interrupted by specified ptrace request */
-bool syscall_resume_until(const syscall_ctx_t *ctx, cpu_registers_t *regs, enum __ptrace_request ptrace_req) {
+static bool syscall_resume_until(const syscall_ctx_t *ctx, cpu_registers_t *regs, int ptrace_req) {
     const struct timespec timeout = {.tv_sec = 10};
     cpu_registers_t local = {0};
     int status = 0;
@@ -212,9 +212,21 @@ error:
     return false;
 }
 
+bool syscall_resume_until_syscall(const syscall_ctx_t *ctx, cpu_registers_t *regs) {
+    return syscall_resume_until(ctx, regs, PTRACE_SYSCALL);
+}
+
+bool syscall_resume_until_interrupt(const syscall_ctx_t *ctx, cpu_registers_t *regs) {
+    return syscall_resume_until(ctx, regs, PTRACE_CONT);
+}
+
+bool syscall_resume_until_singlestep(const syscall_ctx_t *ctx, cpu_registers_t *regs) {
+    return syscall_resume_until(ctx, regs, PTRACE_SINGLESTEP);
+}
+
 /** Run process step by step */
 void stepbystep(syscall_ctx_t *ctx) {
-    while(syscall_resume_until(ctx, NULL, PTRACE_SINGLESTEP)) {
+    while(syscall_resume_until_singlestep(ctx, NULL)) {
         TRACE_CPUREG(ctx->pid, "SINGLESTEP");
         cpu_registers_t regs = {0};
         cpu_registers_get(&regs, ctx->pid);
