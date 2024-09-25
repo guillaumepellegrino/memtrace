@@ -54,6 +54,7 @@ struct _injecter {
     DIR *threads; /** Threads of the target process */
     syscall_ctx_t syscall; /** Context to perform syscall or function call */
     libraries_t *libraries; /** Shared libraries from the target process */
+    library_t *libc;
     library_t *inject_lib; /** Injected library */
     int replaced_functions; /** Count of replaced functions */
 };
@@ -107,7 +108,14 @@ uint64_t library_get_elf_section_addr(library_t *library, elf_t *elf, const sect
 }
 
 static size_t library_seek_got_addr(injecter_t *injecter, library_t *target, const char *fname) {
-    library_symbol_t sym = libraries_find_symbol(injecter->libraries, fname);
+    if (!injecter->libc) {
+        TRACE_ERROR("libc.so not found");
+        return 0;
+    }
+    library_symbol_t sym = library_find_symbol(injecter->libc, fname);
+    if (!sym.name) {
+        sym = libraries_find_symbol(injecter->libraries, fname);
+    }
     if (!sym.name) {
         TRACE_ERROR("%s() not found in target process", fname);
         return 0;
@@ -121,12 +129,12 @@ static size_t library_seek_got_addr(injecter_t *injecter, library_t *target, con
     }
     CONSOLE(".got section offset: 0x%"PRIx64, got->sh_addr);
     uint64_t got_addr = library_get_elf_section_addr(target, elf, got);
-    CONSOLE(".got section : 0x%"PRIx64" : 0x%"PRIx64, got_addr, got_addr + got->sh_size);
+    CONSOLE(".got section : [0x%"PRIx64", 0x%"PRIx64"]", got_addr, got_addr + got->sh_size);
 
     size_t addr = injecter_seek_addr(injecter, (void *)(size_t) got_addr, (void*)(size_t)(got_addr + got->sh_size), sym.addr);
     if (!addr) {
-        CONSOLE("  - %s() not found in .got section at [0x%"PRIx64", 0x%"PRIx64"]",
-            fname, got_addr, (got_addr + got->sh_size));
+        CONSOLE("  - %s()=0x%"PRIx64" not found in .got section at [0x%"PRIx64", 0x%"PRIx64"]",
+            fname, sym.addr, got_addr, (got_addr + got->sh_size));
     }
     return addr;
 }
@@ -189,6 +197,7 @@ injecter_t *injecter_create(int pid) {
         TRACE_ERROR("Failed to open libraries");
         goto error;
     }
+    injecter->libc = libraries_find_by_name(injecter->libraries, "libc.so");
     if (!syscall_initialize(&injecter->syscall, pid, injecter->libraries)) {
         TRACE_ERROR("Failed to init syscall");
         goto error;
@@ -526,6 +535,7 @@ bool injecter_load_library(injecter_t *injecter, const char *libname) {
     // verify library is well loaded
     libraries_update(injecter->libraries);
     injecter->inject_lib = libraries_find_by_name(injecter->libraries, libname);
+    injecter->libc = libraries_find_by_name(injecter->libraries, "libc.so");
     if (!injecter->inject_lib) {
         TRACE_ERROR("Failed to find %s in target process mapping", libname);
         libraries_print(injecter->libraries, stdout);
