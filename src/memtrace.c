@@ -912,6 +912,24 @@ static int elf_dump(const char *name) {
     return 0;
 }
 
+static int elf_dump_relocation(int pid) {
+    libraries_t *libraries = NULL;
+    size_t i = 0;
+
+    if (!(libraries = libraries_create(pid))) {
+        CONSOLE("Failed to open libraries");
+        return 1;
+    }
+
+    for (i = 0; i < libraries_count(libraries); i++) {
+        library_t *library = libraries_get(libraries, i);
+        library_dump_elf_relocation(library, stdout);
+    }
+
+    libraries_destroy(libraries);
+    return 0;
+}
+
 // Find where is located libmemtrace-agent.so
 static char *find_libmemtrace_agent() {
     struct stat stbuf;
@@ -971,7 +989,7 @@ static void version() {
 }
 
 int main(int argc, char *argv[]) {
-    const char *short_options = "+p:L:C:mc:l:x:e:f:s:tudhv";
+    const char *short_options = "+p:L:C:mc:l:x:e:f:s:rtudhv";
     const struct option long_options[] = {
         {"pid",         required_argument,  0, 'p'},
         {"library",     required_argument,  0, 'L'},
@@ -981,6 +999,7 @@ int main(int argc, char *argv[]) {
         {"listen",      required_argument,  0, 'l'},
         {"command",     required_argument,  0, 'x'},
         {"elfdump",     required_argument,  0, 'e'},
+        {"elfrelocation",no_argument,       0, 'r'},
         {"call",        required_argument,  0, 'f'},
         {"syscall",     required_argument,  0, 's'},
         {"selftest",    no_argument,        0, 't'},
@@ -1040,6 +1059,8 @@ int main(int argc, char *argv[]) {
                 break;
             case 'e':
                 return elf_dump(optarg);
+            case 'r':
+                return elf_dump_relocation(memtrace.pid);
             case 'u':
                 update_hooks = true;
                 break;

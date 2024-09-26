@@ -62,42 +62,15 @@ struct _injecter {
 /**
  * Get Relocation Address (RELA) offset for the specified function
  */
-static int64_t library_get_rela_offset(library_t *target, const char *fname) {
+static int64_t library_get_relocation_offset(library_t *lib, const char *symname) {
     elf_relocate_t rela;
-    elf_file_t *rela_plt = library_get_elf_section(target, library_section_rela_plt);
-    elf_file_t *rela_dyn = library_get_elf_section(target, library_section_rela_dyn);
-    elf_file_t *dynsym = library_get_elf_section(target, library_section_dynsym);
-    elf_file_t *dynstr = library_get_elf_section(target, library_section_dynstr);
 
-    if (!rela_plt) {
-        rela_plt = library_get_elf_section(target, library_section_rel_plt);
-    }
-    if (!rela_dyn) {
-        rela_dyn = library_get_elf_section(target, library_section_rel_dyn);
-    }
-    if (!rela_plt && !rela_dyn) {
-        CONSOLE("  - No relocation address section in %s", library_name(target));
-        return -ENOTSUP;
-    }
-    if (!dynsym || !dynstr) {
-        dynsym = library_get_elf_section(target, library_section_symtab);
-        dynstr = library_get_elf_section(target, library_section_strtab);
-    }
-    if (!dynsym || !dynstr) {
-        TRACE_ERROR("Failed to open .dynsym and .dynstr sections for %s", library_name(target));
-        return -ENOTSUP;
+    if (!library_get_function_relocation(lib, symname, &rela)) {
+        CONSOLE("  - No relocation address for %s() in %s", symname, library_name(lib));
+        return -ENOENT;
     }
 
-    if (rela_plt && elf_relocate_find_by_name(library_elf(target), rela_plt, dynsym, dynstr, fname, &rela)) {
-        return rela.offset;
-    }
-    if (rela_dyn && elf_relocate_find_by_name(library_elf(target), rela_dyn, dynsym, dynstr, fname, &rela)) {
-        return rela.offset;
-    }
-
-    CONSOLE("  - No relocation address for %s()", fname);
-
-    return -ENOENT;
+    return rela.offset;
 }
 
 size_t injecter_seek_addr(injecter_t *injecter, void *begin, void *end, size_t addr);
@@ -156,7 +129,7 @@ static bool library_replace_function(injecter_t *injecter, library_t *target, co
         return false;
     }
 
-    ssize_t rela_fn_offset = library_get_rela_offset(target, fname);
+    ssize_t rela_fn_offset = library_get_relocation_offset(target, fname);
     size_t rela_fn_addr = library_absolute_address(target, rela_fn_offset);
     if (rela_fn_offset < 0) {
             rela_fn_addr = library_seek_got_addr(injecter, target, fname);

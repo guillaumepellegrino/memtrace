@@ -21,6 +21,7 @@
 
 #include <stdio.h>
 #include "types.h"
+#include "elf_relocate.h"
 
 typedef enum {
     library_section_dynsym,
@@ -99,5 +100,11 @@ size_t library_absolute_address(const library_t *library, size_t address);
 
 /** Return the symbol corresponding to this name */
 library_symbol_t library_find_symbol(library_t *library, const char *symname);
+
+/** Return ELF relocation associated to this symbol name */
+bool library_get_function_relocation(library_t *library, const char *symname, elf_relocate_t *rela);
+
+/** Dump ELF relocations from this library */
+bool library_dump_elf_relocation(library_t *library, FILE *fp);
 
 #endif
