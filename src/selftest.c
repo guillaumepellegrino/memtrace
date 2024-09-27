@@ -75,6 +75,11 @@ static bool selftest_victim_main() {
     uint32_t *ptr = calloc(4, 1);
     useptr(ptr);
     free(ptr);
+    ptr = malloc(8);
+    useptr(ptr);
+    ptr = realloc(ptr, 16);
+    useptr(ptr);
+    free(ptr);
 
     printf("started\n");
     fflush(stdout);
