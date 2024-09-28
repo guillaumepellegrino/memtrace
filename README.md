@@ -11,7 +11,7 @@ It's main advantages are:
 - It can be attached to a process already running
 - Cross-debugging (No debug symbols needed on the target process)
 - gdb support for inspecting memory allocation context
-- Supported Platforms: x64, arm, aarch64 (arm64)
+- Supported Platforms: x64, arm, aarch64 (arm64) and MIPS
 
 ## 2 Compilation
 ```
@@ -383,7 +383,9 @@ sequenceDiagram
 -- the coredump(s) of the context(s) with the highest memory usage.
 -- maybe some details about the tracked process and the OS version
 -- maybe something to plot the memory usage with dataviewer ?
+-- maybe make it configurable. At compile time, specify the script which should
+   be run to collect system information.
 -- the likelyhood of a memory leak (yes or not, percentage ?)
 -- => autoreport --file report.tar.gz --duration TIME --maxcores 3 --coretimeout TIMEOUT
 -- => it may be useful for support team which could simply run this command and provide the detailed report to the DEV team. It may even allow to automate things.
-
+- An Unique ID should be provided associated to each memory context
