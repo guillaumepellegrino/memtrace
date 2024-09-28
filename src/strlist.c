@@ -48,7 +48,6 @@ void strlist_insert(strlist_t *strlist, const char *str) {
     assert((strit->value = strdup(str)));
 }
 
-#include "log.h"
 void strlist_append(strlist_t *strlist, const char *str) {
     strlist_iterator_t *strit = NULL;
 
@@ -90,4 +89,15 @@ strlist_iterator_t *strlist_iterator_prev(strlist_iterator_t *strit) {
 const char *strlist_iterator_value(strlist_iterator_t *strit) {
     assert(strit);
     return strit->value;
+}
+
+bool strlist_contains(strlist_t *strlist, const char *str) {
+    strlist_iterator_t *it;
+    strlist_for_each(it, strlist) {
+        if (!strcmp(str, it->value)) {
+            return true;
+        }
+    }
+
+    return false;
 }

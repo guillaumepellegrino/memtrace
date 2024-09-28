@@ -42,5 +42,6 @@ DIR *threads_attach(int pid);
 void threads_detach(DIR *threads);
 bool threads_interrupt_except(DIR *threads, int exception);
 bool threads_continue(DIR *threads);
+DIR *threads_refresh(DIR *threads);
 
 #endif

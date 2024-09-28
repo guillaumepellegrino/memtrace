@@ -91,7 +91,7 @@ void process_stop(process_t *process) {
     assert(process);
     if (process->pid > 0) {
         kill(process->pid, SIGKILL);
-        waitpid(process->pid, NULL, 0);
+        waitpid(process->pid, NULL, __WALL);
         process->pid = 0;
     }
     if (process->input) {

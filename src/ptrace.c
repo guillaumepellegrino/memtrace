@@ -34,7 +34,7 @@
 #include "log.h"
 
 bool ptrace_wait(pid_t pid, int *status) {
-    if (waitpid(pid, status, 0) < 0) {
+    if (waitpid(pid, status, __WALL) < 0) {
         if (errno != EINTR) {
             TRACE_ERROR("waitpid(%d) failed: %m", pid);
         }

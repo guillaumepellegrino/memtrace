@@ -48,5 +48,6 @@ strlist_iterator_t *strlist_last(strlist_t *strlist);
 strlist_iterator_t *strlist_iterator_next(strlist_iterator_t *strit);
 strlist_iterator_t *strlist_iterator_prev(strlist_iterator_t *strit);
 const char *strlist_iterator_value(strlist_iterator_t *strit);
+bool strlist_contains(strlist_t *strlist, const char *str);
 
 #endif

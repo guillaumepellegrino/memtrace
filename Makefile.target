@@ -49,10 +49,10 @@ install:
 $(O)/:
 	mkdir -p $(O)/
 
-$(O)/memtrace: $(addprefix $(O)/,memtrace.o threads.o evlp.o bus.o net.o strlist.o strmap.o inject.o syscall.o syscall_table.o ptrace.o hashmap.o libraries.o log.o elf.o elf_file.o elf_sym.o elf_relocate.o elf_dynamic.o console.o coredump.o breakpoint.o memfd.o selftest.o process.o $(ARCH_OBJECT))
+$(O)/memtrace: $(addprefix $(O)/,memtrace.o threads.o evlp.o bus.o net.o strlist.o strmap.o inject.o syscall.o syscall_table.o ptrace.o hashmap.o libraries.o log.o elf.o elf_file.o elf_sym.o elf_relocate.o elf_dynamic.o console.o coredump.o breakpoint.o memfd.o selftest.o process.o symcache.o $(ARCH_OBJECT))
 	$(CC) -o $(@) $(^) $(LDFLAGS)
 
-$(O)/libmemtrace-agent.so: $(addprefix $(O)/,agent.o agent_hooks.o evlp.o bus.o net.o strlist.o strmap.o inject.o syscall.o syscall_table.o ptrace.o hashmap.o libraries.o log.o elf.o elf_file.o elf_sym.o elf_relocate.o elf_dynamic.o console.o $(ARCH_OBJECT))
+$(O)/libmemtrace-agent.so: $(addprefix $(O)/,agent.o agent_hooks.o evlp.o bus.o net.o strlist.o strmap.o inject.o syscall.o syscall_table.o ptrace.o hashmap.o libraries.o log.o elf.o elf_file.o elf_sym.o elf_relocate.o elf_dynamic.o console.o symcache.o $(ARCH_OBJECT))
 	$(CC) -shared -o $(@) $(^) $(LDFLAGS)
 
 $(O)/dummy: $(O)/dummy.o

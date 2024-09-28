@@ -4,6 +4,9 @@
 #include <sys/stat.h>
 #include <sys/ptrace.h>
 #include <sys/wait.h>
+#include <signal.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 
 DIR *process_threads(int pid) {
     char task_path[128];
@@ -67,9 +70,9 @@ static bool thread_attach(int tid) {
         TRACE_ERROR("ptrace(INTERRUPT, %d, 0, 0) failed: %m", tid);
         return false;
     }
-    if (waitpid(tid, &status, 0) < 0) {
+    if (waitpid(tid, &status, __WALL) < 0) {
         if (errno == ECHILD) {
-            TRACE_ERROR("waitpid(%d) warning: %m", tid);
+            TRACE_WARNING("waitpid(%d) warning: %m", tid);
         }
         else {
             TRACE_ERROR("waitpid(%d) failed: %m", tid);
@@ -89,17 +92,30 @@ DIR *threads_attach(int pid) {
     int tid = 0;
 
     if (!(threads = process_threads(pid))) {
-        CONSOLE("Failed to get thread list from pid %d", pid);
+        TRACE_ERROR("Failed to get thread list from pid %d", pid);
         return NULL;
     }
     threads_for_each(tid, threads) {
+        TRACE_LOG("ptrace(SEIZE, %d)", tid);
         if (!thread_attach(tid)) {
             TRACE_ERROR("Failed to attach to thread %d", tid);
-            closedir(threads);
+            threads_detach(threads);
             return NULL;
         }
         CONSOLE("memtrace attached to pid:%d/tid:%d", pid, tid);
     }
+    return threads;
+}
+
+DIR *threads_refresh(DIR *threads) {
+    int pid = 0;
+
+    if (threads) {
+        pid = threads_first(threads);
+        closedir(threads);
+        threads = process_threads(pid);
+    }
+
     return threads;
 }
 
@@ -108,8 +124,16 @@ void threads_detach(DIR *threads) {
 
     if (threads) {
         threads_for_each(tid, threads) {
+            if (ptrace(PTRACE_INTERRUPT, tid, NULL, NULL) == 0) {
+                TRACE_LOG("ptrace(INTERRUPT, %d)", tid);
+                alarm(1);
+                waitpid(tid, NULL, __WALL);
+                alarm(0);
+            }
+
+            TRACE_LOG("ptrace(DETACH, %d)", tid);
             if (ptrace(PTRACE_DETACH, tid, NULL, NULL) != 0) {
-                TRACE_LOG("ptrace(DETACH, %d) failed: %m", tid);
+                TRACE_WARNING("ptrace(DETACH) warning: %m", tid);
             }
         }
         closedir(threads);
@@ -129,7 +153,7 @@ bool threads_interrupt_except(DIR *threads, int exception) {
             TRACE_ERROR("ptrace(INTERRUPT, %d) failed: %m", tid);
             rt = false;
         }
-        if (waitpid(tid, &status, 0) < 0) {
+        if (waitpid(tid, &status, __WALL) < 0) {
             if (errno != ECHILD) {
                 TRACE_ERROR("waitpid(%d) failed: %m", tid);
                 return false;

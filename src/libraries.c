@@ -30,6 +30,7 @@
 #include "elf_file.h"
 #include "elf_sym.h"
 #include "elf_dynamic.h"
+#include "symcache.h"
 #include "list.h"
 #include "arch.h"
 #include "log.h"
@@ -40,6 +41,7 @@ struct _libraries {
     int pid;
     size_t count;
     library_t *list;
+    symcache_t cache;
     list_t threads;
 };
 
@@ -47,6 +49,8 @@ struct _library {
     elf_t *elf;
     char *name;
     elf_file_t *files[library_section_end];
+    bool files_not_found[library_section_end];
+    symcache_t cache;
     void *begin;
     void *end;
     size_t offset;
@@ -216,10 +220,31 @@ libraries_t *libraries_create(int pid) {
     return libraries;
 }
 
+static void libraries_reset(libraries_t *libraries) {
+    size_t i = 0;
+    size_t j = 0;
+
+    symcache_cleanup(&libraries->cache);
+    for (i = 0; i < libraries->count; i++) {
+        library_t *library = &libraries->list[i];
+        symcache_cleanup(&library->cache);
+        for (j = 0; j < library_section_end; j++) {
+            elf_file_close(library->files[j]);
+        }
+        elf_close(library->elf);
+        free(library->name);
+
+    }
+    free(libraries->list);
+    libraries->list = NULL;
+    libraries->count = 0;
+}
+
 void libraries_update(libraries_t *libraries) {
     char buff[4096];
 
     assert(libraries);
+    libraries_reset(libraries);
     snprintf(buff, sizeof(buff), "/proc/%d/maps", libraries->pid);
 
     //copy file in buffer
@@ -270,21 +295,9 @@ void libraries_update(libraries_t *libraries) {
 }
 
 void libraries_destroy(libraries_t *libraries) {
-    size_t i = 0;
-    size_t j = 0;
-
     assert(libraries);
 
-    for (i = 0; i < libraries->count; i++) {
-        library_t *library = &libraries->list[i];
-        for (j = 0; j < library_section_end; j++) {
-            elf_file_close(library->files[j]);
-        }
-        elf_close(library->elf);
-        free(library->name);
-
-    }
-    free(libraries->list);
+    libraries_reset(libraries);
     threads_cleanup(&libraries->threads);
     free(libraries);
 }
@@ -337,6 +350,13 @@ library_symbol_t library_find_symbol(library_t *library, const char *symname) {
     elf_file_t *symtab = library_get_elf_section(library, library_section_symtab);
     elf_file_t *strtab = library_get_elf_section(library, library_section_strtab);
     elf_sym_t sym = {0};
+    library_symbol_t *cached = NULL;
+
+    cached = symcache_find(&library->cache, symname);
+    if (cached) {
+        TRACE_WARNING("libraries_find_symbol(%s) -> cached", symname);
+        return *cached;
+    }
 
     if (dynsym && dynstr) {
         sym = elf_sym_from_name(dynsym, dynstr, symname);
@@ -361,21 +381,36 @@ library_symbol_t library_find_symbol(library_t *library, const char *symname) {
         }
     }
 
+    symcache_push_null(&library->cache, symname);
     return (library_symbol_t) {0};
 }
 
 library_symbol_t libraries_find_symbol(libraries_t *libraries, const char *symname) {
     assert(libraries);
     size_t i = 0;
+    library_symbol_t *cached = NULL;
+
+    TRACE_WARNING("libraries_find_symbol(%s)", symname);
+
+    cached = symcache_find(&libraries->cache, symname);
+    if (cached) {
+        TRACE_WARNING("libraries_find_symbol(%s) -> cached", symname);
+        return *cached;
+    }
 
     for (i = 0; i < libraries_count(libraries); i++) {
         library_t *library = libraries_get(libraries, i);
         library_symbol_t symbol = library_find_symbol(library, symname);
         if (symbol.name) {
+            symcache_push(&libraries->cache, &symbol);
+            TRACE_WARNING("libraries_find_symbol(%s) -> done", symname);
             return symbol;
         }
     }
 
+    TRACE_WARNING("libraries_find_symbol(%s) -> NULL", symname);
+
+    symcache_push_null(&libraries->cache, symname);
     return (library_symbol_t) {0};
 }
 
@@ -550,11 +585,17 @@ elf_file_t *library_get_elf_section(library_t *library, library_section_t sectio
         return NULL;
     }
 
+    if (library->files_not_found[section]) {
+        return NULL;
+    }
     if (!library->files[section]) {
         library->files[section] = elf_section_open_from_name(library->elf, names[section]);
     }
     if (!library->files[section]) {
         library->files[section] = library_elf_dynamic_open(library->elf, section);
+    }
+    if (!library->files[section]) {
+        library->files_not_found[section] = true;
     }
 
     return library->files[section];

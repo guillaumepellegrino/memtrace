@@ -57,6 +57,7 @@ struct _injecter {
     library_t *libc;
     library_t *inject_lib; /** Injected library */
     int replaced_functions; /** Count of replaced functions */
+    int relocation_found; /** Count of relocation found */
 };
 
 /**
@@ -141,6 +142,7 @@ static bool library_replace_function(injecter_t *injecter, library_t *target, co
     }
     else {
         CONSOLE("  - Relocation Address for %s() is 0x%zx (+0x%zx)", fname, rela_fn_addr, rela_fn_offset);
+        injecter->relocation_found++;
     }
 
 
@@ -169,7 +171,7 @@ injecter_t *injecter_create(int pid) {
     injecter->pid = pid;
 
     if (!(injecter->threads = threads_attach(pid))) {
-        CONSOLE("Failed to get thread list from pid %d", pid);
+        TRACE_ERROR("Failed to get attach to threads from pid %d", pid);
         goto error;
     }
     if (!(injecter->libraries = libraries_create(injecter->pid))) {
@@ -470,6 +472,15 @@ void injecter_find_function(injecter_t *injecter) {
     fclose(fp);
 }
 
+bool injecter_set_library(injecter_t *injecter, const char *libname) {
+    assert(injecter);
+    assert(libname);
+
+    injecter->inject_lib = libraries_find_by_name(injecter->libraries, libname);
+
+    return injecter->inject_lib;
+}
+
 bool injecter_load_library(injecter_t *injecter, const char *libname) {
     char flags[16];
     snprintf(flags, sizeof(flags), "%d", RTLD_LAZY);
@@ -561,6 +572,7 @@ bool injecter_setup_memtrace_hooks(injecter_t *injecter) {
 
     CONSOLE("[Replacing functions]");
     injecter->replaced_functions = 0;
+    injecter->relocation_found = 0;
     char *saveptr1 = NULL;
     for(char *hook = strtok_r(hooks, ",", &saveptr1); hook; hook = strtok_r(NULL, ",", &saveptr1)) {
         char *saveptr2 = NULL;
@@ -582,5 +594,9 @@ error:
     elf_file_close(hooks_section);
     free(hooks);
     return ret;
+}
+
+int injecter_relocation_found(injecter_t *injecter) {
+    return injecter->relocation_found;
 }
 

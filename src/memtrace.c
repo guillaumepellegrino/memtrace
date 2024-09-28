@@ -767,8 +767,74 @@ error:
     return rt;
 }
 
+static bool update_memtrace_hooks(int pid, const char *libname) {
+    bool rt = false;
+    injecter_t *injecter = NULL;
+
+    TRACE_WARNING("Updating memtrace hooks");
+    if (!(injecter = injecter_create(pid))) {
+        TRACE_ERROR("Failed to create code injecter");
+        goto error;
+    }
+    if (!injecter_set_library(injecter, libname)) {
+        TRACE_ERROR("Failed to find %s inside pid %d", libname, pid);
+        goto error;
+    }
+    if (!injecter_setup_memtrace_hooks(injecter)) {
+        TRACE_ERROR("Failed to setup memtrace functions hooks inside pid %d", libname, pid);
+    }
+    TRACE_WARNING("Updating memtrace hooks - done");
+    rt = true;
+
+error:
+    if (injecter) {
+        injecter_destroy(injecter);
+    }
+    return rt;
+}
+
+/**
+ * On some platforms (seen on MIPS), we simply don't have a RELOCATION Table in ELF file.
+ * We have to rely on the GOT Table to setup hooks.
+ * However, this table is filled progressively. We don't have the guarantee to
+ * find all the functions on which we want to set hooks the first time memtrace is attached.
+ *
+ * In this case, the workaround is to periodically update memtrace hooks.
+ */
+void start_update_memtrace_hooks_task(int pid, const char *libname) {
+    int time = 0;
+    int duration = 20;
+
+    if (fork() != 0) {
+        return;
+    }
+
+    if (daemon(1, 0) != 0) {
+        TRACE_ERROR("Failed to daemonize task");
+        exit(1);
+    }
+
+    while (true) {
+        sleep(1);
+        if (kill(pid, 0) != 0) {
+            TRACE_WARNING("Target process %d is no longer running", pid);
+            exit(0);
+        }
+        TRACE_WARNING("target is still running");
+        time += 1;
+        if (time < duration) {
+            continue;
+        }
+
+        update_memtrace_hooks(pid, libname);
+        duration *= 2;
+        duration = (duration > 3600) ? 3600 : duration;
+    }
+}
+
 static bool inject_memtrace_agent(int pid, const char *libname) {
     bool rt = false;
+    bool no_relocation = false;
     injecter_t *injecter = NULL;
 
     if (!(injecter = injecter_create(pid))) {
@@ -783,32 +849,22 @@ static bool inject_memtrace_agent(int pid, const char *libname) {
         TRACE_ERROR("Failed to setup memtrace functions hooks inside pid %d", libname, pid);
         goto error;
     }
+    if (injecter_relocation_found(injecter) == 0) {
+        no_relocation = true;
+        CONSOLE("WARNING: This program has no relocation table");
+        CONSOLE("=> The .got section needs to be polled");
+        CONSOLE("=> Starting update metrace hooks background task");
+        CONSOLE("");
+    }
+
     rt = true;
 
 error:
     if (injecter) {
         injecter_destroy(injecter);
     }
-    return rt;
-}
-
-static bool update_memtrace_hooks(int pid, const char *libname) {
-    bool rt = false;
-    injecter_t *injecter = NULL;
-
-    if (!(injecter = injecter_create(pid))) {
-        TRACE_ERROR("Failed to create code injecter");
-        goto error;
-    }
-    if (!injecter_setup_memtrace_hooks(injecter)) {
-        TRACE_ERROR("Failed to setup memtrace functions hooks inside pid %d", libname, pid);
-        goto error;
-    }
-    rt = true;
-
-error:
-    if (injecter) {
-        injecter_destroy(injecter);
+    if (no_relocation) {
+        start_update_memtrace_hooks_task(pid, libname);
     }
     return rt;
 }
@@ -962,6 +1018,11 @@ static char *find_libmemtrace_agent() {
     return NULL;
 }
 
+/** SIGALRM signal handler */
+static void memtrace_syscall_timeout(int sig, siginfo_t *info, void *arg) {
+    TRACE_LOG("Syscall timeout");
+}
+
 static void help() {
     CONSOLE("Usage: memtrace [OPTION]..");
     CONSOLE("A cross-debugging tool to trace memory allocations for debugging memory leaks");
@@ -1027,6 +1088,12 @@ int main(int argc, char *argv[]) {
     setvbuf(stdin, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
+
+    struct sigaction action = {
+        .sa_sigaction = memtrace_syscall_timeout,
+        .sa_flags = SA_SIGINFO,
+    };
+    assert(sigaction(SIGALRM, &action, NULL) == 0);
 
     while ((opt = getopt_long(argc, argv, short_options, long_options, NULL)) != -1) {
         switch (opt) {
@@ -1143,7 +1210,10 @@ int main(int argc, char *argv[]) {
     }
     else if (update_hooks) {
         CONSOLE("Update memtrace hooks");
-        update_memtrace_hooks(memtrace.pid, libname);
+        if (update_memtrace_hooks(memtrace.pid, libname)) {
+            rt = 0;
+        }
+        goto error;
     }
     else {
         CONSOLE("Memtrace agent is already injected in target process");
@@ -1228,7 +1298,7 @@ error:
     }
     if (memtrace_server_pid > 0) {
         kill(memtrace_server_pid, SIGKILL);
-        waitpid(memtrace_server_pid, NULL, 0);
+        waitpid(memtrace_server_pid, NULL, __WALL);
     }
 
     return rt;

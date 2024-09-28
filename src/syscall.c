@@ -156,7 +156,7 @@ static bool syscall_resume_until(const syscall_ctx_t *ctx, cpu_registers_t *regs
             TRACE_ERROR("syscall execution timeout for %d: %m", ctx->pid);
             goto error;
         }
-        if (waitpid(ctx->pid, &status, 0) < 0) {
+        if (waitpid(ctx->pid, &status, __WALL) < 0) {
             TRACE_ERROR("waitpid(%d) failed: %m", ctx->pid);
             goto error;
         }
@@ -278,7 +278,7 @@ void syscall_cleanup(syscall_ctx_t *ctx) {
             goto error;
         }
         usleep(10*1000);
-        int pid = waitpid(ctx->pid, &status, WNOHANG);
+        int pid = waitpid(ctx->pid, &status, __WALL|WNOHANG);
         if (pid < 0) {
             TRACE_ERROR("waitpid(%d) failed: %m", ctx->pid);
             goto error;

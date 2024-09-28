@@ -37,13 +37,13 @@ typedef enum {
     library_section_end,
 } library_section_t;
 
-typedef struct {
+struct _library_symbol {
     const char *name;
     uint64_t offset;
     uint64_t addr;
     uint16_t section_index;
     library_t *library;
-} library_symbol_t;
+};
 
 /** Create/Destroy/Update the library list by reading /proc/self/maps */
 libraries_t *libraries_create(int pid);
