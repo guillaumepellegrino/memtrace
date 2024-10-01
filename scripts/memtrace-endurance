@@ -18,6 +18,7 @@
 
 
 ME="$0"
+ME_RPATH=$(realpath $ME)
 if [ -e /ext ]; then
     ROOTDIR=/ext
 else
@@ -181,8 +182,8 @@ start()
     echo "Archive $ARCHIVE succefully created"
     echo "Running memtrace-endurance as a daemon:"
     echo "  PIDFILE=$PIDFILE"
-    echo "  LOGFILE=/var/run/$BASENAME.log"
-    start-stop-daemon -S -p $PIDFILE -m -b -- $ME $SERVICE background
+    echo "  LOGFILE=/tmp/$BASENAME.log"
+    start-stop-daemon -S -p $PIDFILE -m -b -x $ME_RPATH -- $SERVICE background
     echo""
     echo "You can now, let run the endurance test for a few hours or a few days."
     echo "You can retrieve any time you want the endurance results in $ARCHIVE"
@@ -210,7 +211,7 @@ status()
     NC='\033[0m'
 
     echo -e "$PRPL[Last logs]$NC"
-    tail /var/run/$BASENAME.log
+    tail /tmp/$BASENAME.log
     echo -e "$PRPL[End of last logs]$NC"
     echo ""
 
@@ -287,7 +288,7 @@ if [ -z "$ARCHIVE" ]; then
 fi
 export BASENAME=$(basename $ARCHIVE .tar)
 if [ -z "$PIDFILE" ]; then
-    export PIDFILE=/var/run/$BASENAME.pid
+    export PIDFILE=/tmp/$BASENAME.pid
 fi
 if [ -z "$PID" ]; then
     export PID=$(pidof "$SERVICE")
@@ -306,7 +307,7 @@ elif [ -n "$do_start" ]; then
 elif [ -n "$do_status" ]; then
     status
 elif [ -n "$do_background" ]; then
-    background > /var/run/$BASENAME.log 2>&1
+    background > /tmp/$BASENAME.log 2>&1
 else
     usage
 fi
