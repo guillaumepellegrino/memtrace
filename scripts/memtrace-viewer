@@ -102,7 +102,7 @@ def extract_report(report_path, report_dir):
     print(f"Extracting {report_path} archive into {report_dir}")
     script = f"mkdir -p {report_dir};"
     script += f"tar --strip-components=1 -xf {report_path} -C {report_dir};"
-    script += f"gunzip {report_dir}/report/*.gz"
+    script += f"gunzip -f {report_dir}/report/*.gz"
     print(f"Run script: {script}")
     os.system(script)
 
@@ -126,7 +126,7 @@ def main():
     report_dir=report_path.replace(".tar", "")
     rootfs_debug=sys.argv[2:]
 
-    if report_path.find(".tar") and not os.path.isdir(report_dir):
+    if report_path.find(".tar"):
         extract_report(report_path, report_dir)
 
     print(f"Opening {report_dir} directory containing memtrace endurance report")

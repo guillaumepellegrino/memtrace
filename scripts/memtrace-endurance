@@ -135,7 +135,7 @@ create_tar_archive()
         filename=$(basename $file)
         cat "$file" > "$BASENAME/$filename" 2> /dev/null
     done
-    tar -cvf $ARCHIVE "$BASENAME/" || error "Failed to create $ARCHIVE"
+    tar -cf $ARCHIVE "$BASENAME/" || error "Failed to create $ARCHIVE"
     rm -rf "$BASENAME/"
 }
 
@@ -221,7 +221,7 @@ status()
     echo -e "$PRPL[End of last logs]$NC"
     echo ""
 
-    if [ -n $PID ] && [ -e /proc/$PID ]; then
+    if [ -n "$PID" ] && [ -e "/proc/$PID" ]; then
         echo -e "$GREEN[OK]$NC $SERVICE service is running"
     else
         echo -e "$RED[ERROR]$NC $SERVICE service is NOT running"

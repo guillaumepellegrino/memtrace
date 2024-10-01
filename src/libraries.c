@@ -354,7 +354,7 @@ library_symbol_t library_find_symbol(library_t *library, const char *symname) {
 
     cached = symcache_find(&library->cache, symname);
     if (cached) {
-        TRACE_WARNING("libraries_find_symbol(%s) -> cached", symname);
+        TRACE_LOG("libraries_find_symbol(%s) -> cached", symname);
         return *cached;
     }
 
@@ -390,11 +390,11 @@ library_symbol_t libraries_find_symbol(libraries_t *libraries, const char *symna
     size_t i = 0;
     library_symbol_t *cached = NULL;
 
-    TRACE_WARNING("libraries_find_symbol(%s)", symname);
+    TRACE_LOG("libraries_find_symbol(%s)", symname);
 
     cached = symcache_find(&libraries->cache, symname);
     if (cached) {
-        TRACE_WARNING("libraries_find_symbol(%s) -> cached", symname);
+        TRACE_LOG("libraries_find_symbol(%s) -> cached", symname);
         return *cached;
     }
 
@@ -403,12 +403,12 @@ library_symbol_t libraries_find_symbol(libraries_t *libraries, const char *symna
         library_symbol_t symbol = library_find_symbol(library, symname);
         if (symbol.name) {
             symcache_push(&libraries->cache, &symbol);
-            TRACE_WARNING("libraries_find_symbol(%s) -> done", symname);
+            TRACE_LOG("libraries_find_symbol(%s) -> done", symname);
             return symbol;
         }
     }
 
-    TRACE_WARNING("libraries_find_symbol(%s) -> NULL", symname);
+    TRACE_LOG("libraries_find_symbol(%s) -> NULL", symname);
 
     symcache_push_null(&libraries->cache, symname);
     return (library_symbol_t) {0};
