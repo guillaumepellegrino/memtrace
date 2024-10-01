@@ -126,7 +126,7 @@ create_tar_archive()
     cd "/tmp/"
     rm -rf "$BASENAME/"
     mkdir -p "$BASENAME/"
-    select_cli > /dev/null
+    select_cli 2> /dev/null
     software_version > "$BASENAME/software_version"
     model_name > "$BASENAME/model_name"
     kernel > "$BASENAME/kernel"
@@ -152,11 +152,15 @@ background()
     while true; do
         printf "[$count] Generating new report for $SERVICE with pid $PID @"; date
         mkdir -p "$BASENAME/report/"
-        "$MEMTRACE" -p $PID -x report 2>&1 | gzip > $BASENAME/report/report$count.txt.gz
-        zcat $BASENAME/report/report$count.txt.gz | grep "in use:\|total heap usage:"
+        if ! "$MEMTRACE" -p $PID -x report > $BASENAME/report/report$count.txt 2>&1; then
+            printf "[$count] Endurance test report error: Exiting"; date
+            break
+        fi
+        grep "in use:\|total heap usage:" $BASENAME/report/report$count.txt
+        gzip $BASENAME/report/report$count.txt
         tar_append $ARCHIVE $BASENAME/report/report$count.txt.gz
-
         rm -rf $BASENAME/
+
         if [ $MAXCOUNT = $INTERVAL ]; then
             printf "[$count] Endurance test terminated succesfully: Exiting"; date
             rm -f "$PIDFILE"
@@ -165,6 +169,8 @@ background()
         sleep "$INTERVAL"
         count=$((count + 1))
     done
+    rm -rf $BASENAME/
+    rm -f "$PIDFILE"
 }
 
 # Start endurance test
