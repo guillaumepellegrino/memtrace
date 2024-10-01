@@ -14,26 +14,64 @@ It's main advantages are:
 - Supported Platforms: x64, arm, aarch64 (arm64) and MIPS
 
 ## 2 Compilation
+### 2.1 Compilation for Host Platform
+```
+$ cd memtrace
+$ make -j12
+$ sudo make install  # install memtrace-server on Host computer
+$ sudo make -f Makefile.target install # install memtrace on Host computer
+```
+
+### 2.2 Compilation for Target Platform
 ```
 $ cd memtrace
 $ export CC=arm-linux-gnueabi-gcc
-$ make
+$ make -j12
 $ sudo make install  # install memtrace-server on Host computer
+$ DESTDIR=/path/to/dest make install  # install memtrace on rootfs target
 ```
 
-## 3 Install memtrace on target platform
+### 2.3 Manual installation on target platform
 ```
-# Move in the build directory
-$ cd memtrace/build-XXXX
-
 # Install memtrace agent and memtrace itself on target in the same folder.
-$ scp libmemtrace-agent.so $hostname-target:/tmp/
-$ scp memtrace $hostname-target:/tmp/
+$ scp build-XXX/libmemtrace-agent.so $hostname-target:/tmp/
+$ scp build-XXX/memtrace $hostname-target:/tmp/
+$ scp scripts/memtrace-endurance $hostname-target:/tmp/
 
 # On some Embedded Linux, you may not have any writable partition with execution rights.
 # So, you may need to give a partition with execution rights:
 $ mount -o remount,exec /tmp/
 ```
+
+## 3. Endurance tests with Memtrace
+
+memtrace-endurance is a script allowing to perform endurance tests with Memtrace.
+The script will gather memory snapshot of the target process at regular interval.
+You can let it run for a few hours or a few days and plot the results with memtrace-viewer.
+
+#### Start the service you want to monitor:
+![start-dummy](img/start-dummy.png)
+
+#### Start memtrace-endurance:
+![start-memtrace-endurance](img/start-memtrace-endurance.png)
+
+#### Check memtrace-endurance status:
+![check-memtrace-endurance](img/check-memtrace-endurance.png)
+
+#### Collect and view the endurance report:
+![start-memtrace-viewer](img/start-memtrace-viewer.png)
+
+![start-memtrace-viewer](img/memtrace-viewer.png)
+
+#### Analyse the report:
+Here, in this endurance report, we can see than our dummy program is leaking consistently memory in two places:
+- `thread_loop()` in dummy.c at line 28
+- `main()` in dummy.c at line 71
+
+#### Considerations:
+- memtrace-endurance can be started on a process without any debug symbols
+- memtrace-viewer can decode the raw address into debug symbols with memtrace-server if the debug rootfs is provided in argument.
+- memtrace-viewer can plot callstack with or without debug symbols. Without debug symbols, the global functions are still decoded but without the line numbers.
 
 ## 4. Debugging with Memtrace
 ### 4.1 General usage
@@ -378,14 +416,5 @@ sequenceDiagram
 
 
 ## 7. TODO
-- Improvement idea: provide a cli command which allow to automatically generate a tar.gz archive containing:
--- the memtrace report
--- the coredump(s) of the context(s) with the highest memory usage.
--- maybe some details about the tracked process and the OS version
--- maybe something to plot the memory usage with dataviewer ?
--- maybe make it configurable. At compile time, specify the script which should
-   be run to collect system information.
--- the likelyhood of a memory leak (yes or not, percentage ?)
--- => autoreport --file report.tar.gz --duration TIME --maxcores 3 --coretimeout TIMEOUT
--- => it may be useful for support team which could simply run this command and provide the detailed report to the DEV team. It may even allow to automate things.
-- An Unique ID should be provided associated to each memory context
+- Improvement idea:
+-- memtrace-endurance should append coredump(s) of the context(s) with the highest memory usage to the .tar.gz archive
