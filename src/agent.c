@@ -49,9 +49,9 @@ typedef struct {
     list_t allocations;
     ssize_t count;
     ssize_t size;
+    uint64_t uid;
     void **callstack;
     void **large_callstack;
-    size_t number;
     bool do_large_callstack;
 } block_t;
 
@@ -275,7 +275,7 @@ static bool agent_report(bus_t *bus, bus_connection_t *connection, bus_topic_t *
         }
 
 
-        fprintf(fp, "Memory allocation context n°%zu\n", i);
+        fprintf(fp, "Memory allocation context n°%zu with UID %"PRIu64"\n", i, block->uid);
         fprintf(fp, "%zd allocs, %zd bytes were not free\n", block->count, block->size);
         libraries_backtrace_print(agent->libraries, callstack, callstack_size, fp);
         fprintf(fp, "\n");
@@ -542,6 +542,7 @@ bool agent_initialize(agent_t *agent) {
     agent->large_callstack_size = 50;
     agent->start_time = time(NULL);
     agent->elapsed = 0;
+    agent->available_uid = 1;
     hashmap_initialize(&agent->allocations, &allocations_maps_cfg);
     hashmap_initialize(&agent->blocks, &blocks_maps_cfg);
 
@@ -651,6 +652,7 @@ void agent_alloc(agent_t *agent, cpu_registers_t *regs, size_t size, void *newpt
         block = calloc(1, sizeof(block_t));
         assert(block);
         block->callstack = callstack;
+        block->uid = agent->available_uid++;
         hashmap_add(&agent->blocks, block->callstack, &block->it);
         agent->stats.block_inuse += 1;
     }

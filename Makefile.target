@@ -45,6 +45,7 @@ install:
 	install -m 755 $(O)/memtrace $(DESTDIR)/usr/bin
 	install -m 755 $(O)/dummy $(DESTDIR)/usr/bin
 	install -m 755 $(O)/libmemtrace-agent.so $(DESTDIR)/usr/lib
+	install -m 755 scripts/memtrace-endurance $(DESTDIR)/usr/bin
 
 $(O)/:
 	mkdir -p $(O)/

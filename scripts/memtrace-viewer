@@ -1,0 +1,210 @@
+#!/usr/bin/env python3
+#
+# Copyright (C) 2022 Guillaume Pellegrino
+# This file is part of memtrace <https://github.com/guillaumepellegrino/memtrace>.
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+import sys
+import os
+import matplotlib.pyplot as plt
+import mplcursors
+from datetime import datetime
+from pathlib import Path
+import re
+
+class MemContext:
+    def __init__(self, uid):
+        self.uid = uid
+        self.allocs_count = 0
+        self.bytes_count = 0
+        self.callstack = ""
+
+    def set_count(self, allocs_count, bytes_count):
+        self.allocs_count = allocs_count
+        self.bytes_count = bytes_count
+
+    def add_callstack_line(self, callstack_line):
+        self.callstack += callstack_line
+
+class ReportReader:
+    def __init__(self):
+        self.datetime = "??"
+        self.allocs_count = 0
+        self.bytes_count = 0
+        self.contexts_count = 0
+        self.reading_callstack = False
+        self.memcontexts = []
+
+    def read(self, file):
+        memctx = MemContext(0)
+        for line in file:
+            if self.reading_callstack == True:
+                if len(line) > 1:
+                    memctx.add_callstack_line(line)
+                else:
+                    self.reading_callstack = False
+                    self.memcontexts.append(memctx)
+
+            regex = r'Memory allocation context n°(\d+) with UID (\d+)'
+            match = re.search(regex, line)
+            if match:
+                uid = int(match.group(2))
+                memctx = MemContext(uid)
+
+            regex = r'(\d+) allocs, (\d+) bytes were not free'
+            match = re.search(regex, line)
+            if match:
+                allocs_count = int(match.group(1))
+                bytes_count = int(match.group(2))
+                memctx.set_count(allocs_count, bytes_count);
+                self.reading_callstack = True
+
+            regex = r'HEAP SUMMARY (.+)'
+            match = re.search(regex, line)
+            if match:
+                dt_str = match.group(1)
+                self.datetime = datetime.strptime(dt_str, '%a %b %d %H:%M:%S %Y')
+
+            regex = r'in use: (\d+) allocs, (\d+) bytes in (\d+) contexts'
+            match = re.search(regex, line)
+            if match:
+                self.allocs_count = int(match.group(1))
+                self.bytes_count = int(match.group(2))
+                self.contexts_count = int(match.group(3))
+
+def usage():
+    print("Usage: memtrace-viewer TAR_REPORT [ROOTFS_DEBUG]..")
+    print("       memtrace-viewer DIR_REPORT [ROOTFS_DEBUG]..")
+    print("")
+    print("View the results of a memtrace endurance report")
+    print("The application will extract, resolve symbols")
+    print("and plot the history of memory usage for top memory contexts.")
+    print("")
+    print("Options:")
+    print("   TAR_REPORT    Path to the tar archive containing memtrace endurance report")
+    print("   DIR_REPORT    Path to the directory containing memtrace endurance report")
+    print("   ROOTFS_DEBUG  Path to the rootfs file(s) or directory containing debug symbols")
+    exit(0)
+
+def extract_report(report_path, report_dir):
+    print(f"Extracting {report_path} archive into {report_dir}")
+    script = f"mkdir -p {report_dir};"
+    script += f"tar --strip-components=1 -xf {report_path} -C {report_dir};"
+    script += f"gunzip {report_dir}/report/*.gz"
+    print(f"Run script: {script}")
+    os.system(script)
+
+def decode_report(report_dir, rootfs_debug):
+    for i in range(0, 10000):
+        report_path = f"{report_dir}/report/report{i}.txt"
+        if not os.path.isfile(report_path):
+            break
+
+        script = f"memtrace-server --report {report_path}"
+        for filedir in rootfs_debug:
+            script += f" {filedir}"
+        print(f"Run script: {script}")
+        os.system(script)
+
+def main():
+    if len(sys.argv) <= 1:
+        usage()
+
+    report_path=sys.argv[1]
+    report_dir=report_path.replace(".tar", "")
+    rootfs_debug=sys.argv[2:]
+
+    if report_path.find(".tar") and not os.path.isdir(report_dir):
+        extract_report(report_path, report_dir)
+
+    print(f"Opening {report_dir} directory containing memtrace endurance report")
+    if not os.path.isdir(report_dir):
+        print(f"{report_dir} directory not found")
+        exit(1)
+
+    if len(rootfs_debug) > 0:
+        decode_report(report_dir, rootfs_debug)
+
+    service = Path(f"{report_dir}/service").read_text().strip()
+    model_name = Path(f"{report_dir}/model_name").read_text().strip()
+    software_version = Path(f"{report_dir}/software_version").read_text().strip()
+
+    reports = []
+    for i in range(0, 10000):
+        filename = f"{report_dir}/report/report{i}.txt.decoded"
+        if not os.path.isfile(filename):
+            filename = f"{report_dir}/report/report{i}.txt"
+            if not os.path.isfile(filename):
+                break
+        with open(filename, 'r') as file:
+            report = ReportReader()
+            report.read(file)
+            reports.append(report)
+
+    root = {
+        'Total': {
+            'datetime': [],
+            'values': [],
+        },
+    }
+    for report in reports:
+        root['Total']['datetime'].append(report.datetime)
+        root['Total']['values'].append(report.bytes_count/1000.0)
+        for memctx in report.memcontexts:
+            label = f"UID {memctx.uid}"
+            if label not in root:
+                root[label] = {
+                    'datetime': [],
+                    'values': [],
+                    'memctx': memctx,
+                }
+            root[label]['datetime'].append(report.datetime)
+            root[label]['values'].append(memctx.bytes_count/1000.0)
+
+    def get_label_description(sel):
+        label = sel.artist._label
+        datetime = sel.target[0]
+        kbytes_count = sel.target[1]
+        if label == 'Total':
+            return f"Total memory usage: {kbytes_count:.2f}kB"
+        memctx = root[label]['memctx']
+        description = f"Memory allocation context with UID {memctx.uid}\n"
+        description += f"{kbytes_count:.2f}kB were allocated\n\n"
+        description += f"{memctx.callstack}"
+        return description
+
+    plt.figure(figsize=(15,9))
+    for key, data in root.items():
+        line = plt.plot(data['datetime'], data['values'], label=key, marker='o')
+        cursor = mplcursors.cursor(line)
+        cursor.connect(
+        "add", lambda sel: sel.annotation.set_text(
+            get_label_description(sel)))
+
+    title = ""
+    title += f'Memory usage of {service} with memtrace\n'
+    title += f'Running on {model_name} - {software_version}\n\n'
+    title += f'(Click on any line to display memory context)'
+    plt.title(title)
+    plt.xlabel('Time (date)')
+    plt.ylabel('Memory usage (kB)')
+    plt.grid(True)
+    plt.xticks(rotation=45)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+if __name__ == "__main__":
+    main()

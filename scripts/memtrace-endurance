@@ -1,0 +1,312 @@
+#!/bin/sh
+#
+# Copyright (C) 2022 Guillaume Pellegrino
+# This file is part of memtrace <https://github.com/guillaumepellegrino/memtrace>.
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+
+ME="$0"
+if [[ -e /ext ]]; then
+    ROOTDIR=/ext
+else
+    ROOTDIR=/tmp
+fi
+
+# Display an error and exit
+error()
+{
+    echo "ERROR: $@"
+    exit 1
+}
+
+# Append files to busybox tar archive
+# Busybox does not support the 'append' command
+busybox_tar_append()
+{
+    archive="$1"
+    shift
+    files="$@"
+
+    bytes=$(wc -c < "$archive")
+    blocks=$((bytes / 512))
+    seek=$((blocks - 2))
+    # echo "Archive Blocks count is $blocks"
+    # echo "Append file(s) to block $seek"
+    tar -Oc "$files" | dd bs=512 seek=$seek of="$archive" 2> /dev/null
+}
+
+# Append files to tar archive
+tar_append()
+{
+    if tar 2>&1 | grep -qi busybox; then
+        busybox_tar_append "$@"
+    else
+        tar -rf "$@"
+    fi
+}
+
+# If running Prpl (openwrt), we may extract system information from
+# TR-181 datamodel using CLI.
+select_cli()
+{
+    if type ba-cli; then
+        CLI=ba-cli
+    elif type ubus-cli; then
+        CLI=ubus-cli
+    elif type pcb-cli; then
+        CLI=pcb-cli
+    elif type pcb_cli; then
+        CLI=pcb_cli
+    else
+        CLI=""
+    fi
+}
+
+# Print the Device Software Version
+software_version()
+{
+    if [[ -n "$CLI" ]]; then
+        $CLI -l Device.DeviceInfo.SoftwareVersion? | grep .
+    elif type lsb-release; then
+        lsb_release -sd 2>/dev/null;
+    else
+        uname -r
+    fi
+}
+
+# Print the Device Model Name
+model_name()
+{
+    if [[ -n "$CLI" ]]; then
+        $CLI -l Device.DeviceInfo.ModelName? | grep .
+    else
+        uname -no
+    fi
+}
+
+# Print Kernel Information
+kernel()
+{
+    uname -a
+}
+
+# Check if memtrace-endurance is already running
+memtrace_endurance_is_running()
+{
+    if [[ -e "$PIDFILE" ]]; then
+        local pid=$(cat "$PIDFILE")
+        if [[ -e /proc/$pid ]]; then
+            error "memtrace-endurance is already running for $SERVICE service with pid $pid"
+        fi
+    fi
+}
+
+# Attach memtrace to specified PID
+memtrace_attach()
+{
+    "$MEMTRACE" -p $PID -x status || error "memtrace failed to attach to $SERVICE with pid $PID"
+}
+
+# Create an initial tar archive containing basic debug information
+create_tar_archive()
+{
+    cd "/tmp/"
+    rm -rf "$BASENAME/"
+    mkdir -p "$BASENAME/"
+    select_cli > /dev/null
+    software_version > "$BASENAME/software_version"
+    model_name > "$BASENAME/model_name"
+    kernel > "$BASENAME/kernel"
+    echo $SERVICE > "$BASENAME/service"
+    for file in /proc/$PID/maps /proc/$PID/status /etc/openwrt_release /web/version.txt; do
+        filename=$(basename $file)
+        cat "$file" > "$BASENAME/$filename" 2> /dev/null
+    done
+    tar -cvf $ARCHIVE "$BASENAME/" || error "Failed to create $ARCHIVE"
+    rm -rf "$BASENAME/"
+}
+
+# Backgroung Task running as a daemon
+# We periodically take a memory snapshot of the target process
+# and append it to the archive.
+background()
+{
+    count=0
+    printf "Starting memtrace-endurance background task to monitor $SERVICE with pid $PID @"; date
+    echo "INTERVAL=$INTERVAL MAXCOUNT=$MAXCOUNT ARCHIVE=$ARCHIVE"
+    sleep 3
+    cd /tmp
+    while true; do
+        printf "[$count] Generating new report for $SERVICE with pid $PID @"; date
+        mkdir -p "$BASENAME/report/"
+        "$MEMTRACE" -p $PID -x report 2>&1 | gzip > $BASENAME/report/report$count.txt.gz
+        zcat $BASENAME/report/report$count.txt.gz | grep "in use:\|total heap usage:"
+        tar_append $ARCHIVE $BASENAME/report/report$count.txt.gz
+
+        rm -rf $BASENAME/
+        if [[ $MAXCOUNT = $INTERVAL ]]; then
+            printf "[$count] Endurance test terminated succesfully: Exiting"; date
+            rm -f "$PIDFILE"
+            break
+        fi
+        sleep "$INTERVAL"
+        count=$((count + 1))
+    done
+}
+
+# Start endurance test
+start()
+{
+    memtrace_endurance_is_running
+    [[ -n "$PID" ]] || error "Service $SERVICE is not running"
+
+    echo "Attaching memtrace to $SERVICE with pid $PID"
+    memtrace_attach
+    echo "Memtrace succesfully attached to $SERVICE with pid $PID"
+
+    echo "Creating archive $ARCHIVE"
+    create_tar_archive
+    echo "Archive $ARCHIVE succefully created"
+    echo "Running memtrace-endurance as a daemon:"
+    echo "  PIDFILE=$PIDFILE"
+    echo "  LOGFILE=/var/run/$BASENAME.log"
+    start-stop-daemon -S -p $PIDFILE -m -b -- $ME $SERVICE background
+    echo""
+    echo "You can now, let run the endurance test for a few hours or a few days."
+    echo "You can retrieve any time you want the endurance results in $ARCHIVE"
+    echo "and view it with memtrace-viewer on your Host simply with:"
+    echo "memtrace-viewer /path/to/$BASENAME.tar /path/to/rootfs_debug"
+    echo ""
+    echo "The background task can be stopped with:"
+    echo "$ME stop $SERVICE"
+    echo ""
+}
+
+# Stop endurance test by killing the background task
+stop()
+{
+    start-stop-daemon -K -p "$PIDFILE"
+    rm -f "$PIDFILE"
+}
+
+# Show endurance test status
+status()
+{
+    RED='\033[0;31m'
+    GREEN='\033[0;32m'
+    PRPL='\033[0;35m'
+    NC='\033[0m'
+
+    echo -e "$PRPL[Last logs]$NC"
+    tail /var/run/$BASENAME.log
+    echo -e "$PRPL[End of last logs]$NC"
+    echo ""
+
+    if [[ -n $PID ]] && [[ -e /proc/$PID ]]; then
+        echo -e "$GREEN[OK]$NC $SERVICE service is running"
+    else
+        echo -e "$RED[ERROR]$NC $SERVICE service is NOT running"
+    fi
+    if [[ -e "$PIDFILE" ]] && [[ -e "/proc/$(cat $PIDFILE)" ]]; then
+        echo -e "$GREEN[OK]$NC Endurance tests are running"
+    else
+        echo -e "$RED[ERROR]$NC Endurance tests are NOT running"
+    fi
+
+    echo "Result are available at $ARCHIVE"
+}
+
+# Display help
+usage()
+{
+    echo "Usage: $ME start [OPTION]... SERVICE"
+    echo "       $ME stop SERVICE"
+    echo "       $ME help"
+    echo ""
+    echo "Start/Stop memtrace endurance tests for specified service."
+    echo "Let it run for a few hours/days and retrieve the results in $ROOTDIR/memtrace-endurance-SERVICE.tar"
+    echo "Use memtrace-viewer to view the results"
+    echo ""
+    echo "Positional arguments:"
+    echo "  start     Start memtrace endurance test"
+    echo "  stop      Stop memtrace endurance test background task"
+    echo "  status    Show memtrace endurance test status"
+    echo "  help      Display this help"
+    echo "  SERVICE   Name of the service to attach memtrace (resolved with pidof)"
+    echo ""
+    echo "Start options:"
+    echo "  -p, --pid PID        Service PID"
+    echo "  -P, --pidfile FILE   File containing the background task pid"
+    echo "  -o, --out TAR_FILE   Path to the output TAR archive containing endurance tests results"
+    echo "  -i, --interval TIME  Interval time in seconds to take a memory snapshot with memtrace (default: $INTERVAL)"
+    echo "  -m, --max NUMBER     Max numbers of memory snapshot taken with memtrace (default: $NUMBER)"
+    echo "  -b, --bin MEMTRACE   Path to the memtrace binary"
+    exit 1
+}
+
+# Parse arguments and start the work !
+while [ "$#" -gt 0 ]; do
+    arg="$1"
+    shift
+    case "$arg" in
+        start) do_start=1;;
+        stop) do_stop=1;;
+        status) do_status=1;;
+        background) do_background=1;;
+        -h|--help|help) usage;;
+        -p|--pid) export PID="$1"; shift;;
+        -P|--pidfile) export PIDFILE="$1"; shift;;
+        -o|--out) export ARCHIVE="$1"; shift;;
+        -i|--interval) export INTERVAL="$1"; shift;;
+        -m|--max) export MAXCOUNT="$1"; shift;;
+        -b|--bin) export MEMTRACE="$1"; shift;;
+        *) export SERVICE="$arg";;
+    esac
+done
+
+if [[ -z "$SERVICE" ]]; then
+    usage
+fi
+if [[ -z "$MEMTRACE" ]]; then
+    export MEMTRACE=memtrace # memtrace binary path
+fi
+if [[ -z "$ARCHIVE" ]]; then
+    export ARCHIVE="$ROOTDIR/memtrace-endurance-$SERVICE.tar"
+fi
+export BASENAME=$(basename $ARCHIVE .tar)
+if [[ -z "$PIDFILE" ]]; then
+    export PIDFILE=/var/run/$BASENAME.pid
+fi
+if [[ -z "$PID" ]]; then
+    export PID=$(pidof "$SERVICE")
+fi
+if [[ -z "$INTERVAL" ]]; then
+    export INTERVAL=1800 # 30 minutes
+fi
+if [[ -z "$MAXCOUNT" ]]; then
+    export MAXCOUNT=300 # Max number of iterations
+fi
+
+if [[ -n "$do_stop" ]]; then
+    stop
+elif [[ -n "$do_start" ]]; then
+    start
+elif [[ -n "$do_status" ]]; then
+    status
+elif [[ -n "$do_background" ]]; then
+    background > /var/run/$BASENAME.log 2>&1
+else
+    usage
+fi

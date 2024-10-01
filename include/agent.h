@@ -68,6 +68,7 @@ typedef struct {
     int periodic_job_timerfd;
     time_t start_time;
     size_t elapsed;
+    uint64_t available_uid;
 } agent_t;
 
 bool agent_initialize(agent_t *agent);

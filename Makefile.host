@@ -18,6 +18,7 @@ $(BUILD)/:
 
 install:
 	install -m 0755 $(BUILD)/memtrace-server /usr/bin/
+	install -m 0755 scripts/memtrace-viewer /usr/bin/
 
 $(BUILD)/memtrace-server: $(addprefix $(BUILD)/,memtrace-server.o evlp.o bus.o net.o strmap.o strlist.o elf.o elf_file.o process.o addr2line.o gdb.o log.o)
 	$(CC_HOST) -o $(@) $(^) $(LDFLAGS_HOST)
