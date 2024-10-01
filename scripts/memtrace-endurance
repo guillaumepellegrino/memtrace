@@ -18,7 +18,6 @@
 
 
 ME="$0"
-ME_RPATH=$(realpath $ME)
 if [ -e /ext ]; then
     ROOTDIR=/ext
 else
@@ -171,6 +170,7 @@ background()
     done
     rm -rf $BASENAME/
     rm -f "$PIDFILE"
+    cd -
 }
 
 # Start endurance test
@@ -189,7 +189,7 @@ start()
     echo "Running memtrace-endurance as a daemon:"
     echo "  PIDFILE=$PIDFILE"
     echo "  LOGFILE=/tmp/$BASENAME.log"
-    start-stop-daemon -S -p $PIDFILE -m -b -x $ME_RPATH -- $SERVICE background
+    start-stop-daemon -S -p $PIDFILE -m -b -x $ME -- $SERVICE background
     echo""
     echo "You can now, let run the endurance test for a few hours or a few days."
     echo "You can retrieve any time you want the endurance results in $ARCHIVE"
