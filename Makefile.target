@@ -1,4 +1,6 @@
 MACHINE?=$(shell $(CC) -dumpmachine)
+GIT_VERSION:=$(shell git describe --all)
+CC_SYSROOT:=$(shell $(CC) -print-sysroot)
 BUILDTGT?=build-$(MACHINE)
 O?=$(BUILDTGT)
 CROSS_COMPILE?=
@@ -10,8 +12,8 @@ CFLAGS+=-g -O2 -fPIC -pthread \
 	-Wno-missing-braces \
 	-D_DEFAULT_SOURCE -D_GNU_SOURCE -std=gnu99 \
 	-Iinclude \
-	-DVERSION=\"$(shell git describe --all)\" \
-	-DSYSROOT=\"$(shell $(CC) -print-sysroot)\" \
+	-DVERSION=\"$(GIT_VERSION)\" \
+	-DSYSROOT=\"$(CC_SYSROOT)\" \
 	-DCOMPILER=\"$(CC)\"
 LDFLAGS+=-pthread
 DESTDIR?=/
