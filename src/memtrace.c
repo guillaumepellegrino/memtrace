@@ -921,8 +921,48 @@ static void stdin_handler(evlp_handler_t *self, int events) {
     }
 }
 
-static bool is_cross_compiled() {
-    return strlen(SYSROOT) > 1;
+// Return true if the specified program is installed locally
+static bool has_local_program(const char *search) {
+    struct stat st = {0};
+    char *path = NULL;
+    bool rt = false;
+
+    if (stat(search, &st) == 0) {
+        rt = true;
+        goto exit;
+    }
+    const char *_path = getenv("PATH");
+    if (!_path) {
+        goto exit;
+    }
+    path = strdup(_path);
+    const char *prefix = strtok(path, ":");
+    for (; prefix; prefix = strtok(NULL, ":")) {
+        char *program = NULL;
+        if (asprintf(&program, "%s/%s", prefix, search) <= 0) {
+            continue;
+        }
+        rt = (stat(program, &st) == 0);
+        free(program);
+        if (rt) {
+            break;
+        }
+    }
+
+exit:
+    free(path);
+    return rt;
+}
+
+// Return true if memtrace-server is installed locally
+static bool has_local_memtrace_server() {
+    static int tristate = -1;
+
+    if (tristate == -1) {
+        tristate = has_local_program("memtrace-server");
+    }
+
+    return tristate;
 }
 
 static int local_memtrace_server(bus_t *bus) {
@@ -1029,7 +1069,7 @@ static void help() {
     CONSOLE("Options: ");
     CONSOLE("  -p, --pid=VALUE              PID of the target process. MANDATORY.");
     CONSOLE("  -L, --library=PATH           Library to inject in the target process (default: libmemtrace-agent.so)");
-    if (is_cross_compiled()) {
+    if (!has_local_memtrace_server()) {
         CONSOLE("  -m, --multicast              Auto-discover memtrace-server with multicast and connect to it");
         CONSOLE("  -c, --connect=HOST:PORT      TCP connect to memtrace-server on the specified host and port");
         CONSOLE("  -l, --listen=HOST:PORT       TCP listen on the specified host and port and wait for memtrace-server to connect");
@@ -1252,7 +1292,7 @@ int main(int argc, char *argv[]) {
         }
         bus_wait4connect(&memtrace.server);
     }
-    else if (!is_cross_compiled()) {
+    else if (has_local_memtrace_server()) {
         CONSOLE("Run memtrace-server locally");
         bus_initialize(&memtrace.server, memtrace.evlp, "memtrace", "memtrace-server");
         memtrace_server_pid = local_memtrace_server(&memtrace.server);
