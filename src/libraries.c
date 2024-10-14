@@ -560,6 +560,7 @@ elf_file_t *library_elf_dynamic_open(elf_t *elf, library_section_t section) {
             //printf("section %d is not handled by %s\n", section, elf_name(elf));
             break;
     }
+    TRACE_LOG("elf_dynamic_open(section: %d) -> %p", section, file);
 
     elf_file_close(dynamic);
 

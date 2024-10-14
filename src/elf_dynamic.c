@@ -3,6 +3,7 @@
 #include "elf_file.h"
 #include "elf_sym.h"
 #include "elf_dynamic.h"
+#include "log.h"
 
 typedef struct {
     size_t tag;
@@ -17,10 +18,12 @@ bool elf_dynamic_get_entry(elf_file_t *dynamic, size_t tag, size_t *val) {
         entry.val = elf_file_read_addr(dynamic);
 
         if (entry.tag == 0) {
+            TRACE_LOG("Tag %zu not found in ELF Dynamic section", tag);
             return false;
         }
         if (entry.tag == tag) {
             *val = entry.val;
+            TRACE_LOG("Tag %zu=%zu in ELF Dynamic section", tag, entry.val);
             return true;
         }
     }
@@ -43,13 +46,21 @@ elf_file_t *elf_dynamic_open_symtab(elf_t *elf, elf_file_t *dynamic) {
 
     elf_file_t *hash = elf_file_open(elf, sym_entry_size/8, hash_offset);
     if (!hash) {
+        TRACE_LOG("Could not open DT_HASH from ELF Dynamic section");
         return NULL;
     }
     elf_file_read_addr(dynamic);
     size_t nchain = elf_file_read_addr(dynamic);
     elf_file_close(hash);
 
-    return elf_file_open(elf, nchain, symtab_offset);
+    elf_file_t *symtab = elf_file_open(elf, nchain, symtab_offset);
+    if (!symtab) {
+        TRACE_WARNING("Could not open symbol table using ELF Dynamic section");
+        TRACE_WARNING("hash_offset:%zu, symtab_offset:%zu, sym_entry_size:%zu, nchain: %zu", hash_offset, symtab_offset, sym_entry_size, nchain);
+        return NULL;
+    }
+
+    return symtab;
 }
 
 elf_file_t *elf_dynamic_open_rela(elf_t *elf, elf_file_t *dynamic) {

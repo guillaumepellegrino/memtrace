@@ -15,6 +15,8 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
+
+#define _LARGEFILE64_SOURCE
 #include <errno.h>
 #include <sys/ptrace.h>
 #include <asm/ptrace.h>
@@ -114,10 +116,18 @@ static bool arm_cpu_registers_set(cpu_registers_t *regs, int pid) {
     // On some old kernels (3.4.11), PTRACE_GETREGS does not return SYS_restart_syscall as it should.
     size_t syscall = cpu_register_get(regs, cpu_register_syscall);
     switch (syscall) {
+#ifdef SYS_poll
         case SYS_poll:
+#endif
+#ifdef SYS_nanosleep
         case SYS_nanosleep:
+#endif
+#ifdef SYS_clock_nanosleep
         case SYS_clock_nanosleep:
+#endif
+#ifdef SYS_futex
         case SYS_futex:
+#endif
             TRACE_LOG("Replacing syscall %zu by SYS_restart_syscall", syscall);
             cpu_register_set(regs, cpu_register_syscall, SYS_restart_syscall);
             break;
