@@ -1,4 +1,3 @@
-#define _LARGEFILE64_SOURCE
 #include <stddef.h>
 #include <stdbool.h>
 #include <errno.h>

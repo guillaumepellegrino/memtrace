@@ -6,7 +6,7 @@ CFLAGS_HOST+=-g -O2 -pthread \
 	-Wno-unused-parameter \
 	-Wno-missing-field-initializers \
 	-Wno-missing-braces \
-	-D_DEFAULT_SOURCE -D_GNU_SOURCE -std=gnu99 \
+	-D_DEFAULT_SOURCE -D_GNU_SOURCE -D_LARGEFILE64_SOURCE -std=gnu99 \
 	-Iinclude \
 	-DVERSION=\"$(shell git describe --all)\"
 LDFLAGS_HOST+=-pthread

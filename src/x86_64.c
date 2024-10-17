@@ -16,7 +16,6 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#define _LARGEFILE64_SOURCE
 #include <errno.h>
 #include <sys/ptrace.h>
 #include <sys/types.h>
