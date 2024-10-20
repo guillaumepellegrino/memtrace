@@ -551,10 +551,16 @@ elf_file_t *library_elf_dynamic_open(elf_t *elf, library_section_t section) {
             file = elf_dynamic_open_strtab(elf, dynamic);
             break;
         case library_section_rela_dyn:
-            file = elf_dynamic_open_rela(elf, dynamic);
+            file = elf_dynamic_open_rela_dyn(elf, dynamic);
+            break;
+        case library_section_rela_plt:
+            file = elf_dynamic_open_rela_plt(elf, dynamic);
             break;
         case library_section_rel_dyn:
-            file = elf_dynamic_open_rel(elf, dynamic);
+            file = elf_dynamic_open_rel_dyn(elf, dynamic);
+            break;
+        case library_section_rel_plt:
+            file = elf_dynamic_open_rel_plt(elf, dynamic);
             break;
         default:
             //printf("section %d is not handled by %s\n", section, elf_name(elf));

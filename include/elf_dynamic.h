@@ -29,7 +29,7 @@
  * @tag to lookup in the DYNAMIC Section (DT_SYMTAB, DT_SYMENT, ...)
  * @val corresponding to the tag
  */
-bool elf_dynamic_get_entry(elf_file_t *dynamic, size_t tag, size_t *val);
+bool elf_dynamic_get_entry(elf_file_t *dynamic, uint64_t tag, uint64_t *val);
 
 /** Open the symtab section from the ELF File using DYNAMIC Section info */
 elf_file_t *elf_dynamic_open_symtab(elf_t *elf, elf_file_t *dynamic);
@@ -38,9 +38,11 @@ elf_file_t *elf_dynamic_open_symtab(elf_t *elf, elf_file_t *dynamic);
 elf_file_t *elf_dynamic_open_strtab(elf_t *elf, elf_file_t *dynamic);
 
 /** Open the rela section from the ELF File using DYNAMIC Section info */
-elf_file_t *elf_dynamic_open_rela(elf_t *elf, elf_file_t *dynamic);
+elf_file_t *elf_dynamic_open_rela_dyn(elf_t *elf, elf_file_t *dynamic);
+elf_file_t *elf_dynamic_open_rela_plt(elf_t *elf, elf_file_t *dynamic);
 
 /** Open the rel section from the ELF File using DYNAMIC Section info */
-elf_file_t *elf_dynamic_open_rel(elf_t *elf, elf_file_t *dynamic);
+elf_file_t *elf_dynamic_open_rel_dyn(elf_t *elf, elf_file_t *dynamic);
+elf_file_t *elf_dynamic_open_rel_plt(elf_t *elf, elf_file_t *dynamic);
 
 #endif

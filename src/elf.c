@@ -276,6 +276,21 @@ const char *elf_name(elf_t *elf) {
     return elf ? elf->name : NULL;
 }
 
+int64_t elf_addr_to_offset(elf_t *elf, uint64_t addr) {
+    const program_header_t *ph = NULL;
+
+    if (!elf) {
+        return -1;
+    }
+    for (ph = elf_program_header_first(elf); ph; ph = elf_program_header_next(elf, ph)) {
+        if (addr >= ph->p_vaddr && addr < ph->p_vaddr + ph->p_memsz) {
+            return addr + ph->p_offset - ph->p_vaddr;
+        }
+    }
+
+    return -1;
+}
+
 void elf_print(elf_t *elf) {
     size_t i = 0;
 

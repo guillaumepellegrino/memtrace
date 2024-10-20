@@ -174,6 +174,7 @@ elf_t *elf_open(const char *name);
 elf_t *elf_parse_header(const char *name);
 void elf_close(elf_t *elf);
 const char *elf_name(elf_t *elf);
+int64_t elf_addr_to_offset(elf_t *elf, uint64_t addr);
 
 /** Print ELF File*/
 void elf_print(elf_t *elf);
