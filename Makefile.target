@@ -16,6 +16,10 @@ CFLAGS+=-g -O2 -fPIC -pthread \
 	-DSYSROOT=\"$(CC_SYSROOT)\" \
 	-DCOMPILER=\"$(CC)\"
 LDFLAGS+=-pthread
+# Do not enforce -Wl,-z,relro,-z,now
+# It results in issues during library injection
+STRIPLDFLAGS=-Wl,-z,relro,-z,now
+LDFLAGS:=$(filter-out $(STRIPLDFLAGS),$(LDFLAGS))
 DESTDIR?=/
 
 TARGETS=$(addprefix $(O)/,memtrace libmemtrace-agent.so dummy)
