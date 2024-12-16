@@ -1,10 +1,11 @@
 MACHINE?=$(shell $(CC) -dumpmachine)
-GIT_VERSION:=$(shell git describe --all)
-CC_SYSROOT:=$(shell $(CC) -print-sysroot)
+GIT_VERSION?=$(shell git describe --all)
+CC_SYSROOT?=$(shell $(CC) -print-sysroot)
 BUILDTGT?=build-$(MACHINE)
 O?=$(BUILDTGT)
 CROSS_COMPILE?=
 CC?=$(CROSS_COMPILE)cc
+COMPILER?=$(CC)
 CFLAGS+=-g -O2 -fPIC -pthread \
 	-Wall -Wextra -Werror \
 	-Wno-unused-parameter \
@@ -14,7 +15,7 @@ CFLAGS+=-g -O2 -fPIC -pthread \
 	-Iinclude \
 	-DVERSION=\"$(GIT_VERSION)\" \
 	-DSYSROOT=\"$(CC_SYSROOT)\" \
-	-DCOMPILER=\"$(CC)\"
+	-DCOMPILER=\"$(COMPILER)\"
 LDFLAGS+=-pthread
 # Do not enforce -Wl,-z,relro,-z,now
 # It results in issues during library injection

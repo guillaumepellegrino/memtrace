@@ -100,15 +100,12 @@ static const char *toolchain_path() {
     char *sep = NULL;
 
     snprintf(toolchain, sizeof(toolchain), "%s", COMPILER);
-
-    if ((sep = strrchr(toolchain, '/'))) {
+    sep = strrchr(toolchain, '/');
+    if (!sep) {
         sep = toolchain;
-        if ((sep = strrchr(sep, '-'))) {
-            sep[1] = 0;
-        }
     }
-    else {
-        toolchain[0] = 0;
+    if ((sep = strrchr(sep, '-'))) {
+        sep[1] = 0;
     }
 
     return toolchain;
@@ -261,7 +258,9 @@ static bool agent_report(bus_t *bus, bus_connection_t *connection, bus_topic_t *
     strmap_get_fmt(options, "count", "%zu", &max);
 
     fprintf(fp, "memtrace report:\n");
-    fprintf(fp, "[sysroot]%s\n", SYSROOT);
+    if (*SYSROOT) {
+        fprintf(fp, "[sysroot]%s\n", SYSROOT);
+    }
     fprintf(fp, "[toolchain]%s\n", toolchain_path());
 
     hashmap_qsort(&agent->blocks, blocks_map_compar);
@@ -366,7 +365,9 @@ static void memtrace_dataviewer_write(agent_t *agent, FILE *fp) {
 
     fprintf(fp, "#!/usr/bin/env dataviewer\n");
     fprintf(fp, "\n");
-    fprintf(fp, "#[sysroot]%s\n", SYSROOT);
+    if (*SYSROOT) {
+        fprintf(fp, "#[sysroot]%s\n", SYSROOT);
+    }
     fprintf(fp, "#[toolchain]%s\n", toolchain_path());
     fprintf(fp, "\n");
     fprintf(fp, "[dataview]\n");

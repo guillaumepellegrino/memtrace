@@ -49,6 +49,7 @@ typedef struct {
     strlist_t directories;
     strlist_t files;
     strlist_t acls;
+    const char *addr2line_binary;
     bus_topic_t report_topic;
 } memtrace_server_t;
 
@@ -93,7 +94,7 @@ static bool host_path_is_safe(const char *_path) {
 }
 
 /** Return the host path of the file */
-static char *target2host_path(const char *sysroot, strlist_t *files, strlist_t *directories, strlist_t *acls, const char *path) {
+static char *target2host_path(strlist_t *files, strlist_t *directories, strlist_t *acls, const char *path) {
     const char *filename = NULL;
     strlist_iterator_t *it = NULL;
 
@@ -124,19 +125,6 @@ static char *target2host_path(const char *sysroot, strlist_t *files, strlist_t *
         const char *directory = strlist_iterator_value(it);
 
         assert(asprintf(&realpath, "%s/%s", directory, path) > 0);
-
-        if (stat(realpath, &st) == 0) {
-            return realpath;
-        }
-
-        free(realpath);
-    }
-
-    if (sysroot) {
-        char *realpath = NULL;
-        struct stat st = {0};
-
-        assert(asprintf(&realpath, "%s/%s", sysroot, path) > 0);
 
         if (stat(realpath, &st) == 0) {
             return realpath;
@@ -178,7 +166,7 @@ static char *get_topic(const char *line, const char *topic) {
     return value;
 }
 
-static bool server_report_parse_addr(memtrace_server_t *server, FILE *out, addr2line_t *addr2line, const char *line, const char *sysroot) {
+static bool server_report_parse_addr(memtrace_server_t *server, FILE *out, addr2line_t *addr2line, const char *line) {
     char *sep = NULL;
     const char *tgtpath = NULL;
     char *hostpath = NULL;
@@ -191,7 +179,7 @@ static bool server_report_parse_addr(memtrace_server_t *server, FILE *out, addr2
         sscanf(sep+1, "0x%zx", &address);
     }
 
-    if (!(hostpath = target2host_path(sysroot, &server->files, &server->directories, &server->acls, tgtpath))) {
+    if (!(hostpath = target2host_path(&server->files, &server->directories, &server->acls, tgtpath))) {
         fprintf(out, "%s (shared library file not found)\n", line);
         goto exit;
     }
@@ -263,6 +251,10 @@ static void server_parse_report(memtrace_server_t *server, FILE *in, FILE *out) 
         const char *dir = strlist_iterator_value(it);
         fprintf(out, "- Directory: '%s'\n", dir);
     }
+    if (server->addr2line_binary) {
+        fprintf(out, "- (Override) Addr2line: '%s'\n", server->addr2line_binary);
+        addr2line_initialize(&addr2line, server->addr2line_binary);
+    }
 
     while (fgets(line, sizeof(line), in)) {
         bool show2user = true;
@@ -275,12 +267,16 @@ static void server_parse_report(memtrace_server_t *server, FILE *in, FILE *out) 
                     TRACE_ERROR("sysroot path '%s' is not allowed by ACLs", sysroot);
                     free(sysroot);
                     sysroot = NULL;
+                    continue;
                 }
                 show2user = false;
-                fprintf(out, "- Sysroot: '%s'\n", sysroot);
+                if (*sysroot) {
+                    fprintf(out, "- Sysroot: '%s'\n", sysroot);
+                    strlist_append(&server->directories, sysroot);
+                }
             }
         }
-        if (!toolchain) {
+        if (!toolchain && !server->addr2line_binary) {
             if ((toolchain = get_topic(line, "[toolchain]"))) {
                 if (!host_path_is_allowed(toolchain, &server->acls)) {
                     TRACE_ERROR("toolchain path '%s' is not allowed by ACLs", toolchain);
@@ -302,10 +298,10 @@ static void server_parse_report(memtrace_server_t *server, FILE *in, FILE *out) 
                 out = dataviewer;
             }
         }
-        if (sysroot && toolchain) {
+        if (toolchain || server->addr2line_binary) {
             char *addr = NULL;
             if ((addr = get_topic(line, "[addr]"))) {
-                server_report_parse_addr(server, out, &addr2line, addr, sysroot);
+                server_report_parse_addr(server, out, &addr2line, addr);
                 free(addr);
                 show2user = false;
             }
@@ -390,6 +386,7 @@ static void help() {
     CONSOLE("   -l, --listen=HOST[:PORT]    Listen on the specified HOST");
     CONSOLE("   -p, --port=VALUE            Use the specified port");
     CONSOLE("   -a, --acl=PATH              Add this directory to ACL");
+    CONSOLE("   -A, --addr2line=PATH        Path to addr2line binary");
     CONSOLE("   -r, --report=PATH           Decode symbols from offline report");
     CONSOLE("   -d, --debug                 Enable debug logs");
     CONSOLE("   -h, --help                  Display this help");
@@ -401,13 +398,14 @@ static void version() {
 }
 
 int main(int argc, char *argv[]) {
-    const char *short_options = "+c:l:a:s:r:dhv";
+    const char *short_options = "+c:l:a:b:s:r:dhv";
     const struct option long_options[] = {
         {"connect",     required_argument,  0, 'c'},
         {"listen",      required_argument,  0, 'l'},
         {"acl",         required_argument,  0, 'a'},
         {"socket",      required_argument,  0, 's'},
         {"report",      required_argument,  0, 'r'},
+        {"addr2line",   required_argument,  0, 'A'},
         {"debug",       no_argument,        0, 'd'},
         {"help",        no_argument,        0, 'h'},
         {"version",     no_argument,        0, 'v'},
@@ -446,6 +444,9 @@ int main(int argc, char *argv[]) {
                 break;
             case 'a':
                 strlist_insert(&server.acls, optarg);
+                break;
+            case 'A':
+                server.addr2line_binary = optarg;
                 break;
             case 's':
                 ipc_socket = atoi(optarg);
