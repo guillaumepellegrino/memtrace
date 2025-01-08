@@ -78,9 +78,13 @@ select_cli()
 software_version()
 {
     if [ -n "$CLI" ]; then
-        $CLI -l Device.DeviceInfo.SoftwareVersion? | grep .
-    elif type lsb-release; then
-        lsb_release -sd 2>/dev/null;
+        if [ "$CLI" = "pcb_cli" ]; then
+            $CLI -l DeviceInfo.SoftwareVersion? | grep .
+        else
+            $CLI -l Device.DeviceInfo.SoftwareVersion? | grep .
+        fi
+    elif type lsb-release &>/dev/null; then
+        lsb_release -sd 2>/dev/null
     else
         uname -r
     fi
@@ -90,7 +94,11 @@ software_version()
 model_name()
 {
     if [ -n "$CLI" ]; then
-        $CLI -l Device.DeviceInfo.ModelName? | grep .
+        if [ "$CLI" = "pcb_cli" ]; then
+            $CLI -l DeviceInfo.ModelName? | grep .
+        else
+            $CLI -l Device.DeviceInfo.ModelName? | grep .
+        fi
     else
         uname -no
     fi
