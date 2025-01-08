@@ -32,16 +32,18 @@ $ DESTDIR=/path/to/dest make install  # install memtrace on rootfs target
 ```
 
 ### 2.3 Manual installation on target platform
+Install memtrace agent and memtrace itself on target in the same folder:
 ```
-# Install memtrace agent and memtrace itself on target in the same folder.
 $ scp build-XXX/libmemtrace-agent.so $hostname-target:/tmp/
 $ scp build-XXX/memtrace $hostname-target:/tmp/
 $ scp scripts/memtrace-endurance $hostname-target:/tmp/
-
-# On some Embedded Linux, you may not have any writable partition with execution rights.
-# So, you may need to give a partition with execution rights:
-$ mount -o remount,exec /tmp/
 ```
+> [!IMPORTANT]
+> On some Embedded Linux, you may not have any writable partition with execution rights.
+> So, you may need to give a partition with execution rights:
+> ```
+> $ mount -o remount,exec /tmp/
+> ```
 
 ## 3. Endurance tests with Memtrace
 
@@ -55,6 +57,13 @@ You can let it run for a few hours or a few days and plot the results with memtr
 #### Start memtrace-endurance:
 ![start-memtrace-endurance](img/start-memtrace-endurance.png)
 
+> [!IMPORTANT]
+> If you installed memtrace manually in /tmp on an Embedded Linux, you may start memtrace-endurance with:
+> ```
+> $ mount -o remount,exec /tmp/
+> $ PATH="/tmp:$PATH" memtrace-endurance dummy start --interval 10
+> ```
+
 #### Check memtrace-endurance status:
 ![check-memtrace-endurance](img/check-memtrace-endurance.png)
 
@@ -62,6 +71,7 @@ You can let it run for a few hours or a few days and plot the results with memtr
 ![start-memtrace-viewer](img/start-memtrace-viewer.png)
 
 ![start-memtrace-viewer](img/memtrace-viewer.png)
+
 
 #### Analyse the report:
 Here, in this endurance report, we can see than our dummy program is leaking consistently memory in two places:
