@@ -72,6 +72,10 @@ You can let it run for a few hours or a few days and plot the results with memtr
 
 ![start-memtrace-viewer](img/memtrace-viewer.png)
 
+> [!IMPORTANT]
+> memtrace-viewer is a python script. You will need to install the following python dependencies:
+> - matplotlib
+> - mplcursors
 
 #### Analyse the report:
 Here, in this endurance report, we can see than our dummy program is leaking consistently memory in two places:
@@ -343,30 +347,7 @@ You will need to kill it by hand if you want to stop it:
 /cfg/system/root # killall memtrace
 ```
 
-
-### 6. Experimental support with dataviewer
-It is possible to plot the top 10 memory allocations usage over the time with dataviewer.
-For that purpose, you can use the 'dataviewer' command in memtrace's cli.
-
-Prequites to use dataviewer are:
-- Install rust toolchain:
-```
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
-```
-- Install GTK4 dependency:
-```
-sudo apt install libgtk-4-dev
-```
-- Install dataviewer itself from rust package manager:
-```
-cargo install dataviewer --locked
-```
-
-![alt text](https://github.com/guillaumepellegrino/dataviewer/blob/master/images/DataViewerMemtrace.png)
-
-https://github.com/guillaumepellegrino/dataviewer
-
-### 7. Architecture
+### 6. Architecture
 ```mermaid
 sequenceDiagram
     actor User
@@ -426,6 +407,6 @@ sequenceDiagram
 
 
 ## 7. TODO
-- Improvement idea:
--- memtrace MUST display a final report after application exit (Use a destructor in lib. Implement kill command.).
--- memtrace-endurance should append coredump(s) of the context(s) with the highest memory usage to the .tar.gz archive
+Improvement idea:
+- memtrace MUST display a final report after application exit (Use a destructor in lib. Implement kill command.).
+- memtrace-endurance should append coredump(s) of the context(s) with the highest memory usage to the .tar.gz archive
