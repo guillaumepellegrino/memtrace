@@ -409,4 +409,5 @@ sequenceDiagram
 ## 7. TODO
 Improvement idea:
 - memtrace MUST display a final report after application exit (Use a destructor in lib. Implement kill command.).
+- Add the possibility to start a program directly with memtrace. Maybe using `LD_LIBRARY_PRELOAD` ?
 - memtrace-endurance should append coredump(s) of the context(s) with the highest memory usage to the .tar.gz archive
