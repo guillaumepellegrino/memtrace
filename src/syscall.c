@@ -66,6 +66,47 @@ void syscall_registers_print(cpu_registers_t *regs) {
 #endif
 }
 
+#ifdef PTRACE_GET_SYSCALL_INFO
+// This struct is a dirty copy from /usr/include/sys/ptrace.h.
+// musl and glibc are naming ptrace_syscall_info differently :/
+// So, we define our own ptrace_syscall_info as a workaround.
+struct memtrace_ptrace_syscall_info
+{
+  uint8_t op;			/* One of the enum
+				   __ptrace_get_syscall_info_op
+				   values.  */
+  uint32_t arch __attribute__ ((__aligned__ (4))); /* AUDIT_ARCH_*
+							value.  */
+  uint64_t instruction_pointer; /* Instruction pointer.  */
+  uint64_t stack_pointer;	/* Stack pointer.  */
+  union
+  {
+    /* System call number and arguments, for
+       PTRACE_SYSCALL_INFO_ENTRY.  */
+    struct
+    {
+      uint64_t nr;
+      uint64_t args[6];
+    } entry;
+    /* System call return value and error flag, for
+       PTRACE_SYSCALL_INFO_EXIT.  */
+    struct
+    {
+      int64_t rval;
+      uint8_t is_error;
+    } exit;
+    /* System call number, arguments and SECCOMP_RET_DATA portion of
+       SECCOMP_RET_TRACE return value, for
+       PTRACE_SYSCALL_INFO_SECCOMP.  */
+    struct
+    {
+      uint64_t nr;
+      uint64_t args[6];
+      uint32_t ret_data;
+    } seccomp;
+  };
+};
+#endif
 
 static void TRACE_CPUREG_IMPL(int pid, const char *fmt) {
     char s[64];
@@ -76,7 +117,7 @@ static void TRACE_CPUREG_IMPL(int pid, const char *fmt) {
     cpu_registers_t regs = {0};
     cpu_registers_get(&regs, pid);
 #ifdef PTRACE_GET_SYSCALL_INFO
-    struct __ptrace_syscall_info info = {0};
+    struct memtrace_ptrace_syscall_info info = {0};
     if (ptrace(PTRACE_GET_SYSCALL_INFO, pid, (void *) sizeof(info), &info) != 0) {
         //TRACE_ERROR("Failed to get SYSCALL info for pid %d: %m", pid);
     }
