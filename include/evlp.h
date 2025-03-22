@@ -21,6 +21,7 @@
 
 #include "types.h"
 
+evlp_t *evlp_create_base();
 evlp_t *evlp_create();
 void evlp_destroy(evlp_t *evlp);
 bool evlp_add_handler(evlp_t *evlp, evlp_handler_t *handler, int fd, int events);
@@ -29,7 +30,6 @@ bool evlp_main(evlp_t *evlp);
 void evlp_stop(evlp_t *evlp);
 void evlp_exit_onsignal();
 bool evlp_stopped();
-void evlp_block_signals(evlp_t *evlp, bool sigblocked);
 void evlp_set_exit(bool value);
 
 #endif

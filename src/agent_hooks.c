@@ -76,9 +76,8 @@ static void agent_dlopen() {
 
 __attribute__((destructor))
 static void agent_dlclose() {
-    TRACE_WARNING("Cleaning-up");
+    TRACE_WARNING("memtrace agent exiting");
     agent_cleanup(&g_agent);
-    TRACE_WARNING("Cleanup done");
 }
 
 bool hooks_lock() {

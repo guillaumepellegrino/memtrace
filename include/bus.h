@@ -53,6 +53,7 @@ struct _bus {
     int server BUS_PRIVATE;
     list_t connections BUS_PRIVATE;
     bool wait4connect BUS_PRIVATE;
+    void (*onclose)(bus_t *bus, bus_connection_t *connection);
 };
 
 
@@ -64,6 +65,9 @@ void bus_cleanup(bus_t *bus);
 
 /** Register a read handler on the specified bus and topic */
 void bus_register_topic(bus_t *bus, bus_topic_t *topic);
+
+/** Register a close handler which is called each time a bus connection is closed */
+void bus_set_onclose(bus_t *bus, void (*onclose)(bus_t *bus, bus_connection_t *connection));
 
 /** Bus listen for TCP connections on the specified hostname and port */
 bool bus_tcp_listen(bus_t *bus, const char *hostname, const char *port);

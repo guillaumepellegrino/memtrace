@@ -145,6 +145,9 @@ static void bus_connection_read_handler(evlp_handler_t *self, int events) {
     while (true) {
         if (!fgets(line, sizeof(line), connection->in)) {
             TRACE_WARNING("Client connection to %s closed", bus->to);
+            if (bus->onclose) {
+                bus->onclose(bus, connection);
+            }
             goto error;
         }
 
@@ -441,6 +444,12 @@ void bus_register_topic(bus_t *bus, bus_topic_t *topic) {
     assert(topic);
 
     list_append(&bus->topics, &topic->it);
+}
+
+void bus_set_onclose(bus_t *bus, void (*onclose)(bus_t *bus, bus_connection_t *connection)) {
+    assert(bus);
+
+    bus->onclose = onclose;
 }
 
 bool bus_tcp_listen(bus_t *bus, const char *hostname, const char *port) {

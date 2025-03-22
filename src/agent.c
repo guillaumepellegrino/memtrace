@@ -97,15 +97,26 @@ static inline sample_t sample_circbuf_last_sub_first(sample_circbuf_t *circbuf) 
 
 static const char *toolchain_path() {
     static char toolchain[256];
+    char *filename = NULL;
     char *sep = NULL;
 
     snprintf(toolchain, sizeof(toolchain), "%s", COMPILER);
-    sep = strrchr(toolchain, '/');
-    if (!sep) {
-        sep = toolchain;
+    filename = strrchr(toolchain, '/');
+    if (filename) {
+        if ((sep = strrchr(filename, '-'))) {
+            sep[1] = 0;
+        }
+        else {
+            filename[1] = 0;
+        }
     }
-    if ((sep = strrchr(sep, '-'))) {
-        sep[1] = 0;
+    else {
+        if ((sep = strrchr(toolchain, '-'))) {
+            sep[1] = 0;
+        }
+        else {
+            toolchain[0] = 0;
+        }
     }
 
     return toolchain;
@@ -259,14 +270,9 @@ static bool agent_status(bus_t *bus, bus_connection_t *connection, bus_topic_t *
     return true;
 }
 
-static bool agent_report(bus_t *bus, bus_connection_t *connection, bus_topic_t *topic, strmap_t *options, FILE *fp) {
-    bool lock = hooks_lock();
-    agent_t *agent = container_of(topic, agent_t, report_topic);
+static void agent_write_report_unlocked(agent_t *agent, FILE *fp, size_t max) {
     size_t i = 0;
-    size_t max = 10;
     hashmap_iterator_t *it = NULL;
-
-    strmap_get_fmt(options, "count", "%zu", &max);
 
     fprintf(fp, "memtrace report:\n");
     if (*SYSROOT) {
@@ -294,6 +300,30 @@ static bool agent_report(bus_t *bus, bus_connection_t *connection, bus_topic_t *
     }
 
     agent_status_unlocked(agent, fp);
+}
+
+static void agent_write_exit_report(agent_t *agent) {
+    bool lock = hooks_lock();
+    char path[128];
+    snprintf(path, sizeof(path), "/tmp/memtrace-exit-report-%d.txt", getpid());
+    FILE *fp = fopen(path, "w");
+    if (fp) {
+        TRACE_WARNING("Write exit report to %s", path);
+        agent_write_report_unlocked(agent, fp, 20);
+        fclose(fp);
+    }
+    else {
+        TRACE_ERROR("Failed to write exit report at %s", path);
+    }
+    hooks_unlock(lock);
+}
+
+static bool agent_report(bus_t *bus, bus_connection_t *connection, bus_topic_t *topic, strmap_t *options, FILE *fp) {
+    bool lock = hooks_lock();
+    agent_t *agent = container_of(topic, agent_t, report_topic);
+    size_t count = 10;
+    strmap_get_fmt(options, "count", "%zu", &count);
+    agent_write_report_unlocked(agent, fp, count);
     hooks_unlock(lock);
 
     return true;
@@ -522,11 +552,19 @@ static void *ipc_accept_loop(void *arg) {
     agent_t *agent = arg;
 
     TRACE_WARNING("Control Thread - Entering event loop");
+
+    // Let's ensure the Control Thread ignores any signal
+    // The main program is expected to handle them.
+    sigset_t set;
+    sigfillset(&set);
+    pthread_sigmask(SIG_BLOCK, &set, NULL);
     signal(SIGPIPE, SIG_IGN);
+
     if (!bus_ipc_listen(&agent->bus, agent->ipc)) {
         TRACE_ERROR("Failed to listen on ipc socket");
         return NULL;
     }
+
     evlp_main(agent->evlp);
     TRACE_WARNING("Control Thread - Exiting event loop");
 
@@ -564,7 +602,7 @@ bool agent_initialize(agent_t *agent) {
 
     agent->follow_allocs = true;
 
-    agent->evlp = evlp_create();
+    agent->evlp = evlp_create_base();
     bus_initialize(&agent->bus, agent->evlp, "memtrace-agent", "memtrace");
 
     agent->resume_topic.name = "resume";
@@ -625,6 +663,7 @@ bool agent_initialize(agent_t *agent) {
 }
 
 void agent_cleanup(agent_t *agent) {
+    agent_write_exit_report(agent);
     evlp_remove_handler(agent->evlp, agent->stats_lasthour_timerfd);
     close(agent->stats_lasthour_timerfd);
     bus_cleanup(&agent->bus);

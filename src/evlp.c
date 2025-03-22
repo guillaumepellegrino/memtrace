@@ -37,8 +37,6 @@ struct _evlp {
     bool run;
     evlp_handler_t sighandler;
     int sfd;
-    sigset_t sigmask;
-    bool sigblocked;
 };
 
 static bool signal_exit = false;
@@ -72,22 +70,28 @@ error:
     evlp->run = false;
 }
 
-evlp_t *evlp_create() {
+evlp_t *evlp_create_base() {
     evlp_t *evlp = NULL;
 
     assert((evlp = calloc(1, sizeof(evlp_t))));
     assert((evlp->epfd = epoll_create1(EPOLL_CLOEXEC)) > 0);
-    evlp->sigblocked = false;
+    evlp->sfd = -1;
 
-    sigemptyset(&evlp->sigmask);
-    sigaddset(&evlp->sigmask, SIGINT);
-    sigaddset(&evlp->sigmask, SIGQUIT);
-    sigaddset(&evlp->sigmask, SIGTERM);
+    return evlp;
+}
+
+evlp_t *evlp_create() {
+    evlp_t *evlp = evlp_create_base();
+
+    sigset_t sigmask;
+    sigemptyset(&sigmask);
+    sigaddset(&sigmask, SIGINT);
+    sigaddset(&sigmask, SIGQUIT);
+    sigaddset(&sigmask, SIGTERM);
 
     evlp->sighandler.fn = evlp_signal_handler;
-    assert((evlp->sfd = signalfd(-1, &evlp->sigmask, SFD_CLOEXEC)) >= 0);
+    assert((evlp->sfd = signalfd(-1, &sigmask, SFD_CLOEXEC)) >= 0);
     assert(evlp_add_handler(evlp, &evlp->sighandler, evlp->sfd, EPOLLIN));
-
     return evlp;
 }
 
@@ -124,7 +128,6 @@ void evlp_remove_handler(evlp_t *evlp, int fd) {
 
 bool evlp_main(evlp_t *evlp) {
     struct epoll_event event = {0};
-    sigset_t oldmask = {0};
 
     assert(evlp);
 
@@ -132,20 +135,11 @@ bool evlp_main(evlp_t *evlp) {
     while (!signal_exit && evlp->run) {
         int cnt = 0;
 
-        if (evlp->sigblocked) {
-            assert(pthread_sigmask(SIG_BLOCK, &evlp->sigmask, &oldmask) == 0);
-        }
         if ((cnt = epoll_wait(evlp->epfd, &event, 1, -1)) < 0) {
             if (errno != EINTR) {
-                if (evlp->sigblocked) {
-                    assert(pthread_sigmask(SIG_UNBLOCK, &oldmask, NULL) == 0);
-                }
                 TRACE_ERROR("epoll_wait() error: %m");
                 return false;
             }
-        }
-        if (evlp->sigblocked) {
-            assert(pthread_sigmask(SIG_UNBLOCK, &oldmask, NULL) == 0);
         }
         if (!signal_exit && cnt > 0) {
             evlp_handler_t *handler = event.data.ptr;
@@ -173,10 +167,6 @@ void evlp_exit_onsignal() {
 
 bool evlp_stopped() {
     return signal_exit;
-}
-
-void evlp_block_signals(evlp_t *evlp, bool sigblocked) {
-    evlp->sigblocked = sigblocked;
 }
 
 void evlp_set_exit(bool value) {

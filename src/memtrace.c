@@ -134,10 +134,9 @@ error:
     return rt;
 }
 
-static void memtrace_stop_evlp() {
-    CONSOLE("Stoping EVLP");
-    // gently ask the event loop to exit
-    kill(getpid(), SIGINT);
+static void memtrace_stop_evlp(memtrace_t *memtrace) {
+    //CONSOLE("Stoping EVLP");
+    evlp_stop(memtrace->evlp);
 }
 
 static bool memtrace_report(memtrace_t *memtrace, int count, FILE *fp) {
@@ -185,7 +184,8 @@ static bool memtrace_report(memtrace_t *memtrace, int count, FILE *fp) {
 }
 
 static void memtrace_console_quit(console_t *console, int argc, char *argv[]) {
-    memtrace_stop_evlp();
+    memtrace_t *memtrace = container_of(console, memtrace_t, console);
+    memtrace_stop_evlp(memtrace);
 }
 
 static void memtrace_console_forward(console_t *console, int argc, char *argv[]) {
@@ -357,13 +357,13 @@ static void logreport_handler(memtrace_t *memtrace, int events) {
 
     if (!(fp = fopen(memtrace->logfile, "a"))) {
         TRACE_ERROR("Failed to open %s: %m", memtrace->logfile);
-        memtrace_stop_evlp();
+        memtrace_stop_evlp(memtrace);
         goto error;
     }
 
     if (!memtrace_report(memtrace, memtrace->logcount, fp)) {
         TRACE_ERROR("Exit event loop");
-        memtrace_stop_evlp();
+        memtrace_stop_evlp(memtrace);
         goto error;
     }
 
@@ -853,7 +853,7 @@ static bool memtrace_inject_agent(int pid, const char *libname) {
         no_relocation = true;
         CONSOLE("WARNING: This program has no relocation table");
         CONSOLE("=> The .got section needs to be polled");
-        CONSOLE("=> Starting update metrace hooks background task");
+        CONSOLE("=> Starting update memtrace hooks background task");
         CONSOLE("");
     }
 
@@ -917,8 +917,66 @@ static void stdin_handler(evlp_handler_t *self, int events) {
     memtrace_t *memtrace = container_of(self, memtrace_t, stdin_handler);
     if (!console_poll(&memtrace->console)) {
         CONSOLE("Standard input closed");
-        memtrace_stop_evlp();
+        memtrace_stop_evlp(memtrace);
     }
+}
+
+static void memtrace_read_exit_report(memtrace_t *memtrace) {
+    char line[4096];
+    char path[128];
+    FILE *fp = NULL;
+    bus_connection_t *server = NULL;
+
+    snprintf(path, sizeof(path), "/tmp/memtrace-exit-report-%d.txt", memtrace->pid);
+    CONSOLE("Opening exit report at %s\n", path);
+    fp = fopen(path, "r");
+    if (!fp) {
+        CONSOLE("Could not open %s: %m", path);
+        CONSOLE("Target process exited without generating an exit report");
+        return;
+    }
+
+    // Are we connected to memtrace-server ?
+    if ((server = bus_first_connection(&memtrace->server))) {
+        // Forward report to memtrace-server for decodding addresses to line and functions
+        bus_connection_write_request(server, "report", NULL);
+        while (fgets(line, sizeof(line), fp)) {
+            bus_connection_printf(server, "%s", line);
+            if (!strcmp(line, "[cmd_done]\n")) {
+                break;
+            }
+        }
+        bus_connection_flush(server);
+
+        // Read decoded report from server and write it to console
+        while (bus_connection_readline(server, line, sizeof(line))) {
+            if (!strcmp(line, "[cmd_done]\n")) {
+                break;
+            }
+            else {
+                fputs(line, stdout);
+            }
+        }
+    }
+    else {
+        // Read report and dump it on console
+        while (fgets(line, sizeof(line), fp)) {
+            if (!strcmp(line, "[cmd_done]\n")) {
+                break;
+            }
+            fputs(line, stdout);
+        }
+    }
+
+    fclose(fp);
+}
+
+static void memtrace_on_agent_connection_closed(bus_t *bus, bus_connection_t *connection) {
+    memtrace_t *memtrace = container_of(bus, memtrace_t, agent);
+    CONSOLE("Target process with pid:%d exited", memtrace->pid);
+
+    memtrace_read_exit_report(memtrace);
+    memtrace_stop_evlp(memtrace);
 }
 
 // Return true if the specified program is installed locally
@@ -986,7 +1044,8 @@ static int local_memtrace_server(bus_t *bus) {
         return pid;
     }
 
-    // run memtrace server
+    // run memtrace server in a new session
+    setsid();
     close(sockets[0]);
     snprintf(socketarg, sizeof(socketarg), "%d", sockets[1]);
     if (execlp("memtrace-server", "memtrace-server", "--socket", socketarg, "/", NULL) != 0) {
@@ -1278,15 +1337,15 @@ int main(int argc, char *argv[]) {
 
     // Create event loop
     memtrace.evlp = evlp_create();
-    evlp_block_signals(memtrace.evlp, false);
     assert((memtrace.timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC)) >= 0);
     assert(evlp_add_handler(memtrace.evlp, &memtrace.timerfd_handler, memtrace.timerfd, EPOLLIN));
 
+    bus_initialize(&memtrace.agent, memtrace.evlp, "memtrace", "memtrace.agent");
+    bus_set_onclose(&memtrace.agent, memtrace_on_agent_connection_closed);
     if (startprog) {
         // Program was started by us with libmemtrace-agent preloaded.
         // However, hooks are not yet setup and the agent is waiting
         // for resume command.
-        bus_initialize(&memtrace.agent, memtrace.evlp, "memtrace", "memtrace.agent");
         if (!connect_to_memtrace_agent(&memtrace.agent, memtrace.pid)) {
             CONSOLE("Failed to connect to memtrace-agent");
             goto error;
@@ -1317,7 +1376,6 @@ int main(int argc, char *argv[]) {
         }
 
         // Establish ipc connection to memtrace-agent
-        bus_initialize(&memtrace.agent, memtrace.evlp, "memtrace", "memtrace.agent");
         if (!connect_to_memtrace_agent(&memtrace.agent, memtrace.pid)) {
             CONSOLE("Failed to connect to memtrace-agent");
             goto error;
@@ -1383,11 +1441,13 @@ int main(int argc, char *argv[]) {
     evlp_main(memtrace.evlp);
     rt = 0;
 
-    if (startprog && memtrace.pid > 0) {
-        // Program is a Child process
-        CONSOLE("Waiting for program to finish");
+    // Program is a Child process and is still running: stop it and show report
+    if (startprog && bus_first_connection(&memtrace.agent)) {
+        CONSOLE("Stopping program with SIGTERM");
         kill(memtrace.pid, SIGTERM);
         waitpid(memtrace.pid, NULL, 0);
+        CONSOLE("Program exited");
+        memtrace_read_exit_report(&memtrace);
     }
 
 error:

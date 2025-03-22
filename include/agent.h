@@ -47,7 +47,6 @@ typedef struct {
 
 typedef struct {
     bool follow_allocs;
-    int pid;
     libraries_t *libraries;
     size_t callstack_size;
     size_t large_callstack_size;
