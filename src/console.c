@@ -398,7 +398,7 @@ void console_cmd_help(console_t *console, int argc, char *argv[]) {
 
     CONSOLE("List of commands:");
     for (cmd = console->cmd_list; cmd->name; cmd++) {
-        CONSOLE("  %9s: %s", cmd->name, cmd->help);
+        CONSOLE("  %10s %s", cmd->name, cmd->help);
     }
     CONSOLE("");
 }

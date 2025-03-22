@@ -420,6 +420,16 @@ static void memtrace_console_report(console_t *console, int argc, char *argv[]) 
     memtrace_report(memtrace, count, stderr);
 }
 
+static void memtrace_console_kill(console_t *console, int argc, char *argv[]) {
+    memtrace_t *memtrace = container_of(console, memtrace_t, console);
+    int signal = SIGTERM;
+
+    if (argc >= 2) {
+        signal = atoi(argv[1]);
+    }
+    kill(memtrace->pid, signal);
+}
+
 static void memtrace_console_coredump(console_t *console, int argc, char *argv[]) {
     const char *short_options = "+c:f:hn";
     const struct option long_options[] = {
@@ -737,16 +747,17 @@ error:
 }
 
 static const console_cmd_t memtrace_console_commands[] = {
-    {.name = "help",        .help = "Display this help", .handler = console_cmd_help},
-    {.name = "quit",        .help = "Quit memtrace and show report", .handler = memtrace_console_quit},
-    {.name = "status",      .help = "Show memtrace status", .handler = memtrace_console_forward},
-    {.name = "monitor",     .help = "Monitor memory allocations. monitor --help for more details.", .handler = memtrace_console_monitor},
-    {.name = "report",      .help = "Show memtrace report. report --help for more details.", .handler = memtrace_console_report},
-    {.name = "logreport",   .help = "Log reports at a regular interval in specified file. log --help for more details.", .handler = memtrace_console_logreport},
-    {.name = "coredump",    .help = "Mark a memory context for coredump generation. coredump --help for more details.", .handler = memtrace_console_coredump},
-    {.name = "dataviewer",  .help = "Open memtrace report with dataviewer", .handler = memtrace_console_dataviewer},
-    {.name = "break",       .help = "Break on specified function.", .handler = memtrace_console_breakpoint},
-    {.name = "clear",       .help = "Clear memory statistics", .handler = memtrace_console_forward},
+    {.name = "help",        .help = "           Display this help", .handler = console_cmd_help},
+    {.name = "quit",        .help = "           Quit memtrace and show report", .handler = memtrace_console_quit},
+    {.name = "status",      .help = "           Show memtrace status", .handler = memtrace_console_forward},
+    {.name = "monitor",     .help = "[OPTION].. Monitor memory allocations. monitor --help for more details.", .handler = memtrace_console_monitor},
+    {.name = "report",      .help = "[OPTION].. Show memtrace report. report --help for more details.", .handler = memtrace_console_report},
+    {.name = "kill",        .help = "[SIGNAL]   Kill the target process. A report is generated at exit.", .handler = memtrace_console_kill},
+    {.name = "logreport",   .help = "[OPTION].. Log reports at a regular interval in specified file. log --help for more details.", .handler = memtrace_console_logreport},
+    {.name = "coredump",    .help = "[OPTION].. Mark a memory context for coredump generation. coredump --help for more details.", .handler = memtrace_console_coredump},
+    {.name = "dataviewer",  .help = "[OPTION].. Open memtrace report with dataviewer", .handler = memtrace_console_dataviewer},
+    {.name = "break",       .help = "[OPTION].. Break on specified function.", .handler = memtrace_console_breakpoint},
+    {.name = "clear",       .help = "           Clear memory statistics", .handler = memtrace_console_forward},
     {0},
 };
 
