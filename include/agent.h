@@ -22,6 +22,7 @@
 #include "types.h"
 #include "hashmap.h"
 #include "bus.h"
+#include <semaphore.h>
 
 typedef struct {
     ssize_t bytes;
@@ -57,6 +58,7 @@ typedef struct {
     pthread_t thread;
     evlp_t *evlp;
     bus_t bus;
+    bus_topic_t resume_topic;
     bus_topic_t status_topic;
     bus_topic_t report_topic;
     bus_topic_t clear_topic;
@@ -69,6 +71,7 @@ typedef struct {
     time_t start_time;
     size_t elapsed;
     uint64_t available_uid;
+    sem_t wait4resume;
 } agent_t;
 
 bool agent_initialize(agent_t *agent);

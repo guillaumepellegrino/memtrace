@@ -240,6 +240,17 @@ static void agent_status_unlocked(agent_t *agent, FILE *fp) {
     fflush(fp);
 }
 
+
+/**
+ * Resume execution: This will unlock the blocking function
+ * agent_wait_for_resume_execution()
+ */
+static bool agent_resume_execution(bus_t *bus, bus_connection_t *connection, bus_topic_t *topic, strmap_t *options, FILE *fp) {
+    agent_t *agent = container_of(topic, agent_t, resume_topic);
+    sem_post(&agent->wait4resume);
+    return true;
+}
+
 static bool agent_status(bus_t *bus, bus_connection_t *connection, bus_topic_t *topic, strmap_t *options, FILE *fp) {
     bool lock = hooks_lock();
     agent_t *agent = container_of(topic, agent_t, status_topic);
@@ -555,6 +566,10 @@ bool agent_initialize(agent_t *agent) {
 
     agent->evlp = evlp_create();
     bus_initialize(&agent->bus, agent->evlp, "memtrace-agent", "memtrace");
+
+    agent->resume_topic.name = "resume";
+    agent->resume_topic.read = agent_resume_execution;
+    bus_register_topic(&agent->bus, &agent->resume_topic);
     agent->status_topic.name = "status";
     agent->status_topic.read = agent_status;
     bus_register_topic(&agent->bus, &agent->status_topic);
@@ -593,10 +608,18 @@ bool agent_initialize(agent_t *agent) {
         timerfd_settime(agent->periodic_job_timerfd, 0, &itimer, NULL);
     }
 
+    sem_init(&agent->wait4resume, 0, 0);
     if (pthread_create(&agent->thread, NULL, ipc_accept_loop, agent) != 0) {
         TRACE_ERROR("Failed to create thread: %m");
     }
     libraries_update(agent->libraries);
+
+    // Wait for "resume" command from memtrace client
+    if (getenv("MEMTRACE_WAIT4RESUME")) {
+        unsetenv("LD_PRELOAD");
+        unsetenv("MEMTRACE_WAIT4RESUME");
+        sem_wait(&agent->wait4resume);
+    }
 
     return true;
 }

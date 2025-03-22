@@ -767,11 +767,11 @@ error:
     return rt;
 }
 
-static bool update_memtrace_hooks(int pid, const char *libname) {
+static bool memtrace_setup_hooks(int pid, const char *libname) {
     bool rt = false;
     injecter_t *injecter = NULL;
 
-    TRACE_WARNING("Updating memtrace hooks");
+    CONSOLE("Setup memtrace hooks");
     if (!(injecter = injecter_create(pid))) {
         TRACE_ERROR("Failed to create code injecter");
         goto error;
@@ -783,7 +783,7 @@ static bool update_memtrace_hooks(int pid, const char *libname) {
     if (!injecter_setup_memtrace_hooks(injecter)) {
         TRACE_ERROR("Failed to setup memtrace functions hooks inside pid %d", libname, pid);
     }
-    TRACE_WARNING("Updating memtrace hooks - done");
+    CONSOLE("Setup memtrace hooks: done");
     rt = true;
 
 error:
@@ -826,13 +826,13 @@ void start_update_memtrace_hooks_task(int pid, const char *libname) {
             continue;
         }
 
-        update_memtrace_hooks(pid, libname);
+        memtrace_setup_hooks(pid, libname);
         duration *= 2;
         duration = (duration > 3600) ? 3600 : duration;
     }
 }
 
-static bool inject_memtrace_agent(int pid, const char *libname) {
+static bool memtrace_inject_agent(int pid, const char *libname) {
     bool rt = false;
     bool no_relocation = false;
     injecter_t *injecter = NULL;
@@ -1063,11 +1063,40 @@ static void memtrace_syscall_timeout(int sig, siginfo_t *info, void *arg) {
     TRACE_LOG("Syscall timeout");
 }
 
+/**
+ * Start PROGRAM with libmemtrace-agent.so attached to it.
+ * Return its PID.
+ */
+static int startprog_with(char *argv[], const char *libmemtraceagent) {
+    int pid = fork();
+    if (pid == 0) {
+        setenv("LD_PRELOAD", libmemtraceagent, 1);
+        setenv("MEMTRACE_WAIT4RESUME", "1", 1);
+        execvp(argv[0], argv);
+        CONSOLE("Failed to exec %s: %m", argv[0]);
+    }
+
+    return pid;
+}
+
+/**
+ * Send 'resume' execution message to memtrace-agent
+ */
+bool memtrace_send_resume_execution(memtrace_t *memtrace) {
+    bus_connection_t *ipc = NULL;
+
+    if (!(ipc = bus_first_connection(&memtrace->agent))) {
+        CONSOLE("memtrace is not connected to target process");
+        return false;
+    }
+    return bus_connection_write_request(ipc, "resume", NULL);
+}
+
 static void help() {
-    CONSOLE("Usage: memtrace [OPTION]..");
+    CONSOLE("Usage: memtrace [OPTION].. PROG [ARGS]");
     CONSOLE("A cross-debugging tool to trace memory allocations for debugging memory leaks");
     CONSOLE("Options: ");
-    CONSOLE("  -p, --pid=VALUE              PID of the target process. MANDATORY.");
+    CONSOLE("  -p, --pid=VALUE              PID of the target process");
     CONSOLE("  -L, --library=PATH           Library to inject in the target process (default: libmemtrace-agent.so)");
     if (!has_local_memtrace_server()) {
         CONSOLE("  -m, --multicast              Auto-discover memtrace-server with multicast and connect to it");
@@ -1124,6 +1153,7 @@ int main(int argc, char *argv[]) {
         .pid = -1,
     };
     const char *coredump_path = NULL;
+    bool startprog = false;
 
     setvbuf(stdin, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
@@ -1208,12 +1238,6 @@ int main(int argc, char *argv[]) {
     signal(SIGPIPE, SIG_IGN);
     evlp_exit_onsignal();
 
-    if (memtrace.pid <= 0) {
-        CONSOLE("PID not provided");
-        help();
-        goto error;
-    }
-
     if (!libname) {
         libname = find_libmemtrace_agent();
     }
@@ -1223,6 +1247,23 @@ int main(int argc, char *argv[]) {
     }
     CONSOLE("Memtrace agent is %s", libname);
     memtrace.inject_libname = libname;
+
+    if (optind < argc) {
+        if (memtrace.pid > 0) {
+            CONSOLE("Unknown arguments");
+            help();
+            goto error;
+        }
+        startprog = true;
+        memtrace.pid = startprog_with(&argv[optind], libname);
+
+    }
+    else if (memtrace.pid <= 0) {
+        CONSOLE("PID not provided");
+        help();
+        goto error;
+    }
+
     if (coredump_path) {
         DIR *threads = NULL;
         if (!(threads = threads_attach(memtrace.pid))) {
@@ -1241,31 +1282,48 @@ int main(int argc, char *argv[]) {
     assert((memtrace.timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC)) >= 0);
     assert(evlp_add_handler(memtrace.evlp, &memtrace.timerfd_handler, memtrace.timerfd, EPOLLIN));
 
-    // Inject memtrace-agent library in target process
-    if (!library_is_loaded(memtrace.pid, libname)) {
-        if (!inject_memtrace_agent(memtrace.pid, libname)) {
-            CONSOLE("Failed to inject memtrace agent in target process");
+    if (startprog) {
+        // Program was started by us with libmemtrace-agent preloaded.
+        // However, hooks are not yet setup and the agent is waiting
+        // for resume command.
+        bus_initialize(&memtrace.agent, memtrace.evlp, "memtrace", "memtrace.agent");
+        if (!connect_to_memtrace_agent(&memtrace.agent, memtrace.pid)) {
+            CONSOLE("Failed to connect to memtrace-agent");
             goto error;
         }
-    }
-    else if (update_hooks) {
-        CONSOLE("Update memtrace hooks");
-        if (update_memtrace_hooks(memtrace.pid, libname)) {
-            rt = 0;
+        if (!memtrace_setup_hooks(memtrace.pid, libname)) {
+            goto error;
         }
-        goto error;
+        memtrace_send_resume_execution(&memtrace);
     }
     else {
-        CONSOLE("Memtrace agent is already injected in target process");
-    }
+        // Program was already started.
+        // Inject libmemtrace-agent library if needed, setup hooks, and connect to bus.
+        if (!library_is_loaded(memtrace.pid, libname)) {
+            CONSOLE("Injecting %s to target process %d", libname, memtrace.pid);
+            if (!memtrace_inject_agent(memtrace.pid, libname)) {
+                CONSOLE("Failed to inject memtrace agent in target process");
+                goto error;
+            }
+        }
+        else if (update_hooks) {
+            if (memtrace_setup_hooks(memtrace.pid, libname)) {
+                rt = 0;
+            }
+            goto error;
+        }
+        else {
+            CONSOLE("Memtrace agent is already loaded in target process");
+        }
 
-    // Establish ipc connection to memtrace-agent
-    bus_initialize(&memtrace.agent, memtrace.evlp, "memtrace", "memtrace.agent");
-    if (!connect_to_memtrace_agent(&memtrace.agent, memtrace.pid)) {
-        CONSOLE("Failed to connect to memtrace-agent");
-        goto error;
+        // Establish ipc connection to memtrace-agent
+        bus_initialize(&memtrace.agent, memtrace.evlp, "memtrace", "memtrace.agent");
+        if (!connect_to_memtrace_agent(&memtrace.agent, memtrace.pid)) {
+            CONSOLE("Failed to connect to memtrace-agent");
+            goto error;
+        }
+        CONSOLE("Memtrace is connected to target process %d", memtrace.pid);
     }
-    CONSOLE("Memtrace is connected to target process %d", memtrace.pid);
 
     // Establish connection to memtrace-server and add socket to event loop
     if (hostname && client) {
@@ -1324,6 +1382,13 @@ int main(int argc, char *argv[]) {
     // Enter event loop
     evlp_main(memtrace.evlp);
     rt = 0;
+
+    if (startprog && memtrace.pid > 0) {
+        // Program is a Child process
+        CONSOLE("Waiting for program to finish");
+        kill(memtrace.pid, SIGTERM);
+        waitpid(memtrace.pid, NULL, 0);
+    }
 
 error:
     free(libname);
