@@ -105,7 +105,6 @@ static bool connect_to_memtrace_agent(bus_t *bus, int pid) {
         }
         if (i == 0) {
             CONSOLE("memtrace agent is not yet ready");
-            CONSOLE("Waiting for target process to perform at least one memory allocation");
         }
         if (usleep(200*1000) != 0) {
             TRACE_ERROR("usleep(): %m");
