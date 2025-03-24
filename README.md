@@ -2,16 +2,22 @@
 ## 1. Overview
 memtrace is a memory leak cross-debugger for Linux Embedded Systems.
 
-You can simply attach to a target process with `memtrace -p $pid`.
+- You can attach to a running process with `memtrace -p $pid` and track in real-time the top memory allocations. Stop the target process to get a report of what's left at exit.
+- You can start a new program with memtrace attached: `memtrace PROG [ARGS]..`
+- You can start endurance tests with `memtrace-endurance PROCNAME start`, let it run for a few hours/day, collect the results and view(plot) the evolution of the top memory allocations with `memtrace-viewer`.
 
-To benefit from backtraces with debug symbols, you can also start a memtrace-server on your Host computer.
+The tool can run on stripped executables and libraries, without debug symbols on target platform.
+
+You still need to have the debug symbols on your Host to decode the report. You can choose to either:
+- Start memtrace without debug symbols support. You will still get 'raw' reports than you can decode afterwards on Host with memtrace-server: `memtrace-server --report /path/to/report` [STAGINGDIR]`
+- Start memtrace with `--multicast` option to look for the memtrace-server running on your Host in your LAN network. memtrace will query the server to decode the report. The server can be started with `memtrace-server [STAGINGDIR]`.
 
 It's main advantages are:
-
 - It can be attached to a process already running
 - Cross-debugging (No debug symbols needed on the target process)
 - gdb support for inspecting memory allocation context
-- Supported Platforms: x64, arm, aarch64 (arm64) and MIPS
+- Supported Platforms are x64, arm, aarch64 (arm64) and MIPS
+
 
 ## 2 Compilation
 ### 2.1 Compilation for Host Platform
@@ -408,7 +414,5 @@ sequenceDiagram
 
 ## 7. TODO
 Improvement idea:
-- memtrace MUST display a final report after application exit (Use a destructor in lib. Implement kill command.).
-- Add the possibility to start a program directly with memtrace. Maybe using `LD_LIBRARY_PRELOAD` ?
 - memtrace-endurance should append coredump(s) of the context(s) with the highest memory usage to the .tar.gz archive
 - Scan for definitely lost memory. Maybe count the number of reference of each pointer in /dev/$pid/mem ? One problem maybe than the libmemtrace-agent itself is referencing such pointers.
