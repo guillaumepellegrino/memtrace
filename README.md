@@ -51,6 +51,16 @@ $ scp scripts/memtrace-endurance $hostname-target:/tmp/
 > $ mount -o remount,exec /tmp/
 > ```
 
+```
+> [!IMPORTANT]
+> On some Linux distribution, you may have apparmor protecting your target process
+> from the injection of libmemtrace-agent.so (with dlopen()).
+> So, you may need to disable apparmor for this purpose:
+> ```
+> $ echo -n "complain" > /sys/module/apparmor/parameters/mode
+> ```
+
+
 ## 3. Endurance tests with Memtrace
 
 memtrace-endurance is a script allowing to perform endurance tests with Memtrace.
@@ -414,5 +424,6 @@ sequenceDiagram
 
 ## 7. TODO
 Improvement idea:
+- How to handle apparmor properly ?
 - memtrace-endurance should append coredump(s) of the context(s) with the highest memory usage to the .tar.gz archive
 - Scan for definitely lost memory. Maybe count the number of reference of each pointer in /dev/$pid/mem ? One problem maybe than the libmemtrace-agent itself is referencing such pointers.
