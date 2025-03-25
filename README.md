@@ -51,7 +51,6 @@ $ scp scripts/memtrace-endurance $hostname-target:/tmp/
 > $ mount -o remount,exec /tmp/
 > ```
 
-```
 > [!IMPORTANT]
 > On some Linux distribution, you may have apparmor protecting your target process
 > from the injection of libmemtrace-agent.so (with dlopen()).
