@@ -32,6 +32,7 @@
 #include <sys/ptrace.h>
 #include <sys/mman.h>
 #include <sys/user.h>
+#include <sys/stat.h>
 #include <dlfcn.h>
 #include "inject.h"
 #include "log.h"
@@ -45,6 +46,7 @@
 #include "elf_relocate.h"
 #include "syscall.h"
 #include "threads.h"
+#include "apparmor.h"
 
 struct _injecter {
     int pid; /** PID of the target process */
@@ -478,7 +480,54 @@ bool injecter_set_library(injecter_t *injecter, const char *libname) {
     return injecter->inject_lib;
 }
 
+static void injecter_call_dlerror(injecter_t *injecter) {
+    char error[512];
+    size_t retval = 0;
+    if (!injecter_call(injecter, "dlerror", 0, NULL, &retval)) {
+        TRACE_ERROR("Could not call dlerror()");
+        return;
+    }
+    int memfd = syscall_memfd(&injecter->syscall);
+    memfd_readstr(memfd, error, sizeof(error), retval);
+    TRACE_ERROR("dlopen() -> %s", error);
+}
+
+static bool injecter_check_library(injecter_t *injecter, const char *libname) {
+    bool rt = false;
+    char *ns_libname = NULL;
+    struct stat st = {0};
+    assert(asprintf(&ns_libname, "/proc/%d/root%s", injecter->pid, libname) > 0);
+    if (stat(libname, &st) != 0) {
+        CONSOLE("Error: Could not find %s: %m", libname);
+        goto error;
+    }
+    if (stat(ns_libname, &st) != 0) {
+        CONSOLE("Error: Could not find %s: %m", ns_libname);
+        CONSOLE("  but we could find %s", libname);
+        CONSOLE("=> The target process seems to be running in a container");
+        CONSOLE("=> This usecase is currently not supported");
+        goto error;
+    }
+
+
+    rt = true;
+error:
+    free(ns_libname);
+    return rt;
+}
+
 bool injecter_load_library(injecter_t *injecter, const char *libname) {
+    bool rt = false;
+    char *apparmor = NULL;
+    if (!injecter_check_library(injecter, libname)) {
+        goto error;
+    }
+    apparmor = apparmor_read_mode();
+    if (apparmor && !strcmp(apparmor, "enforce")) {
+        TRACE_WARNING("Temporarly disabling apparmor for injecting library");
+        apparmor_set_mode("complain");
+    }
+
     char flags[16];
     snprintf(flags, sizeof(flags), "%d", RTLD_LAZY);
     const char *argv[] = {libname, flags};
@@ -497,26 +546,21 @@ bool injecter_load_library(injecter_t *injecter, const char *libname) {
     }
     else {
         TRACE_ERROR("Can not load library in target process: target does not have dlopen() nor __libc_dlopen_mode()");
-        return false;
+        goto error;
     }
 
     // load library !
     if (!injecter_call(injecter, function, 2, argv, &retval)) {
         TRACE_ERROR("Failed to inject %s in target process", libname);
-        return false;
+        goto error;
     }
     if (retval == 0) {
-        TRACE_ERROR("%s() returned an error", function);
-        if (!injecter_call(injecter, "dlerror", 0, NULL, &retval)) {
-            TRACE_ERROR("Could not call dlerror()");
-            return false;
+        TRACE_ERROR("%s(%s, RTLD_LAZY) returned an error", function, libname);
+        TRACE_ERROR("Does the target process has the access rights to open %s ?", libname);
+        if (has_dlopen) {
+            injecter_call_dlerror(injecter);
+            goto error;
         }
-        char error[512];
-        int memfd = syscall_memfd(&injecter->syscall);
-        memfd_readstr(memfd, error, sizeof(error), retval);
-        TRACE_ERROR("%s() -> %s", function, error);
-
-        return false;
     }
 
     // verify library is well loaded
@@ -531,7 +575,13 @@ bool injecter_load_library(injecter_t *injecter, const char *libname) {
     CONSOLE("Library %s injected with success in target process !", libname);
     libraries_print(injecter->libraries, stdout);
 
-    return true;
+    rt = true;
+error:
+    if (apparmor && !strcmp(apparmor, "enforce")) {
+        TRACE_WARNING("Enabling back apparmor");
+        apparmor_set_mode(apparmor);
+    }
+    return rt;
 }
 
 bool injecter_replace_function(injecter_t *injecter, const char *program_fname, const char *inject_fname) {

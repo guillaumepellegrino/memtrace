@@ -1209,7 +1209,8 @@ int main(int argc, char *argv[]) {
     };
     int rt = 1;
     int opt = -1;
-    char *libname = NULL;
+    char *librelpath = NULL;
+    char *libabspath = NULL;
     const char *hostname = NULL;
     const char *port = "3002";
     bool client = false;
@@ -1240,7 +1241,7 @@ int main(int argc, char *argv[]) {
                 memtrace.pid = atoi(optarg);
                 break;
             case 'L':
-                libname = strdup(optarg);
+                librelpath = strdup(optarg);
                 break;
             case 'C':
                 coredump_path = optarg;
@@ -1307,15 +1308,21 @@ int main(int argc, char *argv[]) {
     signal(SIGPIPE, SIG_IGN);
     evlp_exit_onsignal();
 
-    if (!libname) {
-        libname = find_libmemtrace_agent();
+    if (!librelpath) {
+        librelpath = find_libmemtrace_agent();
     }
-    if (!libname) {
-        CONSOLE("Could not find memtrace agent");
+    if (!librelpath) {
+        CONSOLE("Error: Could not find memtrace agent");
         goto error;
     }
-    CONSOLE("Memtrace agent is %s", libname);
-    memtrace.inject_libname = libname;
+
+    libabspath = realpath(librelpath, NULL);
+    if (!libabspath) {
+        CONSOLE("Error: Could not find %s: %m", librelpath);
+        goto error;
+    }
+    CONSOLE("Memtrace agent is %s", libabspath);
+    memtrace.inject_libname = libabspath;
 
     if (optind < argc) {
         if (memtrace.pid > 0) {
@@ -1324,7 +1331,7 @@ int main(int argc, char *argv[]) {
             goto error;
         }
         startprog = true;
-        memtrace.pid = startprog_with(&argv[optind], libname);
+        memtrace.pid = startprog_with(&argv[optind], libabspath);
 
     }
     else if (memtrace.pid <= 0) {
@@ -1360,7 +1367,7 @@ int main(int argc, char *argv[]) {
             CONSOLE("Failed to connect to memtrace-agent");
             goto error;
         }
-        if (!memtrace_setup_hooks(memtrace.pid, libname)) {
+        if (!memtrace_setup_hooks(memtrace.pid, libabspath)) {
             goto error;
         }
         memtrace_send_resume_execution(&memtrace);
@@ -1368,15 +1375,15 @@ int main(int argc, char *argv[]) {
     else {
         // Program was already started.
         // Inject libmemtrace-agent library if needed, setup hooks, and connect to bus.
-        if (!library_is_loaded(memtrace.pid, libname)) {
-            CONSOLE("Injecting %s to target process %d", libname, memtrace.pid);
-            if (!memtrace_inject_agent(memtrace.pid, libname)) {
+        if (!library_is_loaded(memtrace.pid, libabspath)) {
+            CONSOLE("Injecting %s to target process %d", libabspath, memtrace.pid);
+            if (!memtrace_inject_agent(memtrace.pid, libabspath)) {
                 CONSOLE("Failed to inject memtrace agent in target process");
                 goto error;
             }
         }
         else if (update_hooks) {
-            if (memtrace_setup_hooks(memtrace.pid, libname)) {
+            if (memtrace_setup_hooks(memtrace.pid, libabspath)) {
                 rt = 0;
             }
             goto error;
@@ -1461,7 +1468,8 @@ int main(int argc, char *argv[]) {
     }
 
 error:
-    free(libname);
+    free(librelpath);
+    free(libabspath);
     free(memtrace.logfile);
     close(memtrace.timerfd);
     strlist_cleanup(&memtrace.commands);
