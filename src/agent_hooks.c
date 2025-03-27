@@ -54,6 +54,9 @@ static agent_t g_agent = {0};
 
 __attribute__((constructor))
 static void agent_dlopen() {
+    if (getenv("MEMTRACE_DRYRUN")) {
+        return;
+    }
     syslog(LOG_WARNING, "memtrace agent injected !");
     log_set_header("[memtrace-agent]");
     TRACE_WARNING("Library injected !");
@@ -76,6 +79,9 @@ static void agent_dlopen() {
 
 __attribute__((destructor))
 static void agent_dlclose() {
+    if (getenv("MEMTRACE_DRYRUN")) {
+        return;
+    }
     TRACE_WARNING("memtrace agent exiting");
     agent_cleanup(&g_agent);
 }

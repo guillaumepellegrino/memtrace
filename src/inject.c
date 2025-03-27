@@ -33,6 +33,7 @@
 #include <sys/mman.h>
 #include <sys/user.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <dlfcn.h>
 #include "inject.h"
 #include "log.h"
@@ -492,23 +493,82 @@ static void injecter_call_dlerror(injecter_t *injecter) {
     TRACE_ERROR("dlopen() -> %s", error);
 }
 
+// Check if we are able to load this library in the target process
+// - Can we open the library in read-only ?
+// - Does its mount point have noexec flag ?
+// - Can we open the library in read-only in the target process root directory ? (it may fail if process is running in a container)
+// - Does its mount point have noexec flag ?
+// - Are we able to load the librarary, locally ? (it may fail if library is stored in a read-exec partition or if library has any linking issue)
+// - Can the target process, open the library in read-only ?
+//
+// The goal is to provide comprehensive error messages when the library injection fails.
 static bool injecter_check_library(injecter_t *injecter, const char *libname) {
     bool rt = false;
     char *ns_libname = NULL;
-    struct stat st = {0};
+    struct statvfs vfs = {0};
+    int fd = -1;
     assert(asprintf(&ns_libname, "/proc/%d/root%s", injecter->pid, libname) > 0);
-    if (stat(libname, &st) != 0) {
-        CONSOLE("Error: Could not find %s: %m", libname);
-        goto error;
-    }
-    if (stat(ns_libname, &st) != 0) {
-        CONSOLE("Error: Could not find %s: %m", ns_libname);
-        CONSOLE("  but we could find %s", libname);
-        CONSOLE("=> The target process seems to be running in a container");
-        CONSOLE("=> This usecase is currently not supported");
-        goto error;
-    }
 
+    fd = open(libname, O_RDONLY|O_CLOEXEC);
+    if (fd < 0) {
+        CONSOLE("Error: Could not open %s: %m", libname);
+        goto error;
+    }
+    if (fstatvfs(fd, &vfs) != 0) {
+        TRACE_ERROR("fstatvfs(%s): %m", libname);
+        goto error;
+    }
+    if (vfs.f_flag & ST_NOEXEC) {
+        CONSOLE("Error: %s is stored on a mount point with noexec flag", libname);
+        CONSOLE("Please remount it with exec rights:");
+        CONSOLE("  mount -o remount,exec /path/to/mount/point");
+        goto error;
+    }
+    close(fd);
+    fd = open(ns_libname, O_RDONLY|O_CLOEXEC);
+    if (fd < 0) {
+        CONSOLE("Error: Could not open %s: %m", ns_libname);
+        CONSOLE("  but we could open %s", libname);
+        CONSOLE("=> The target process seems to be running in a container");
+        CONSOLE("=> This usecase is currently  supported");
+        goto error;
+    }
+    if (fstatvfs(fd, &vfs) != 0) {
+        TRACE_ERROR("fstatvfs(%s): %m", ns_libname);
+        goto error;
+    }
+    if (vfs.f_flag & ST_NOEXEC) {
+        CONSOLE("Error: %s is stored on a mount point with noexec flag", ns_libname);
+        CONSOLE("Please remount it with exec rights");
+        CONSOLE("  mount -o remount,exec /path/to/mount/point");
+    }
+    close(fd);
+
+    // Dry run: check if we can load the agent library but without actually starting the agent
+    setenv("MEMTRACE_DRYRUN", "1", 1);
+    void *dl = dlopen(ns_libname, RTLD_LAZY);
+    if (!dl) {
+        CONSOLE("ERROR: Can not open %s locally", ns_libname);
+        CONSOLE("dlerror() => %s", dlerror());
+        goto error;
+    }
+    dlclose(dl);
+    unsetenv("MEMTRACE_DRYRUN");
+
+    // now, check if we can open the file in the target process !
+    // we don't have real guarantee than target process have rights for it.
+    char flags[16];
+    size_t retval = 0;
+    snprintf(flags, sizeof(flags), "%d", O_RDONLY|O_CLOEXEC);
+    const char *argv[] = {libname, flags};
+    if (!injecter_call(injecter, "open", 2, argv, &retval)) {
+        TRACE_ERROR("function call injection failed");
+        goto error;
+    }
+    if (((ssize_t) retval) < 0) {
+        CONSOLE("ERROR: Target process could not open %s", libname);
+        goto error;
+    }
 
     rt = true;
 error:
@@ -519,13 +579,15 @@ error:
 bool injecter_load_library(injecter_t *injecter, const char *libname) {
     bool rt = false;
     char *apparmor = NULL;
-    if (!injecter_check_library(injecter, libname)) {
-        goto error;
-    }
+
     apparmor = apparmor_read_mode();
     if (apparmor && !strcmp(apparmor, "enforce")) {
         TRACE_WARNING("Temporarly disabling apparmor for injecting library");
         apparmor_set_mode("complain");
+    }
+
+    if (!injecter_check_library(injecter, libname)) {
+        goto error;
     }
 
     char flags[16];

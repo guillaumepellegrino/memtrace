@@ -44,11 +44,11 @@ char *apparmor_read_mode() {
 void apparmor_set_mode(const char *mode) {
     int fd = open("/sys/module/apparmor/parameters/mode", O_WRONLY);
     if (fd < 0) {
-        TRACE_ERROR("Could not open apparmor mode for write: %m");
+        TRACE_WARNING("Could not open apparmor mode for write: %m");
         return;
     }
     if (write(fd, mode, strlen(mode)) < 0) {
-        TRACE_ERROR("Could not write apparmor mode=%s: %m", mode);
+        TRACE_WARNING("Could not write apparmor mode=%s: %m", mode);
         close(fd);
         return;
     }

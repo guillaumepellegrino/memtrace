@@ -1305,6 +1305,7 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    version();
     signal(SIGPIPE, SIG_IGN);
     evlp_exit_onsignal();
 
