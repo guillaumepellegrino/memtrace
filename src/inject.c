@@ -530,7 +530,7 @@ static bool injecter_check_library(injecter_t *injecter, const char *libname) {
         CONSOLE("Error: Could not open %s: %m", ns_libname);
         CONSOLE("  but we could open %s", libname);
         CONSOLE("=> The target process seems to be running in a container");
-        CONSOLE("=> This usecase is currently  supported");
+        CONSOLE("=> This usecase is currently not supported");
         goto error;
     }
     if (fstatvfs(fd, &vfs) != 0) {
