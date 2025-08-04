@@ -28,7 +28,7 @@
 #include "log.h"
 
 char *apparmor_read_mode() {
-    char mode[32];
+    char mode[32] = {0};
     int fd = open("/sys/module/apparmor/parameters/mode", O_RDONLY);
     if (fd < 0) {
         return NULL;

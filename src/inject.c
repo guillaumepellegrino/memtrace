@@ -581,6 +581,7 @@ bool injecter_load_library(injecter_t *injecter, const char *libname) {
     char *apparmor = NULL;
 
     apparmor = apparmor_read_mode();
+    TRACE_LOG("apparmor mode = %s", apparmor);
     if (apparmor && !strcmp(apparmor, "enforce")) {
         TRACE_WARNING("Temporarly disabling apparmor for injecting library");
         apparmor_set_mode("complain");
