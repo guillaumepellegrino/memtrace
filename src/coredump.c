@@ -27,6 +27,9 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/ptrace.h>
+#include <signal.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 #include "log.h"
 #include "list.h"
 #include "coredump.h"
@@ -34,6 +37,8 @@
 #include "arch.h"
 #include "elf_main.h"
 
+#define PIPE_RDEND 0
+#define PIPE_WREND 1
 #define section_name_empty 0
 #define section_name_shstrtab 1
 #define section_name_note0 11
@@ -782,8 +787,7 @@ void coredump_write(int pid, int memfd, FILE *fp, cpu_registers_t *regs) {
     elf_coredump_cleanup(&coredump);
 }
 
-
-void coredump_write_file(const char *filename, int pid, cpu_registers_t *regs) {
+void coredump_write_plain_file(const char *filename, int pid, cpu_registers_t *regs) {
     char defaultfile[64];
     int memfd = -1;
     FILE *core = NULL;
@@ -811,5 +815,69 @@ error:
     }
     if (core) {
         fclose(core);
+    }
+}
+
+void coredump_write_gzip_file(const char *filename, int pid, cpu_registers_t *regs) {
+    char defaultfile[64];
+    int memfd = -1;
+    int core = -1;
+    int pipe_in[2];
+
+    if (!filename) {
+        snprintf(defaultfile, sizeof(defaultfile), "memtrace-%d.core.gz", pid);
+        filename = defaultfile;
+    }
+    if ((memfd = memfd_open(pid)) < 0) {
+        return;
+    }
+    if ((core = open(filename, O_CREAT|O_WRONLY, 0644)) < 0) {
+        TRACE_ERROR("Failed to open %s: %m", filename);
+        close(memfd);
+        return;
+    }
+
+    assert(pipe(pipe_in) == 0);
+    int child = fork();
+    assert(child>= 0);
+
+    if (child == 0) {
+        // Set pipe as gzip's stdin
+        // Set core file as gzip's stdout
+        assert(dup2(pipe_in[PIPE_RDEND], 0) == 0);
+        assert(dup2(core, 1) == 1);
+        close(pipe_in[PIPE_RDEND]);
+        close(pipe_in[PIPE_WREND]);
+        close(core);
+
+        const char *argv[] = {"gzip", "-c", NULL};
+        execvp(argv[0], (char **) argv);
+        assert(false);
+    }
+
+    close(core); // owned by child proc
+    close(pipe_in[PIPE_RDEND]); // owned by child proc
+    FILE *pipe_fp = fdopen(pipe_in[PIPE_WREND], "w");
+    assert(pipe_fp);
+
+    fprintf(stderr, "Writing gzip coredump to %s\n", filename);
+    coredump_write(pid, memfd, pipe_fp, regs);
+    fclose(pipe_fp);
+    close(memfd);
+    waitpid(child, NULL, __WALL);
+    fprintf(stderr, "Writing gzip coredump done\n");
+}
+
+void coredump_write_file(const char *filename, int pid, cpu_registers_t *regs) {
+    const char *extension = NULL;
+
+    if (filename) {
+        extension = strrchr(filename, '.');
+    }
+    if (extension && !strcmp(extension, ".gz")) {
+        coredump_write_gzip_file(filename, pid, regs);
+    }
+    else {
+        coredump_write_plain_file(filename, pid, regs);
     }
 }

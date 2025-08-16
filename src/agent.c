@@ -356,26 +356,36 @@ static bool agent_getcontext(bus_t *bus, bus_connection_t *connection, bus_topic
     agent_t *agent = container_of(topic, agent_t, getcontext_topic);
     size_t i = 0;
     size_t context_idx = 0;
+    size_t context_uid = 0;
     hashmap_iterator_t *it = NULL;
     block_t *block = NULL;
+    block_t *found = NULL;
     int retval = false;
     const char *descr = "Success";
     bool lock = hooks_lock();
     char key[32];
 
     strmap_get_fmt(options, "context", "%zu", &context_idx);
+    strmap_get_fmt(options, "uid", "%zu", &context_uid);
 
     // Lookup for context by index
     hashmap_qsort(&agent->blocks, blocks_map_compar);
 
     hashmap_for_each(it, &agent->blocks) {
-        if (context_idx == i) {
-            block = container_of(it, block_t, it);
+        block = container_of(it, block_t, it);
+        if (context_uid > 0) {
+            if (context_uid == block->uid) {
+                found = block;
+                break;
+            }
+        }
+        else if (context_idx == i) {
+            found = block;
             break;
         }
         i++;
     }
-    if (!block) {
+    if (!found) {
         descr = "Memory allocation context not found";
         goto error;
     }
@@ -383,7 +393,7 @@ static bool agent_getcontext(bus_t *bus, bus_connection_t *connection, bus_topic
     // Print callstack associated to context
     for (i = 0; i < agent->callstack_size; i++) {
         snprintf(key, sizeof(key), "%zu", i);
-        strmap_add_fmt(options, key, "%p", block->callstack[i]);
+        strmap_add_fmt(options, key, "%p", found->callstack[i]);
     }
     retval = true;
 

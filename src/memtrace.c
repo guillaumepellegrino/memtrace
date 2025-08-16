@@ -430,10 +430,12 @@ static void memtrace_console_kill(console_t *console, int argc, char *argv[]) {
 }
 
 static void memtrace_console_coredump(console_t *console, int argc, char *argv[]) {
-    const char *short_options = "+c:f:hn";
+    const char *short_options = "+c:f:u:hn";
     const struct option long_options[] = {
         {"context",     required_argument,  0, 'c'},
+        {"uid",         required_argument,  0, 'u'},
         {"file",        required_argument,  0, 'f'},
+        {"timeout",     required_argument,  0, 't'},
         {"now",         no_argument,        0, 'n'},
         {"help",        no_argument,        0, 'h'},
         {0},
@@ -452,6 +454,7 @@ static void memtrace_console_coredump(console_t *console, int argc, char *argv[]
     libraries_t *libraries = NULL;
     int memfd = -1;
     size_t bp_addr = 0;
+    int timeout = 0;
 
     optind = 1;
     while ((opt = getopt_long(argc, argv, short_options, long_options, NULL)) != -1) {
@@ -459,8 +462,14 @@ static void memtrace_console_coredump(console_t *console, int argc, char *argv[]
             case 'c':
                 strmap_add(&options, "context", optarg);
                 break;
+            case 'u':
+                strmap_add(&options, "uid", optarg);
+                break;
             case 'f':
                 filename = optarg;
+                break;
+            case 't':
+                timeout = atoi(optarg);
                 break;
             case 'n':
                 now = true;
@@ -470,9 +479,11 @@ static void memtrace_console_coredump(console_t *console, int argc, char *argv[]
                 CONSOLE("Usage: coredump [OPTION]..");
                 CONSOLE("Mark a memory context for coredump generation");
                 CONSOLE("  -h, --help             Display this help");
-                CONSOLE("  -c, --context=VALUE    Mark the specified memory context for coredump generation (default:core.%d)", memtrace->pid);
+                CONSOLE("  -c, --context=VALUE    Mark the memory context with specified INDEX for coredump generation");
+                CONSOLE("  -u, --uid=VALUE        Mark the memory context with specified UID for coredump generation");
+                CONSOLE("  -t, --timeout=SECONDS  Exit after the specified timeout");
                 CONSOLE("  -n, --now              Generate a breakpoint, now !");
-                CONSOLE("  -f, --file=PATH        Write the coredump to the specified path");
+                CONSOLE("  -f, --file=PATH        Write the coredump to the specified path (default:core.%d)", memtrace->pid);
                 goto error;
         }
     }
@@ -549,6 +560,8 @@ static void memtrace_console_coredump(console_t *console, int argc, char *argv[]
         CONSOLE("%p is not an allocation function", callstack[0]);
         goto error;
     }
+
+    alarm(timeout);
     if (!breakpoint_wait_until_callstack_matched(pid, threads, memfd, bp_addr, callstack, sizeof(callstack))) {
         CONSOLE("Breakpoint was not hit");
         goto error;
@@ -560,6 +573,7 @@ static void memtrace_console_coredump(console_t *console, int argc, char *argv[]
     coredump_write_file(filename, pid, &regs);
 
 error:
+    alarm(0);
     if (memfd >= 0) {
         close(memfd);
     }
