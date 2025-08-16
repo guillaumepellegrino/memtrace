@@ -34,7 +34,7 @@
 
 struct _evlp {
     int epfd;
-    bool run;
+    volatile bool run;
     evlp_handler_t sighandler;
     int sfd;
 };

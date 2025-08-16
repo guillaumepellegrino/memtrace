@@ -1439,15 +1439,22 @@ int main(int argc, char *argv[]) {
         strlist_iterator_t *it = NULL;
         FILE *fp = NULL;
         int fds[2] = {-1, -1};
+        bool keeprunning = false;
         assert(pipe(fds) == 0);
         assert(dup2(fds[0], 0) == 0);
         close(fds[0]);
         assert((fp = fdopen(fds[1], "w")));
         strlist_for_each(it, &memtrace.commands) {
-            fprintf(fp, "%s\n", strlist_iterator_value(it));
+            const char *cmd = strlist_iterator_value(it);
+            if (!strncmp(cmd, "kill", 4)) {
+                keeprunning = true;
+            }
+            fprintf(fp, "%s\n", cmd);
         }
         fflush(fp);
-        fclose(fp);
+        if (!keeprunning) {
+            fclose(fp);
+        }
     }
     else {
         CONSOLE("Enter 'help' for listing possible commands");

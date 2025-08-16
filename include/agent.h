@@ -71,6 +71,7 @@ typedef struct {
     size_t elapsed;
     uint64_t available_uid;
     sem_t wait4resume;
+    sem_t thread_exited;
 } agent_t;
 
 bool agent_initialize(agent_t *agent);

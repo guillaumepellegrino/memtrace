@@ -562,11 +562,14 @@ static void *ipc_accept_loop(void *arg) {
 
     if (!bus_ipc_listen(&agent->bus, agent->ipc)) {
         TRACE_ERROR("Failed to listen on ipc socket");
-        return NULL;
+        goto exit;
     }
 
     evlp_main(agent->evlp);
+exit:
     TRACE_WARNING("Control Thread - Exiting event loop");
+    sem_post(&agent->thread_exited);
+
 
     return NULL;
 }
@@ -647,6 +650,7 @@ bool agent_initialize(agent_t *agent) {
     }
 
     sem_init(&agent->wait4resume, 0, 0);
+    sem_init(&agent->thread_exited, 0, 0);
     if (pthread_create(&agent->thread, NULL, ipc_accept_loop, agent) != 0) {
         TRACE_ERROR("Failed to create thread: %m");
     }
@@ -664,6 +668,11 @@ bool agent_initialize(agent_t *agent) {
 
 void agent_cleanup(agent_t *agent) {
     agent_write_exit_report(agent);
+
+    // Ensure the evlp thread stopped before cleanup anything
+    evlp_stop(agent->evlp);
+    sem_wait(&agent->thread_exited);
+
     evlp_remove_handler(agent->evlp, agent->stats_lasthour_timerfd);
     close(agent->stats_lasthour_timerfd);
     bus_cleanup(&agent->bus);
