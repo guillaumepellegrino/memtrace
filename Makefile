@@ -17,6 +17,9 @@ clean: $(addsuffix -clean, $(SUBMAKE))
 %-clean:
 	$(MAKE) -f Makefile.${@:-clean=} clean
 
+test:
+	$(MAKE) -f Makefile.target test
+
 cleanall:
 	rm -rf build-*
 

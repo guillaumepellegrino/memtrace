@@ -108,8 +108,14 @@ static bool callstack_matched(int tid, int memfd, cpu_registers_t *regs, void *_
     ssize_t len = 0;
     size_t j = 2;
 
+
     if ((size_t) callstack[1] != cpu_register_get(regs, cpu_register_ra)) {
+        printf("c[1] = %p != ra = %p\n", callstack[1], (void*)cpu_register_get(regs, cpu_register_ra));
         return false;
+    }
+
+    for (i = 0; i < (ssize_t) size; i++) {
+        printf("c[%zu] = %p\n", i, callstack[i]);
     }
 
     if ((len = pread64(memfd, g_buff, sizeof(g_buff), sp)) < 0) {
@@ -131,6 +137,9 @@ static bool callstack_matched(int tid, int memfd, cpu_registers_t *regs, void *_
             }
         }
     }
+    printf("i=%zu\n", i);
+    printf("j=%zu\n", j);
+    printf("\n");
 
     return j >= 10;
 }

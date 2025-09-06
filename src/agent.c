@@ -41,6 +41,7 @@
 #include "elf_file.h"
 #include "evlp.h"
 #include "bus.h"
+#include "memfd.h"
 #include "arch.h"
 #include "log.h"
 
@@ -52,6 +53,7 @@ typedef struct {
     uint64_t uid;
     void **callstack;
     void **large_callstack;
+    char *ptr_format;
     bool do_large_callstack;
 } block_t;
 
@@ -122,6 +124,116 @@ static const char *toolchain_path() {
     return toolchain;
 }
 
+void memfd_print_autofmt(FILE *fp, int memfd, off64_t addr, off64_t len, libraries_t *libraries) {
+    char mem[8192];
+    char str[2048];
+    off64_t base = addr;
+    library_symbol_t info = {0};
+
+    if (len > sizeof(mem)) {
+        len = sizeof(mem);
+    }
+    memfd_read(memfd, mem, len, addr);
+
+
+    fprintf(fp, "0x%"PRIx64" hexdump:", base);
+    char *ascii = mem;
+    bool is_empty = true;
+    for (off64_t i = 0; i < len; i ++) {
+        if (i % 4 == 0) {
+            size_t idx = i / sizeof(size_t);
+            size_t val = ((size_t *) mem)[idx];
+            if (sizeof(size_t) == 4) {
+                fprintf(fp, " %08zx", val);
+            }
+            else if (sizeof(size_t) == 8) {
+                fprintf(fp, " %016zx", val);
+            }
+            if (libraries && libraries_find_symbol_by_addr(libraries, addr, &info)) {
+                if (info.name) {
+                    fprintf(fp, "/func=%s()", info.name);
+                }
+                else {
+                    fprintf(fp, "/func=%s+0x%"PRIx64, library_name(info.library), info.relative_addr);
+                }
+            }
+            if (memfd_readascii(memfd, str, sizeof(str), val)) {
+                fprintf(fp, "/pstr=\"%s\"", str);
+            }
+        }
+
+        char c = mem[i];
+        if (c >= 'a' && c <= 'z') {
+            is_empty = false;
+            continue;
+        }
+        if (c >= 'A' && c <= 'Z') {
+            is_empty = false;
+            continue;
+        }
+        if (c >= '0' && c <= '9') {
+            is_empty = false;
+            continue;
+        }
+        if (c >= ' ' && c <= '~') {
+            continue;
+        }
+        if (c >= '\t' && c <= '\r') {
+            continue;
+        }
+        if (c == 0 && !is_empty) {
+            fprintf(fp, "/str=\"%s\"", ascii);
+        }
+        ascii = mem + i + 1;
+        is_empty = true;
+    }
+    fprintf(fp, "\n");
+}
+
+
+
+static void allocations_print_pointers(agent_t *agent, block_t *block, int pointers, bool dump, FILE *fp) {
+    list_iterator_t *it = NULL;
+    int i = 0;
+
+    if (block == NULL || pointers <= 0 || fp == NULL) {
+        return;
+    }
+
+    fprintf(fp, "[pointers]");
+    list_for_each(it, &block->allocations) {
+        allocation_t *alloc = container_of(it, allocation_t, block_it);
+        fprintf(fp, " %p", alloc->ptr);
+        i++;
+        if (i >= pointers) {
+            break;
+        }
+    }
+    fprintf(fp, "\n");
+
+
+    if (!dump) {
+        return;
+    }
+
+    int memfd = memfd_open(getpid());
+    i = 0;
+    list_for_each(it, &block->allocations) {
+        allocation_t *alloc = container_of(it, allocation_t, block_it);
+        if (!block->ptr_format || !*block->ptr_format) {
+            memfd_print_autofmt(fp, memfd, (size_t) alloc->ptr, alloc->ptr_size, agent->libraries);
+        }
+        else {
+            memfd_print_addr(fp, memfd, (size_t) alloc->ptr, block->ptr_format);
+        }
+        i++;
+        if (i >= pointers) {
+            break;
+        }
+    }
+    close(memfd);
+}
+
 static uint32_t allocations_maps_hash(hashmap_t *hashmap, void *key) {
     size_t addr = (size_t) key;
     return addr >> 2;
@@ -185,7 +297,7 @@ static int blocks_map_compar(const hashmap_iterator_t **lval, const hashmap_iter
     block_t *lblock = container_of(*lval, block_t, it);
     block_t *rblock = container_of(*rval, block_t, it);
 
-    return rblock->count - lblock->count;
+    return rblock->size - lblock->size;
 }
 
 static void blocks_maps_destroy(hashmap_t *hashmap, void *key, hashmap_iterator_t *it) {
@@ -194,6 +306,7 @@ static void blocks_maps_destroy(hashmap_t *hashmap, void *key, hashmap_iterator_
     agent->stats.block_inuse -= 1;
     free(block->callstack);
     free(block->large_callstack);
+    free(block->ptr_format);
     free(block);
 }
 
@@ -270,7 +383,7 @@ static bool agent_status(bus_t *bus, bus_connection_t *connection, bus_topic_t *
     return true;
 }
 
-static void agent_write_report_unlocked(agent_t *agent, FILE *fp, size_t max) {
+static void agent_write_report_unlocked(agent_t *agent, FILE *fp, size_t max, int pointers, bool dump) {
     size_t i = 0;
     hashmap_iterator_t *it = NULL;
 
@@ -290,10 +403,10 @@ static void agent_write_report_unlocked(agent_t *agent, FILE *fp, size_t max) {
             break;
         }
 
-
         fprintf(fp, "Memory allocation context n°%zu with UID %"PRIu64"\n", i, block->uid);
         fprintf(fp, "%zd allocs, %zd bytes were not free\n", block->count, block->size);
         libraries_backtrace_print(agent->libraries, callstack, callstack_size, fp);
+        allocations_print_pointers(agent, block, pointers, dump, fp);
         fprintf(fp, "\n");
 
         i++;
@@ -309,7 +422,7 @@ static void agent_write_exit_report(agent_t *agent) {
     FILE *fp = fopen(path, "w");
     if (fp) {
         TRACE_WARNING("Write exit report to %s", path);
-        agent_write_report_unlocked(agent, fp, 20);
+        agent_write_report_unlocked(agent, fp, 20, 10, true);
         fclose(fp);
     }
     else {
@@ -322,8 +435,10 @@ static bool agent_report(bus_t *bus, bus_connection_t *connection, bus_topic_t *
     bool lock = hooks_lock();
     agent_t *agent = container_of(topic, agent_t, report_topic);
     size_t count = 10;
+    int pointers = 0;
     strmap_get_fmt(options, "count", "%zu", &count);
-    agent_write_report_unlocked(agent, fp, count);
+    strmap_get_fmt(options, "pointers", "%zu", &pointers);
+    agent_write_report_unlocked(agent, fp, count, pointers, true);
     hooks_unlock(lock);
 
     return true;
@@ -349,6 +464,29 @@ static bool agent_clear(bus_t *bus, bus_connection_t *connection, bus_topic_t *t
     return true;
 }
 
+static block_t *agent_context_find(agent_t *agent, uint64_t idx, uint64_t uid) {
+    hashmap_iterator_t *it = NULL;
+    uint64_t i = 0;
+
+    // Lookup for context by index
+    hashmap_qsort(&agent->blocks, blocks_map_compar);
+
+    hashmap_for_each(it, &agent->blocks) {
+        block_t *block = container_of(it, block_t, it);
+        if (uid > 0) {
+            if (uid == block->uid) {
+                return block;
+            }
+        }
+        else if (idx == i) {
+            return block;
+        }
+        i++;
+    }
+
+    return NULL;
+}
+
 /**
  * Read getcontext request and return the specified context
  */
@@ -357,8 +495,6 @@ static bool agent_getcontext(bus_t *bus, bus_connection_t *connection, bus_topic
     size_t i = 0;
     size_t context_idx = 0;
     size_t context_uid = 0;
-    hashmap_iterator_t *it = NULL;
-    block_t *block = NULL;
     block_t *found = NULL;
     int retval = false;
     const char *descr = "Success";
@@ -368,23 +504,7 @@ static bool agent_getcontext(bus_t *bus, bus_connection_t *connection, bus_topic
     strmap_get_fmt(options, "context", "%zu", &context_idx);
     strmap_get_fmt(options, "uid", "%zu", &context_uid);
 
-    // Lookup for context by index
-    hashmap_qsort(&agent->blocks, blocks_map_compar);
-
-    hashmap_for_each(it, &agent->blocks) {
-        block = container_of(it, block_t, it);
-        if (context_uid > 0) {
-            if (context_uid == block->uid) {
-                found = block;
-                break;
-            }
-        }
-        else if (context_idx == i) {
-            found = block;
-            break;
-        }
-        i++;
-    }
+    found = agent_context_find(agent, context_idx, context_uid);
     if (!found) {
         descr = "Memory allocation context not found";
         goto error;
@@ -497,6 +617,42 @@ static bool agent_dataviewer(bus_t *bus, bus_connection_t *connection, bus_topic
     return true;
 }
 
+static bool agent_set_ptr_format(bus_t *bus, bus_connection_t *connection, bus_topic_t *topic, strmap_t *options, FILE *fp) {
+    agent_t *agent = container_of(topic, agent_t, format_topic);
+    size_t context_idx = 0;
+    size_t context_uid = 0;
+    const char *format = NULL;
+    block_t *found = NULL;
+    int retval = false;
+    const char *descr = "Success";
+
+    bool lock = hooks_lock();
+
+    strmap_get_fmt(options, "context", "%zu", &context_idx);
+    strmap_get_fmt(options, "uid", "%zu", &context_uid);
+    format = strmap_get(options, "format");
+    if (!format) {
+        descr = "Missing format";
+        goto error;
+    }
+
+    found = agent_context_find(agent, context_idx, context_uid);
+    if (!found) {
+        descr = "Memory allocation context not found";
+        goto error;
+    }
+    free(found->ptr_format);
+    found->ptr_format = strdup(format);
+    retval = true;
+
+error:
+    strmap_add_fmt(options, "retval", "%d", retval);
+    strmap_add(options, "descr", descr);
+    bus_connection_write_reply(connection, options);
+
+    hooks_unlock(lock);
+    return true;
+}
 
 static void agent_stats_lasthour_handler(evlp_handler_t *self, int events) {
     agent_t *agent = container_of(self, agent_t, stats_lasthour_handler);
@@ -636,6 +792,9 @@ bool agent_initialize(agent_t *agent) {
     agent->dataviewer_topic.name = "dataviewer";
     agent->dataviewer_topic.read = agent_dataviewer;
     bus_register_topic(&agent->bus, &agent->dataviewer_topic);
+    agent->format_topic.name = "set_ptr_format";
+    agent->format_topic.read = agent_set_ptr_format;
+    bus_register_topic(&agent->bus, &agent->format_topic);
 
     agent->stats_lasthour_handler.fn = agent_stats_lasthour_handler;
     assert((agent->stats_lasthour_timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC)) >= 0);

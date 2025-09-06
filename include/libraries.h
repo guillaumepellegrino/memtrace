@@ -40,6 +40,7 @@ typedef enum {
 struct _library_symbol {
     const char *name;
     uint64_t offset;
+    uint64_t relative_addr;
     uint64_t addr;
     uint16_t section_index;
     library_t *library;
@@ -56,7 +57,7 @@ void libraries_print(const libraries_t *libraries, FILE *fp);
 /** Print the library's symbol to fp */
 void library_print_symbol(const library_t *library, size_t ra, FILE *fp);
 
-/** Return the library to which belongs this address */
+/** Return the library to which belongs this absolute address */
 library_t *libraries_find(libraries_t *libraries, size_t address);
 
 /** Return the library corresponding to this name */
@@ -64,6 +65,9 @@ library_t *libraries_find_by_name(libraries_t *libraries, const char *regex);
 
 /** Return the library and symbol corresponding to this symbol name */
 library_symbol_t libraries_find_symbol(libraries_t *libraries, const char *name);
+
+/** Return the library and symbol corresponding to this absolute address */
+bool libraries_find_symbol_by_addr(libraries_t *libraries, size_t addr, library_symbol_t *info);
 
 /** Return the library by index */
 library_t *libraries_get(libraries_t *libraries, size_t idx);

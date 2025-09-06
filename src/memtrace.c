@@ -27,6 +27,7 @@
 #include <fcntl.h>
 #include <dirent.h>
 #include <libgen.h>
+#include <ctype.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/ptrace.h>
@@ -138,7 +139,7 @@ static void memtrace_stop_evlp(memtrace_t *memtrace) {
     evlp_stop(memtrace->evlp);
 }
 
-static bool memtrace_report(memtrace_t *memtrace, int count, FILE *fp) {
+static bool memtrace_report(memtrace_t *memtrace, int count, int pointers, FILE *fp) {
     char line[4096];
     strmap_t options = {0};
     bus_connection_t *ipc = NULL;
@@ -151,6 +152,9 @@ static bool memtrace_report(memtrace_t *memtrace, int count, FILE *fp) {
     }
     if (count) {
         strmap_add_fmt(&options, "count", "%d", count);
+    }
+    if (pointers) {
+        strmap_add_fmt(&options, "pointers", "%d", pointers);
     }
     bus_connection_write_request(ipc, "report", &options);
 
@@ -191,13 +195,19 @@ static void memtrace_console_forward(console_t *console, int argc, char *argv[])
     char line[4096];
     memtrace_t *memtrace = container_of(console, memtrace_t, console);
     bus_connection_t *ipc = NULL;
+    strmap_t options = {0};
 
     if (!(ipc = bus_first_connection(&memtrace->agent))) {
         CONSOLE("memtrace is not connected to target process");
         return;
     }
-
+    for (int i = 1; i < argc; i++) {
+        char argi[32];
+        snprintf(argi, sizeof(argi), "arg%d", i);
+        strmap_add(&options, argi, argv[i]);
+    }
     bus_connection_write_request(ipc, argv[0], NULL);
+
     while (bus_connection_readline(ipc, line, sizeof(line))) {
         if (!strcmp(line, "[cmd_done]\n")) {
             break;
@@ -205,6 +215,7 @@ static void memtrace_console_forward(console_t *console, int argc, char *argv[])
         CONSOLE_RAW("%s", line);
     }
     fflush(stderr);
+    strmap_cleanup(&options);
 }
 
 static void memtrace_console_monitor(console_t *console, int argc, char *argv[]) {
@@ -360,7 +371,7 @@ static void logreport_handler(memtrace_t *memtrace, int events) {
         goto error;
     }
 
-    if (!memtrace_report(memtrace, memtrace->logcount, fp)) {
+    if (!memtrace_report(memtrace, memtrace->logcount, 6, fp)) {
         TRACE_ERROR("Exit event loop");
         memtrace_stop_evlp(memtrace);
         goto error;
@@ -391,14 +402,16 @@ static void timerfd_handler(evlp_handler_t *self, int events) {
 }
 
 static void memtrace_console_report(console_t *console, int argc, char *argv[]) {
-    const char *short_options = "+c:h";
+    const char *short_options = "+c:p:h";
     const struct option long_options[] = {
         {"count",       required_argument,  0, 'c'},
+        {"pointers",    required_argument,  0, 'p'},
         {"help",        no_argument,        0, 'h'},
         {0},
     };
     int opt = -1;
     int count = 10;
+    int pointers = 6;
     memtrace_t *memtrace = container_of(console, memtrace_t, console);
 
     optind = 1;
@@ -407,16 +420,20 @@ static void memtrace_console_report(console_t *console, int argc, char *argv[]) 
             case 'c':
                 count = atoi(optarg);
                 break;
+            case 'p':
+                pointers = atoi(optarg);
+                break;
             case 'h':
             default:
                 CONSOLE("Usage: report [OPTION]..");
                 CONSOLE("Generate a memory usage report");
                 CONSOLE("  -h, --help             Display this help");
                 CONSOLE("  -c, --count=VALUE      Count of memory contexts to display (default:10)");
+                CONSOLE("  -p, --pointers=COUNT   Print the pointers where memory is allocated. Use gdb to dump the values");
                 return;
         }
     }
-    memtrace_report(memtrace, count, stderr);
+    memtrace_report(memtrace, count, pointers, stderr);
 }
 
 static void memtrace_console_kill(console_t *console, int argc, char *argv[]) {
@@ -586,6 +603,50 @@ error:
     }
 
     strmap_cleanup(&options);
+}
+
+static void memtrace_console_print(console_t *console, int argc, char *argv[]) {
+    memtrace_t *memtrace = container_of(console, memtrace_t, console);
+    int memfd = -1;
+
+    if (argc == 1) {
+        CONSOLE("Usage: print [ADDRESS..] [FORMAT]");
+        CONSOLE("Print a memory address");
+        CONSOLE("  -h, --help             Display this help");
+        CONSOLE("Example:  print 0x7a8f54001340");
+        CONSOLE("Example:  print 0x7a8f54001340 xxuiU");
+        CONSOLE("Example:  print 0x7a8f54001340 s");
+        CONSOLE("Example:  print 0x7a8f54001340 0x7a8f54001540 s");
+        return;
+    }
+
+    if ((memfd = memfd_open(memtrace->pid)) < 0) {
+        goto error;
+    }
+    off64_t addr = strtol(argv[1], NULL, 16);
+    if (argc == 2) {
+        uint32_t value = memfd_read32(memfd, addr);
+        CONSOLE("*0x%"PRIx64"=0x%x", addr, value);
+        return;
+    }
+
+    const char *format = "x";
+    for (int i = 1; i < argc; i++) {
+        if (isalpha(argv[i][0])) {
+            format = argv[i];
+        }
+    }
+    for (int i = 1; i < argc; i++) {
+        off64_t addr = strtol(argv[i], NULL, 16);
+        if (addr > 0) {
+            memfd_print_addr(stderr, memfd, addr, format);
+        }
+    }
+
+error:
+    if (memfd >= 0) {
+        close(memfd);
+    }
 }
 
 static void memtrace_console_breakpoint(console_t *console, int argc, char *argv[]) {
@@ -759,6 +820,65 @@ error:
     strmap_cleanup(&options);
 }
 
+static void memtrace_console_set_ptr_format_help() {
+    CONSOLE("Usage: format [OPTION].. FORMAT");
+    CONSOLE("Set pointer format for the specified memtrace context");
+    CONSOLE("  -h, --help             Display this help");
+    CONSOLE("  -c, --context=VALUE    The memtrace context number");
+    CONSOLE("  -u, --uid=VALUE    The memtrace context UID");
+}
+
+static void memtrace_console_set_ptr_format(console_t *console, int argc, char *argv[]) {
+    const char *short_options = "+c:u:h";
+    const struct option long_options[] = {
+        {"context",       required_argument,  0, 'c'},
+        {"uid",           required_argument,  0, 'u'},
+        {"help",          no_argument,        0, 'h'},
+        {0},
+    };
+    int opt = -1;
+    int context = 0;
+    int uid = 0;
+    const char *format = NULL;
+    memtrace_t *memtrace = container_of(console, memtrace_t, console);
+
+    optind = 1;
+    while ((opt = getopt_long(argc, argv, short_options, long_options, NULL)) != -1) {
+        switch (opt) {
+            case 'c':
+                context = atoi(optarg);
+                break;
+            case 'u':
+                uid = atoi(optarg);
+                break;
+            case 'h':
+            default:
+                memtrace_console_set_ptr_format_help();
+                return;
+        }
+    }
+
+    if (optind >= argc) {
+        memtrace_console_set_ptr_format_help();
+        return;
+    }
+    format = argv[optind];
+
+    bus_connection_t *ipc = NULL;
+    if (!(ipc = bus_first_connection(&memtrace->agent))) {
+        TRACE_ERROR("not connected to agent");
+        return;
+    }
+
+    strmap_t options = {0};
+    strmap_add_fmt(&options, "context", "%d", context);
+    strmap_add_fmt(&options, "uid", "%d", uid);
+    strmap_add(&options, "format", format);
+    bus_connection_write_request(ipc, "set_ptr_format", &options);
+    bus_connection_read_reply(ipc, &options);
+    strmap_cleanup(&options);
+}
+
 static const console_cmd_t memtrace_console_commands[] = {
     {.name = "help",        .help = "           Display this help", .handler = console_cmd_help},
     {.name = "quit",        .help = "           Quit memtrace and show report", .handler = memtrace_console_quit},
@@ -768,8 +888,10 @@ static const console_cmd_t memtrace_console_commands[] = {
     {.name = "kill",        .help = "[SIGNAL]   Kill the target process. A report is generated at exit.", .handler = memtrace_console_kill},
     {.name = "logreport",   .help = "[OPTION].. Log reports at a regular interval in specified file. log --help for more details.", .handler = memtrace_console_logreport},
     {.name = "coredump",    .help = "[OPTION].. Mark a memory context for coredump generation. coredump --help for more details.", .handler = memtrace_console_coredump},
+    {.name = "print",       .help = "[OPTION].. Print a memory address. --help for more details.", .handler = memtrace_console_print},
     {.name = "dataviewer",  .help = "[OPTION].. Open memtrace report with dataviewer", .handler = memtrace_console_dataviewer},
     {.name = "break",       .help = "[OPTION].. Break on specified function.", .handler = memtrace_console_breakpoint},
+    {.name = "format",      .help = "[OPTION].. Set pointer format", .handler = memtrace_console_set_ptr_format},
     {.name = "clear",       .help = "           Clear memory statistics", .handler = memtrace_console_forward},
     {0},
 };

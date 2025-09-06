@@ -364,6 +364,7 @@ library_symbol_t library_find_symbol(library_t *library, const char *symname) {
             return (library_symbol_t) {
                 .name = sym.name,
                 .offset = sym.offset,
+                .relative_addr = sym.offset,
                 .addr = library_absolute_address(library, sym.offset),
                 .library = library,
             };
@@ -375,6 +376,7 @@ library_symbol_t library_find_symbol(library_t *library, const char *symname) {
             return (library_symbol_t) {
                 .name = sym.name,
                 .offset = sym.offset,
+                .relative_addr = sym.offset,
                 .addr = library_absolute_address(library, sym.offset),
                 .library = library,
             };
@@ -412,6 +414,38 @@ library_symbol_t libraries_find_symbol(libraries_t *libraries, const char *symna
 
     symcache_push_null(&libraries->cache, symname);
     return (library_symbol_t) {0};
+}
+
+bool libraries_find_symbol_by_addr(libraries_t *libraries, size_t addr, library_symbol_t *info) {
+    assert(libraries);
+    assert(info);
+    library_t *library = libraries_find(libraries, addr);
+    if (!library) {
+        return false;
+    }
+
+    size_t ra = library_relative_address(library, addr);
+    elf_file_t *dynsym = library_get_elf_section(library, library_section_dynsym);
+    elf_file_t *dynstr = library_get_elf_section(library, library_section_dynstr);
+    elf_file_t *symtab = library_get_elf_section(library, library_section_symtab);
+    elf_file_t *strtab = library_get_elf_section(library, library_section_strtab);
+
+    elf_sym_t sym = {0};
+    if (dynsym && dynstr) {
+        sym = elf_sym_from_addr(dynsym, dynstr, ra);
+    }
+    if (symtab && strtab && !sym.name) {
+        sym = elf_sym_from_addr(symtab, strtab, ra);
+    }
+
+    info->name = sym.name;
+    info->offset = sym.offset;
+    info->relative_addr = ra;
+    info->addr = addr;
+    info->section_index = sym.section_index;
+    info->library = library;
+
+    return true;
 }
 
 library_t *libraries_get(libraries_t *libraries, size_t idx) {
@@ -480,29 +514,16 @@ void libraries_backtrace_print(libraries_t *libraries, void **callstack, size_t 
     assert(libraries);
     assert(callstack);
 
+    library_symbol_t info = {0};
     for (size_t i = 0; i < size && callstack[i]; i++) {
-        library_t *library = libraries_find(libraries, (size_t) callstack[i]);
-        if (library) {
-            elf_sym_t sym = {0};
-            size_t ra = library_relative_address(library, (size_t) callstack[i]);
-            elf_file_t *dynsym = library_get_elf_section(library, library_section_dynsym);
-            elf_file_t *dynstr = library_get_elf_section(library, library_section_dynstr);
-            elf_file_t *symtab = library_get_elf_section(library, library_section_symtab);
-            elf_file_t *strtab = library_get_elf_section(library, library_section_strtab);
-
-            if (dynsym && dynstr) {
-                sym = elf_sym_from_addr(dynsym, dynstr, ra);
-            }
-            if (symtab && strtab && !sym.name) {
-                sym = elf_sym_from_addr(symtab, strtab, ra);
-            }
-
-            if (sym.name) {
-                size_t offset = ra - sym.offset;
-                fprintf(fp, "[addr]%s+0x%zx | %s()+0x%zx\n", library_name(library), ra, sym.name, offset);
+        if (libraries_find_symbol_by_addr(libraries, (size_t) callstack[i], &info)) {
+            if (info.name) {
+                uint64_t func_offset = info.relative_addr - info.offset;
+                fprintf(fp, "[addr]%s+0x%"PRIx64" | %s()+0x%"PRIx64"\n",
+                    library_name(info.library), info.relative_addr, info.name, func_offset);
             }
             else {
-                fprintf(fp, "[addr]%s+0x%zx\n", library_name(library), ra);
+                fprintf(fp, "[addr]%s+0x%"PRIx64"\n", library_name(info.library), info.relative_addr);
             }
         }
     }

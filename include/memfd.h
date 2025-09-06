@@ -19,6 +19,8 @@
 #ifndef MEMFD_H
 #define MEMFD_H
 
+#include "types.h"
+
 #ifndef off64_t
 #define off64_t uint64_t
 #endif
@@ -43,7 +45,14 @@ bool memfd_read(int memfd, void *buf, size_t count, off64_t offset);
  * Read string at the specified offset in the target's process memory, referenced by memfd.
  */
 bool memfd_readstr(int memfd, char *buf, size_t count, off64_t offset);
+bool memfd_readascii(int memfd, char *buf, size_t count, off64_t offset);
 
 uint32_t memfd_read32(int memfd, off64_t offset);
+
+uint64_t memfd_read64(int memfd, off64_t offset);
+
+size_t memfd_print_addr(FILE *fp, int memfd, off64_t addr, const char *format);
+
+void memfd_print_autofmt(FILE *fp, int memfd, off64_t addr, off64_t len, libraries_t *libraries);
 
 #endif
