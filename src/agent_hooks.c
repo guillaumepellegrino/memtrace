@@ -32,6 +32,7 @@
 #include "agent.h"
 #include "arch.h"
 #include "log.h"
+#include <dlfcn.h>
 
 #define stack_pointer_address() (size_t) __builtin_frame_address(0)
 #define return_address()        (size_t) __builtin_return_address(0)
@@ -168,7 +169,12 @@ void *realloc_hook(void *ptr, size_t size) {
 }
 
 pid_t fork_hook() {
-    pid_t pid = fork();
+    static pid_t (*real_fork)(void) = NULL;
+    if (!real_fork) {
+        real_fork = dlsym(RTLD_DEFAULT, "fork");
+        if (!real_fork) return -1;
+    }
+    pid_t pid = real_fork();
 
     if (pid == 0) {
         // we do not follow child process allocations
