@@ -562,6 +562,10 @@ elf_file_t *library_elf_dynamic_open(elf_t *elf, library_section_t section) {
         return NULL;
     }
     elf_file_t *dynamic = elf_program_open(elf, ph);
+    if (!dynamic) {
+        TRACE_WARNING("Could not open DYNAMIC program header");
+        return NULL;
+    }
     elf_file_t *file = NULL;
 
     switch (section) {
