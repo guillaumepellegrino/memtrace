@@ -29,7 +29,7 @@ void hashmap_initialize(hashmap_t *hashmap, const hashmap_cfg_t *cfg) {
     assert(cfg->size);
 
     hashmap->cfg = cfg[0];
-    hashmap->buckets = calloc(sizeof(hashmap_bucket_t), cfg->size);
+    hashmap->buckets = calloc(cfg->size, sizeof(hashmap_bucket_t));
     list_initialize(&hashmap->iterators);
 }
 

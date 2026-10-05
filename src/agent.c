@@ -130,8 +130,8 @@ void memfd_print_autofmt(FILE *fp, int memfd, off64_t addr, off64_t len, librari
     off64_t base = addr;
     library_symbol_t info = {0};
 
-    if (len > sizeof(mem)) {
-        len = sizeof(mem);
+    if (len > (off64_t) sizeof(mem)) {
+        len = (off64_t) sizeof(mem);
     }
     memfd_read(memfd, mem, len, addr);
 
