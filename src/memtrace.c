@@ -371,7 +371,7 @@ static void logreport_handler(memtrace_t *memtrace, int events) {
         goto error;
     }
 
-    if (!memtrace_report(memtrace, memtrace->logcount, 6, fp)) {
+    if (!memtrace_report(memtrace, memtrace->logcount, 0, fp)) {
         TRACE_ERROR("Exit event loop");
         memtrace_stop_evlp(memtrace);
         goto error;
@@ -411,7 +411,7 @@ static void memtrace_console_report(console_t *console, int argc, char *argv[]) 
     };
     int opt = -1;
     int count = 10;
-    int pointers = 6;
+    int pointers = 0;
     memtrace_t *memtrace = container_of(console, memtrace_t, console);
 
     optind = 1;
